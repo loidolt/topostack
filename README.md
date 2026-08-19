@@ -4,7 +4,7 @@ TopoStack is an Atomm-first generator for turning real-world terrain into stacke
 
 ## Workspace
 
-- `apps/generator` — static Svelte 5/SvelteKit generator loaded by Atomm.
+- `apps/generator` — static Svelte 5/SvelteKit generator served by the Worker and loaded by Atomm.
 - `packages/core` — platform-independent terrain-to-fabrication geometry engine.
 - `workers/map-api` — Cloudflare Worker data gateway backed by R2.
 
@@ -47,13 +47,13 @@ Create two GitHub environments with selected-branch deployment rules:
 
 Store these secrets separately in both environments, using environment-appropriate values:
 
-- `CLOUDFLARE_API_TOKEN` — a token restricted to the deployment account with Workers Scripts edit, Account Settings read, and Workers R2 Storage edit permissions.
+- `CLOUDFLARE_API_TOKEN` — a token restricted to the deployment account with Workers Scripts edit, Account Settings read, and Workers R2 Storage edit permissions, plus Workers Routes edit for the `loidolt.space` zone.
 - `CLOUDFLARE_ACCOUNT_ID` — the target Cloudflare account ID.
 - `GEOCODER_API_KEY` — the Geoapify credential synchronized to the selected Worker as an encrypted runtime secret.
 
 The Cloudflare credentials authenticate CI but are not exposed to Worker code. Only `GEOCODER_API_KEY` is uploaded as a Worker binding. The workflow is defined in `.github/workflows/ci.yml`.
 
-Production uses `https://topostack.loidolt.space` with the `topostack` Worker. Development deploys the `topostack-dev` Worker from the `dev` branch.
+Production uses the `topostack` Worker as the origin for `https://topostack.loidolt.space`. The same deployment serves the generated frontend as static assets and the map API at `/v1/*`. Development deploys the same combined app/API shape to the `topostack-dev` Worker from the `dev` branch.
 
 ## Data setup
 

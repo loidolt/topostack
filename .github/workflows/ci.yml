@@ -72,7 +72,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Deploy map API and synchronize Worker secrets
+      - name: Build frontend for same-origin deployment
+        run: npm run build -w @topostack/generator
+
+      - name: Deploy app, map API, and synchronize Worker secrets
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
@@ -91,4 +94,5 @@ jobs:
         run: node scripts/verify-worker-deployment.mjs
         env:
           WORKER_URL: ${{ steps.deploy.outputs.deployment-url }}
+          PUBLIC_APP_URL: ${{ github.ref_name == 'main' && 'https://topostack.loidolt.space' || steps.deploy.outputs.deployment-url }}
           EXPECTED_WORKER_ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'development' }}

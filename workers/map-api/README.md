@@ -52,6 +52,6 @@ CI normally synchronizes this secret from the matching GitHub environment during
 | `dev` | `development` | `development` | `topostack-dev` |
 | `main` | `production` | `production` | `topostack` |
 
-The production frontend is served from `https://topostack.loidolt.space`. That origin and Atomm are allowed to call the production Worker; local Vite origins are additionally allowed in development.
+The production frontend and API are one Worker deployment at `https://topostack.loidolt.space`. Wrangler uploads `apps/generator/dist` as static assets, while `/health` and `/v1/*` run the API Worker. Atomm is allowed to call the production API cross-origin; local Vite origins are additionally allowed in development.
 
-Configure `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `GEOCODER_API_KEY` as secrets in both GitHub environments. Restrict the development environment to `dev` and production to `main`; production should also use required reviewers. Pull requests run validation without environment access or Cloudflare credentials.
+Configure `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `GEOCODER_API_KEY` as secrets in both GitHub environments. The Cloudflare token needs Workers Scripts edit and R2 edit at the account level plus Workers Routes edit for the `loidolt.space` zone so production can manage its Custom Domain. Restrict the development environment to `dev` and production to `main`; production should also use required reviewers. Pull requests run validation without environment access or Cloudflare credentials.

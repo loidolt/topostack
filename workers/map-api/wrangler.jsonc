@@ -4,6 +4,11 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-19",
   "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../../apps/generator/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/health", "/v1", "/v1/*"]
+  },
   "vars": {
     "ENVIRONMENT": "development",
     "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://topostack.loidolt.space,https://www.atomm.com",
@@ -46,6 +51,9 @@
     },
     "production": {
       "name": "topostack",
+      "routes": [
+        { "pattern": "topostack.loidolt.space", "custom_domain": true }
+      ],
       "vars": {
         "ENVIRONMENT": "production",
         "ALLOWED_ORIGINS": "https://topostack.loidolt.space,https://www.atomm.com",

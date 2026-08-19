@@ -7,8 +7,9 @@ export interface PlaceResult { id: string; label: string; lat: number; lon: numb
 
 const configuredApiBase = (import.meta.env.VITE_MAP_API_URL as string | undefined)?.replace(/\/$/, "");
 const developmentApiBase = import.meta.env.DEV ? "http://localhost:8787" : undefined;
-const apiBase = configuredApiBase ?? developmentApiBase;
-if (!apiBase) throw new Error("The production map API URL is not configured.");
+// Standalone deployments serve the app and API from the same Worker. Atomm
+// packages still inject an explicit API URL during their build.
+const apiBase = configuredApiBase ?? developmentApiBase ?? "";
 const vectorArchive = new PMTiles(`${apiBase}/v1/osm.pmtiles`);
 const TILE_SIZE = 256;
 const MAX_DATA_TILES = 24;
