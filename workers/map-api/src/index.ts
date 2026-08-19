@@ -3,7 +3,7 @@ const MAX_GEOCODER_BYTES = 256_000;
 const TERRAIN_CACHE_SECONDS = 60 * 60 * 24 * 30;
 const GEOCODE_CACHE_SECONDS = 60 * 60 * 24;
 
-async function readBounded(body: ReadableStream<Uint8Array> | null, maximumBytes: number): Promise<Uint8Array> {
+async function readBounded(body: ReadableStream<Uint8Array> | null, maximumBytes: number): Promise<Uint8Array<ArrayBuffer>> {
   if (!body) return new Uint8Array();
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -103,22 +103,17 @@ async function terrainResponse(request: Request, env: Env, ctx: ExecutionContext
   }
 
   const imagerySources = upstream.headers.get("x-imagery-sources") ?? "";
-  let streamedBytes = 0;
-  const limitedBody = upstream.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      streamedBytes += chunk.byteLength;
-      if (streamedBytes > MAX_TERRAIN_BYTES) controller.error(new Error("Terrain origin response exceeded the size limit."));
-      else controller.enqueue(chunk);
-    },
-  }));
-  const [clientBody, cacheBody] = limitedBody.tee();
-  ctx.waitUntil(env.MAP_CACHE.put(key, cacheBody, {
+  let body: Uint8Array<ArrayBuffer>;
+  try { body = await readBounded(upstream.body, MAX_TERRAIN_BYTES); }
+  catch { return json({ error: "Terrain origin returned an oversized tile" }, { status: 502 }); }
+  ctx.waitUntil(env.MAP_CACHE.put(key, body, {
     httpMetadata: { contentType: "image/png", cacheControl: `public, max-age=${TERRAIN_CACHE_SECONDS}` },
     customMetadata: { dataset: env.DATASET_VERSION, cachedAt: new Date().toISOString(), imagerySources: imagerySources.slice(0, 1900) },
   }));
-  return new Response(clientBody, {
+  return new Response(body, {
     headers: {
       "content-type": "image/png",
+      "content-length": String(body.byteLength),
       "cache-control": `public, max-age=${TERRAIN_CACHE_SECONDS}, immutable`,
       "x-topostack-cache": "MISS",
       "x-topostack-dataset": env.DATASET_VERSION,
