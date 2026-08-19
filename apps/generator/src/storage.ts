@@ -25,6 +25,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
   if (!location || typeof location !== "object") throw new Error("Project location is missing.");
   const locationRecord = location as Record<string, unknown>;
   const boundsRecord = locationRecord.bounds && typeof locationRecord.bounds === "object" ? locationRecord.bounds as Record<string, unknown> : undefined;
+  if (record.elevationLabelPosition !== undefined && (!record.elevationLabelPosition || typeof record.elevationLabelPosition !== "object")) throw new Error("Elevation label position is invalid.");
+  const labelPositionRecord = record.elevationLabelPosition as Record<string, unknown> | undefined;
   const project: ProjectConfigV1 = {
     ...DEFAULT_PROJECT,
     schemaVersion: 1,
@@ -40,6 +42,7 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     layerCount: numberValue(record.layerCount), minimumFeatureMm: numberValue(record.minimumFeatureMm), smoothing: numberValue(record.smoothing),
     showRoads: booleanValue(record.showRoads, "showRoads"), showWater: booleanValue(record.showWater, "showWater"), showContours: booleanValue(record.showContours, "showContours"),
     showElevationLabels: booleanValue(record.showElevationLabels, "showElevationLabels"), showNorthArrow: booleanValue(record.showNorthArrow, "showNorthArrow"), showScaleBar: booleanValue(record.showScaleBar, "showScaleBar"),
+    elevationLabelPosition: labelPositionRecord ? { x: numberValue(labelPositionRecord.x), y: numberValue(labelPositionRecord.y) } : { ...DEFAULT_PROJECT.elevationLabelPosition },
     explodedPreview: numberValue(record.explodedPreview),
   };
   validateProject(project);

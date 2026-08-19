@@ -1,4 +1,5 @@
 import { projectFingerprint } from "./geometry.js";
+import { labelPathData } from "./labels.js";
 import type { ExportFile, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, Polygon2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
@@ -24,38 +25,11 @@ function polygonPath(polygon: Polygon2D, offsetX = 0, offsetY = 0): string {
   return [pathData(polygon.outer, offsetX, offsetY, true), ...polygon.holes.map((hole) => pathData(hole, offsetX, offsetY, true))].join(" ");
 }
 
-const GLYPHS: Record<string, string[]> = {
-  "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
-  "2": ["111", "001", "111", "100", "111"], "3": ["111", "001", "111", "001", "111"],
-  "4": ["101", "101", "111", "001", "001"], "5": ["111", "100", "111", "001", "111"],
-  "6": ["111", "100", "111", "101", "111"], "7": ["111", "001", "010", "010", "010"],
-  "8": ["111", "101", "111", "101", "111"], "9": ["111", "101", "111", "001", "111"],
-  "L": ["100", "100", "100", "100", "111"], "m": ["000", "110", "101", "101", "101"],
-  "k": ["100", "101", "110", "101", "101"], "-": ["000", "000", "111", "000", "000"],
-  "·": ["000", "000", "010", "000", "000"], ".": ["000", "000", "000", "000", "010"],
-  " ": ["0", "0", "0", "0", "0"],
-};
-
-function labelPath(label: string, origin: Point2D, offsetX: number, offsetY: number): string {
-  const cell = 0.62;
-  let cursor = origin.x + offsetX;
-  const commands: string[] = [];
-  for (const character of label) {
-    const glyph = GLYPHS[character] ?? GLYPHS[" "]!;
-    const width = glyph[0]?.length ?? 1;
-    glyph.forEach((row, rowIndex) => [...row].forEach((pixel, columnIndex) => {
-      if (pixel === "1") commands.push(`M${format(cursor + columnIndex * cell)} ${format(origin.y + offsetY + rowIndex * cell)}h${format(cell * 0.72)}`);
-    }));
-    cursor += (width + 1) * cell;
-  }
-  return commands.join(" ");
-}
-
 function layerGroups(layer: LayerIR, offsetX = 0, offsetY = 0): string {
   const cutPaths = layer.polygons.map((polygon, index) => `<path id="${layer.id}-cut-${index + 1}" d="${polygonPath(polygon, offsetX, offsetY)}"/>`).join("");
   const scorePaths = layer.markings.filter((mark) => mark.operation === "score" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
   const engravePaths = layer.markings.filter((mark) => mark.operation === "engrave" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
-  const engraveLabels = layer.markings.filter((mark) => mark.operation === "engrave" && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPath(mark.label ?? "", mark.points[0]!, offsetX, offsetY)}"/>`).join("");
+  const engraveLabels = layer.markings.filter((mark) => mark.operation === "engrave" && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY)}"/>`).join("");
   return `<g id="${layer.id}"><g id="${layer.id}-CUT" data-operation="CUT" fill="none" stroke="${CUT}" stroke-width="0.1" fill-rule="evenodd">${cutPaths}</g><g id="${layer.id}-SCORE" data-operation="SCORE" fill="none" stroke="${SCORE}" stroke-width="0.15">${scorePaths}</g><g id="${layer.id}-ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-width="0.2">${engravePaths}${engraveLabels}</g></g>`;
 }
 

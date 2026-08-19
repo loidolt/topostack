@@ -29,6 +29,7 @@ export interface ProjectConfigV1 {
   showWater: boolean;
   showContours: boolean;
   showElevationLabels: boolean;
+  elevationLabelPosition: Point2D;
   showNorthArrow: boolean;
   showScaleBar: boolean;
   explodedPreview: number;
@@ -98,7 +99,7 @@ export interface LayerIR {
 }
 
 export interface GeometryWarning {
-  code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK" | "VECTOR_DATA_UNAVAILABLE";
+  code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK" | "VECTOR_DATA_UNAVAILABLE" | "LABEL_OMITTED";
   message: string;
 }
 
@@ -154,6 +155,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showWater: true,
   showContours: true,
   showElevationLabels: true,
+  elevationLabelPosition: { x: -0.55, y: 0.55 },
   showNorthArrow: true,
   showScaleBar: true,
   explodedPreview: 0.35,

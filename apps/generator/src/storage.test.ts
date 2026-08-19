@@ -7,5 +7,10 @@ describe("project import validation", () => {
   it("rejects non-finite and out-of-range values", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, widthMm: "not-a-number" })).toThrow(/finite/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, location: { ...DEFAULT_PROJECT.location, lat: 90 } })).toThrow(/Mercator/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, elevationLabelPosition: { x: 1, y: 0 } })).toThrow(/label position/i);
+  });
+  it("adds the default label position to projects saved before the field existed", () => {
+    const { elevationLabelPosition: _legacyMissingField, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject).elevationLabelPosition).toEqual(DEFAULT_PROJECT.elevationLabelPosition);
   });
 });

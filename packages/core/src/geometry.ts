@@ -1,5 +1,6 @@
 import { contours } from "d3-contour";
 import polygonClipping, { type MultiPolygon, type Pair, type Ring } from "polygon-clipping";
+import { labelDimensions } from "./labels.js";
 import type {
   ElevationGrid,
   GeometryIRV1,
@@ -73,6 +74,125 @@ function pointInRing(point: Point2D, ring: Point2D[]): boolean {
 
 function pointInPolygon(point: Point2D, polygon: Polygon2D): boolean {
   return pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole));
+}
+
+interface Bounds2D {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function labelBounds(label: string, origin: Point2D, padding = 0): Bounds2D {
+  const dimensions = labelDimensions(label);
+  return {
+    minX: origin.x - padding,
+    minY: origin.y - padding,
+    maxX: origin.x + dimensions.width + padding,
+    maxY: origin.y + dimensions.height + padding,
+  };
+}
+
+function boundsPoints(bounds: Bounds2D): Point2D[] {
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  return [
+    { x: bounds.minX, y: bounds.minY }, { x: centerX, y: bounds.minY }, { x: bounds.maxX, y: bounds.minY },
+    { x: bounds.minX, y: centerY }, { x: centerX, y: centerY }, { x: bounds.maxX, y: centerY },
+    { x: bounds.minX, y: bounds.maxY }, { x: centerX, y: bounds.maxY }, { x: bounds.maxX, y: bounds.maxY },
+  ];
+}
+
+function boundsOverlap(a: Bounds2D, b: Bounds2D): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+}
+
+function pointInBounds(point: Point2D, bounds: Bounds2D): boolean {
+  return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
+}
+
+function orientation(a: Point2D, b: Point2D, c: Point2D): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointOnSegment(point: Point2D, a: Point2D, b: Point2D): boolean {
+  return Math.abs(orientation(a, b, point)) < 1e-8 &&
+    point.x >= Math.min(a.x, b.x) - 1e-8 && point.x <= Math.max(a.x, b.x) + 1e-8 &&
+    point.y >= Math.min(a.y, b.y) - 1e-8 && point.y <= Math.max(a.y, b.y) + 1e-8;
+}
+
+function segmentsIntersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D): boolean {
+  const abC = orientation(a, b, c);
+  const abD = orientation(a, b, d);
+  const cdA = orientation(c, d, a);
+  const cdB = orientation(c, d, b);
+  if (((abC > 0 && abD < 0) || (abC < 0 && abD > 0)) && ((cdA > 0 && cdB < 0) || (cdA < 0 && cdB > 0))) return true;
+  return (Math.abs(abC) < 1e-8 && pointOnSegment(c, a, b)) ||
+    (Math.abs(abD) < 1e-8 && pointOnSegment(d, a, b)) ||
+    (Math.abs(cdA) < 1e-8 && pointOnSegment(a, c, d)) ||
+    (Math.abs(cdB) < 1e-8 && pointOnSegment(b, c, d));
+}
+
+function segmentIntersectsBounds(a: Point2D, b: Point2D, bounds: Bounds2D): boolean {
+  if (pointInBounds(a, bounds) || pointInBounds(b, bounds)) return true;
+  const topLeft = { x: bounds.minX, y: bounds.minY };
+  const topRight = { x: bounds.maxX, y: bounds.minY };
+  const bottomRight = { x: bounds.maxX, y: bounds.maxY };
+  const bottomLeft = { x: bounds.minX, y: bounds.maxY };
+  return segmentsIntersect(a, b, topLeft, topRight) || segmentsIntersect(a, b, topRight, bottomRight) ||
+    segmentsIntersect(a, b, bottomRight, bottomLeft) || segmentsIntersect(a, b, bottomLeft, topLeft);
+}
+
+function boundsInsidePolygon(bounds: Bounds2D, polygon: Polygon2D): boolean {
+  if (!boundsPoints(bounds).every((point) => pointInPolygon(point, polygon))) return false;
+  const rings = [polygon.outer, ...polygon.holes];
+  for (const ring of rings) {
+    if (ring.some((point) => pointInBounds(point, bounds))) return false;
+    for (let index = 0; index < ring.length - 1; index += 1) {
+      const start = ring[index];
+      const end = ring[index + 1];
+      if (start && end && segmentIntersectsBounds(start, end, bounds)) return false;
+    }
+  }
+  return true;
+}
+
+function markingIntersectsBounds(marking: LayerIR["markings"][number], bounds: Bounds2D): boolean {
+  if (marking.label && marking.points[0] && boundsOverlap(labelBounds(marking.label, marking.points[0], 0.8), bounds)) return true;
+  for (let index = 0; index < marking.points.length - 1; index += 1) {
+    const start = marking.points[index];
+    const end = marking.points[index + 1];
+    if (start && end && segmentIntersectsBounds(start, end, bounds)) return true;
+  }
+  return false;
+}
+
+function labelCandidates(config: ProjectConfigV1): Point2D[] {
+  const preferred = config.elevationLabelPosition;
+  const candidates: Point2D[] = [{ ...preferred }];
+  for (let y = -9; y <= 9; y += 1) {
+    for (let x = -9; x <= 9; x += 1) {
+      const candidate = { x: x / 10, y: y / 10 };
+      if (Math.abs(candidate.x - preferred.x) > 1e-8 || Math.abs(candidate.y - preferred.y) > 1e-8) candidates.push(candidate);
+    }
+  }
+  return candidates.map((candidate, index) => ({ candidate, index })).sort((left, right) => {
+    const leftDistance = (left.candidate.x - preferred.x) ** 2 + (left.candidate.y - preferred.y) ** 2;
+    const rightDistance = (right.candidate.x - preferred.x) ** 2 + (right.candidate.y - preferred.y) ** 2;
+    return leftDistance - rightDistance || left.index - right.index;
+  }).map(({ candidate }) => candidate);
+}
+
+function placeElevationLabel(label: string, config: ProjectConfigV1, layer: LayerIR): Point2D | undefined {
+  const dimensions = labelDimensions(label);
+  for (const candidate of labelCandidates(config)) {
+    const center = { x: candidate.x * config.widthMm / 2, y: candidate.y * config.heightMm / 2 };
+    const origin = { x: center.x - dimensions.width / 2, y: center.y - dimensions.height / 2 };
+    const bounds = labelBounds(label, origin, 0.8);
+    const fitsMaterial = layer.polygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
+    if (fitsMaterial && !layer.markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
+  }
+  return undefined;
 }
 
 function segmentIntersectionT(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number | undefined {
@@ -319,20 +439,6 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     });
   }
 
-  if (config.showElevationLabels) {
-    const radius = Math.min(config.widthMm, config.heightMm) / 2;
-    layers.forEach((layer) => {
-      const point = config.cropShape === "circle" ? { x: -radius * 0.46, y: radius * 0.46 } : { x: -config.widthMm / 2 + 8, y: config.heightMm / 2 - 7 };
-      if (layer.polygons.some((polygon) => pointInPolygon(point, polygon))) layer.markings.push({
-        id: `elevation-${layer.index}`,
-        operation: "engrave",
-        kind: "label",
-        points: [point],
-        label: `${Math.round(layer.elevationM)} m · L${String(layer.index + 1).padStart(2, "0")}`,
-      });
-    });
-  }
-
   const baseLayer = layers[0];
   if (baseLayer && config.showNorthArrow) {
     const radius = Math.min(config.widthMm, config.heightMm) / 2;
@@ -360,6 +466,29 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     );
   }
 
+  if (config.showElevationLabels) {
+    const omittedLayers: string[] = [];
+    layers.forEach((layer) => {
+      const label = `${Math.round(layer.elevationM)} m · L${String(layer.index + 1).padStart(2, "0")}`;
+      const point = placeElevationLabel(label, config, layer);
+      if (!point) {
+        omittedLayers.push(String(layer.index + 1));
+        return;
+      }
+      layer.markings.push({
+        id: `elevation-${layer.index}`,
+        operation: "engrave",
+        kind: "label",
+        points: [point],
+        label,
+      });
+    });
+    if (omittedLayers.length) warnings.push({
+      code: "LABEL_OMITTED",
+      message: `Elevation labels were omitted from layer${omittedLayers.length === 1 ? "" : "s"} ${omittedLayers.join(", ")} because no collision-free position fit the material.`,
+    });
+  }
+
   return {
     schemaVersion: 1,
     projectId: config.id,
@@ -384,15 +513,17 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
 export function validateProject(config: ProjectConfigV1): void {
   if (config.schemaVersion !== 1) throw new Error("Unsupported project schema version.");
+  if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
   if (config.widthMm < 50 || config.widthMm > 600) throw new Error("Project width must be between 50 and 600 mm.");
   if (config.heightMm < 50 || config.heightMm > 600) throw new Error("Project height must be between 50 and 600 mm.");
   if (config.layerCount < 2 || config.layerCount > 24) throw new Error("Layer count must be between 2 and 24.");
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
   if (config.smoothing !== 0 && config.smoothing !== 1) throw new Error("Contour smoothing must be 0 or 1.");
+  if (Math.abs(config.elevationLabelPosition.x) > 0.9 || Math.abs(config.elevationLabelPosition.y) > 0.9) throw new Error("Elevation label position must be between -90% and 90%.");
   const bounds = config.location.bounds;
   if (bounds && (![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite) || bounds.west >= bounds.east || bounds.south >= bounds.north || bounds.south < -85.0511 || bounds.north > 85.0511)) throw new Error("Project geographic bounds are invalid.");
 }

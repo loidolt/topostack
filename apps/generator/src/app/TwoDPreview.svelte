@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Compass } from "@lucide/svelte";
-  import type { GeometryIRV1 } from "@topostack/core";
+  import { labelPathData, type GeometryIRV1 } from "@topostack/core";
   let { geometry, selectedLayer }: { geometry: GeometryIRV1; selectedLayer: number } = $props();
   const layer = $derived(geometry.layers[selectedLayer] ?? geometry.layers[0]);
   function pathData(points: Array<{ x: number; y: number }>): string { return points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`).join(" "); }
@@ -16,7 +16,7 @@
         {/each}
       </g>
       {#each layer.markings as marking (marking.id)}
-        <g><path d={pathData(marking.points)} fill="none" stroke={marking.operation === "score" ? "#365c79" : "#2b2119"} stroke-width="0.55" vector-effect="non-scaling-stroke" />{#if marking.label && marking.points[0]}<text x={marking.points[0].x} y={marking.points[0].y} font-size="4" fill="#2b2119">{marking.label}</text>{/if}</g>
+        <g><path d={pathData(marking.points)} fill="none" stroke={marking.operation === "score" ? "#365c79" : "#2b2119"} stroke-width="0.55" vector-effect="non-scaling-stroke" />{#if marking.label && marking.points[0]}<path d={labelPathData(marking.label, marking.points[0])} fill="none" stroke="#2b2119" stroke-width="0.2" />{/if}</g>
       {/each}
     </svg>
     <div class="axis north-axis"><Compass size={13} /> N</div>
