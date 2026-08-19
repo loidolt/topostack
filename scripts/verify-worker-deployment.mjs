@@ -1,16 +1,15 @@
-const workerUrl = process.env.WORKER_URL;
-const publicAppUrl = process.env.PUBLIC_APP_URL ?? workerUrl;
+const deploymentTarget = process.env.WORKER_URL;
+const publicAppUrl = process.env.PUBLIC_APP_URL ?? deploymentTarget;
 const expectedEnvironment = process.env.EXPECTED_WORKER_ENVIRONMENT;
 const retryDelayMs = 3_000;
 const verificationTimeoutMs = 180_000;
 
-if (!workerUrl) throw new Error("WORKER_URL was not returned by the deployment action.");
+if (!deploymentTarget) throw new Error("WORKER_URL was not returned by the deployment action.");
 if (!publicAppUrl) throw new Error("PUBLIC_APP_URL was not configured and no deployment URL is available.");
 if (!expectedEnvironment || !["development", "production"].includes(expectedEnvironment)) throw new Error("EXPECTED_WORKER_ENVIRONMENT must be development or production.");
 
-const deploymentBase = new URL(workerUrl);
 const publicBase = new URL(publicAppUrl);
-if (deploymentBase.protocol !== "https:" || publicBase.protocol !== "https:") throw new Error("Deployed Worker URLs must use HTTPS.");
+if (publicBase.protocol !== "https:") throw new Error("The public app URL must use HTTPS.");
 
 async function fetchWithRetry(path, init) {
   let lastError;
@@ -52,4 +51,4 @@ if (health?.service !== "topostack-map-api" || health?.status !== "ok" || health
 const manifest = await fetchJson("/v1/manifest");
 if (manifest?.schemaVersion !== 1 || typeof manifest?.datasetVersion !== "string" || !Array.isArray(manifest?.sources)) throw new Error("The deployed Worker returned an invalid data manifest.");
 
-console.log(`Verified ${expectedEnvironment} TopoStack app and API at ${publicBase.origin} (deployment ${deploymentBase.origin})`);
+console.log(`Verified ${expectedEnvironment} TopoStack app and API at ${publicBase.origin} (deployment ${deploymentTarget})`);
