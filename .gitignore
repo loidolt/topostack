@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.svelte-kit/
+*.tsbuildinfo
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.local
+*.zip
+coverage/
+.DS_Store

@@ -1,0 +1,28 @@
+{
+  "name": "topostack",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "workers/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @topostack/generator",
+    "dev:api": "npm run dev -w @topostack/map-api",
+    "build": "npm run build -w @topostack/core && npm run build -w @topostack/generator && npm run build -w @topostack/map-api",
+    "test": "npm run test -w @topostack/core && npm run test -w @topostack/generator && npm run test -w @topostack/map-api",
+    "typecheck": "npm run typecheck -w @topostack/core && npm run typecheck -w @topostack/generator && npm run typecheck -w @topostack/map-api",
+    "package:atomm": "node scripts/validate-submission-env.mjs && npm run build -w @topostack/generator && node scripts/verify-atomm-dist.mjs && cd apps/generator/dist && zip -FSqr ../topostack-atomm.zip ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.30.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

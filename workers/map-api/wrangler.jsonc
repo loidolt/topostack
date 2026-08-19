@@ -1,0 +1,67 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "topostack-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "development",
+    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://topostack.loidolt.space,https://www.atomm.com",
+    "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
+    "GEOCODER_ORIGIN": "https://api.geoapify.com",
+    "DATASET_VERSION": "mapzen-terrarium+osm-pmtiles-v1"
+  },
+  "r2_buckets": [
+    { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache" },
+    { "binding": "VECTOR_DATA", "bucket_name": "topostack-vector-data" }
+  ],
+  "ratelimits": [
+    { "name": "REQUEST_LIMITER", "namespace_id": "1001", "simple": { "limit": 240, "period": 60 } },
+    { "name": "GEOCODE_LIMITER", "namespace_id": "1004", "simple": { "limit": 30, "period": 60 } }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  },
+  "env": {
+    "development": {
+      "name": "topostack-dev",
+      "vars": {
+        "ENVIRONMENT": "development",
+        "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://topostack.loidolt.space,https://www.atomm.com",
+        "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
+        "GEOCODER_ORIGIN": "https://api.geoapify.com",
+        "DATASET_VERSION": "mapzen-terrarium+osm-pmtiles-v1"
+      },
+      "r2_buckets": [
+        { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache-development" },
+        { "binding": "VECTOR_DATA", "bucket_name": "topostack-vector-data-development" }
+      ],
+      "secrets": { "required": ["GEOCODER_API_KEY"] },
+      "ratelimits": [
+        { "name": "REQUEST_LIMITER", "namespace_id": "1002", "simple": { "limit": 240, "period": 60 } },
+        { "name": "GEOCODE_LIMITER", "namespace_id": "1005", "simple": { "limit": 30, "period": 60 } }
+      ]
+    },
+    "production": {
+      "name": "topostack",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "ALLOWED_ORIGINS": "https://topostack.loidolt.space,https://www.atomm.com",
+        "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
+        "GEOCODER_ORIGIN": "https://api.geoapify.com",
+        "DATASET_VERSION": "mapzen-terrarium+osm-pmtiles-v1"
+      },
+      "r2_buckets": [
+        { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache" },
+        { "binding": "VECTOR_DATA", "bucket_name": "topostack-vector-data" }
+      ],
+      "secrets": { "required": ["GEOCODER_API_KEY"] },
+      "ratelimits": [
+        { "name": "REQUEST_LIMITER", "namespace_id": "1003", "simple": { "limit": 240, "period": 60 } },
+        { "name": "GEOCODE_LIMITER", "namespace_id": "1006", "simple": { "limit": 30, "period": 60 } }
+      ]
+    }
+  }
+}

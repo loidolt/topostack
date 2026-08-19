@@ -1,0 +1,18 @@
+{
+  "name": "@topostack/map-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler dev --port 8787",
+    "build": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler deploy --dry-run --env=\"\" --outdir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "types": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler types src/worker-configuration.d.ts --env-file .dev.vars.example",
+    "types:check": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler types src/worker-configuration.d.ts --env-file .dev.vars.example --check",
+    "test": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler-test.log vitest run test"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260819.1"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@topostack/core",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "d3-contour": "^4.0.2",
+    "polygon-clipping": "^0.15.7"
+  },
+  "devDependencies": {
+    "@types/d3-contour": "^3.0.6"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@topostack/generator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && vite build",
+    "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run src --exclude src/app/NumberField.test.ts --exclude src/app/App.client.test.ts && vitest run --config vitest.client.config.ts",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@topostack/core": "*",
+    "@mapbox/vector-tile": "^3.0.0",
+    "idb-keyval": "^6.2.2",
+    "@lucide/svelte": "^1.33.0",
+    "maplibre-gl": "^5.7.1",
+    "pbf": "^5.1.2",
+    "pmtiles": "^4.5.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.180.0",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.70.2",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@webgpu/types": "^0.1.69",
+    "cookie": "0.6.0",
+    "jsdom": "^30.0.1",
+    "svelte": "^5.56.9",
+    "svelte-check": "^4.7.6",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.0"
+  }
+}
