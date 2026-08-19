@@ -1,0 +1,34 @@
+name: Production Monitor
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: topostack-production-monitor
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Frontend and data canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Verify production frontend and dependencies
+        run: node scripts/verify-worker-deployment.mjs
+        env:
+          WORKER_URL: https://topostack.loidolt.space
+          PUBLIC_APP_URL: https://topostack.loidolt.space
+          EXPECTED_WORKER_ENVIRONMENT: production

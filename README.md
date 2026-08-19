@@ -57,6 +57,8 @@ The Cloudflare credentials authenticate CI but are not exposed to Worker code. O
 
 Production uses the `topostack` Worker as the origin for `https://topostack.loidolt.space`. The same deployment serves the generated frontend as static assets and the map API at `/v1/*`. Development deploys the same combined app/API shape to the `topostack-dev` Worker from the `dev` branch.
 
+The `Production Monitor` workflow runs an hourly canary against the frontend, `/health`, `/ready`, the data manifest, and a PMTiles byte-range read. Failed scheduled runs surface through normal GitHub Actions notifications. CI also enforces gzip budgets for total JavaScript, the largest JavaScript chunk, CSS, and the entry HTML via `npm run budget:web`; adjust a limit only alongside an intentional performance review.
+
 ## Data setup
 
 The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket. Roads and water come from the pinned Protomaps/OpenStreetMap PMTiles release stored as `osm/current.pmtiles` in the `topostack-vector-data` bucket. The `/ready` endpoint reports whether that archive and the geocoder configuration are present. Place search is proxied to Geoapify with a Worker secret. See `workers/map-api/README.md` for provisioning and deployment details.

@@ -51,6 +51,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Enforce web performance budgets
+        run: npm run budget:web
+
       - name: Verify Atomm static artifact
         run: node scripts/verify-atomm-dist.mjs
 

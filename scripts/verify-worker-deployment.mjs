@@ -53,6 +53,11 @@ if (readiness?.service !== "topostack-map-api" || readiness?.status !== "ready" 
   throw new Error(`Unexpected Worker readiness response: ${JSON.stringify(readiness)}`);
 }
 
+const vectorResponse = await fetchWithRetry("/v1/osm.pmtiles", { headers: { range: "bytes=0-126" } });
+if (vectorResponse.status !== 206 || !vectorResponse.headers.get("content-range")?.startsWith("bytes 0-126/")) throw new Error("The vector archive did not honor a PMTiles header range request.");
+const vectorHeader = new Uint8Array(await vectorResponse.arrayBuffer());
+if (new TextDecoder().decode(vectorHeader.subarray(0, 7)) !== "PMTiles" || vectorHeader[7] !== 3) throw new Error("The vector archive did not return a PMTiles v3 header.");
+
 const manifest = await fetchJson("/v1/manifest");
 if (manifest?.schemaVersion !== 1 || typeof manifest?.datasetVersion !== "string" || !Array.isArray(manifest?.sources)) throw new Error("The deployed Worker returned an invalid data manifest.");
 
