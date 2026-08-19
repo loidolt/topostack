@@ -9,6 +9,7 @@ dist/
 .env
 .env.local
 *.zip
+*.zip.sha256
 coverage/
 playwright-report/
 test-results/

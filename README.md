@@ -36,6 +36,8 @@ VITE_MAP_API_URL="$DEPLOYED_WORKER_URL" npm run package:atomm
 The Atomm-ready artifact is written to `apps/generator/topostack-atomm.zip`.
 Packaging fails closed when the Worker URL is missing, local, or an obvious placeholder. Deploy the production Worker and set its `GEOCODER_API_KEY` secret before creating a submission artifact.
 
+After every successful production deployment and readiness smoke test, CI packages the production URL, generates a SHA-256 checksum, and uploads a 30-day `topostack-atomm-<commit>` workflow artifact containing the generator ZIP, checksum, cover image, and listing copy. Run `VITE_MAP_API_URL=https://topostack.loidolt.space npm run release:atomm` to reproduce the same release files locally.
+
 ## CI and deployment environments
 
 GitHub Actions validates pull requests targeting `dev` or `main`. A successful push to `dev` deploys the `development` Cloudflare Worker; a successful push to `main` deploys `production`. Pull-request jobs never reference a GitHub environment and therefore cannot read deployment secrets.

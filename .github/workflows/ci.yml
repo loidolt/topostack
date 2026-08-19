@@ -102,3 +102,22 @@ jobs:
           WORKER_URL: ${{ steps.deploy.outputs.deployment-url }}
           PUBLIC_APP_URL: ${{ github.ref_name == 'main' && 'https://topostack.loidolt.space' || steps.deploy.outputs.deployment-url }}
           EXPECTED_WORKER_ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+
+      - name: Build production Atomm release
+        if: github.ref_name == 'main'
+        run: npm run release:atomm
+        env:
+          VITE_MAP_API_URL: https://topostack.loidolt.space
+
+      - name: Upload production Atomm release
+        if: github.ref_name == 'main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: topostack-atomm-${{ github.sha }}
+          path: |
+            apps/generator/topostack-atomm.zip
+            apps/generator/topostack-atomm.zip.sha256
+            atomm/assets/topostack-cover.png
+            atomm/listing.md
+          if-no-files-found: error
+          retention-days: 30
