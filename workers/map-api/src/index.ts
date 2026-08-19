@@ -2,6 +2,7 @@ const MAX_TERRAIN_BYTES = 2_000_000;
 const MAX_GEOCODER_BYTES = 256_000;
 const TERRAIN_CACHE_SECONDS = 60 * 60 * 24 * 30;
 const GEOCODE_CACHE_SECONDS = 60 * 60 * 24;
+const VECTOR_ARCHIVE_KEY = "osm/current.pmtiles";
 
 async function readBounded(body: ReadableStream<Uint8Array> | null, maximumBytes: number): Promise<Uint8Array<ArrayBuffer>> {
   if (!body) return new Uint8Array();
@@ -66,6 +67,30 @@ function validTile(zText: string, xText: string, yText: string): { z: number; x:
   const limit = 2 ** z;
   if (x < 0 || y < 0 || x >= limit || y >= limit) return null;
   return { z, x, y };
+}
+
+function isGeocoderConfigured(env: Pick<Env, "GEOCODER_API_KEY">): boolean {
+  return Boolean(env.GEOCODER_API_KEY && env.GEOCODER_API_KEY !== "replace-with-geoapify-key");
+}
+
+async function readinessResponse(env: Env): Promise<Response> {
+  const vectorArchive = await env.VECTOR_DATA.head(VECTOR_ARCHIVE_KEY);
+  const geocoderConfigured = isGeocoderConfigured(env);
+  const ready = Boolean(vectorArchive && geocoderConfigured);
+  return json({
+    service: "topostack-map-api",
+    status: ready ? "ready" : "not_ready",
+    environment: env.ENVIRONMENT,
+    dependencies: {
+      terrain: { status: "configured" },
+      geocoder: { status: geocoderConfigured ? "configured" : "unconfigured" },
+      vectorData: {
+        status: vectorArchive ? "available" : "missing",
+        key: VECTOR_ARCHIVE_KEY,
+        ...(vectorArchive ? { bytes: vectorArchive.size, etag: vectorArchive.httpEtag } : {}),
+      },
+    },
+  }, { status: ready ? 200 : 503, headers: { "cache-control": "no-store" } });
 }
 
 function objectResponse(object: R2ObjectBody, cacheStatus: "HIT" | "MISS", dataset: string, rangeRequested = false): Response {
@@ -170,15 +195,14 @@ async function geocodeResponse(request: Request, env: Env, ctx: ExecutionContext
 }
 
 async function pmtilesResponse(request: Request, env: Env): Promise<Response> {
-  const key = "osm/current.pmtiles";
   if (request.method === "HEAD") {
-    const object = await env.VECTOR_DATA.head(key);
+    const object = await env.VECTOR_DATA.head(VECTOR_ARCHIVE_KEY);
     if (!object) return json({ error: "OSM archive has not been provisioned." }, { status: 404 });
     const headers = new Headers({ "content-length": String(object.size), "etag": object.httpEtag, "accept-ranges": "bytes", "content-type": "application/vnd.pmtiles" });
     return new Response(null, { headers });
   }
   const rangeRequested = request.headers.has("range");
-  const object = await env.VECTOR_DATA.get(key, rangeRequested ? { range: request.headers } : undefined);
+  const object = await env.VECTOR_DATA.get(VECTOR_ARCHIVE_KEY, rangeRequested ? { range: request.headers } : undefined);
   if (!object) return json({ error: "OSM archive has not been provisioned." }, { status: 404 });
   return objectResponse(object, "HIT", env.DATASET_VERSION, rangeRequested);
 }
@@ -193,12 +217,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
   if (!success) return json({ error: "Rate limit exceeded. Try again shortly." }, { status: 429, headers: { "retry-after": "60" } });
 
   if (url.pathname === "/" || url.pathname === "/health") return json({ service: "topostack-map-api", status: "ok", environment: env.ENVIRONMENT });
+  if (url.pathname === "/ready") return readinessResponse(env);
   if (url.pathname === "/v1/manifest") return json({
     schemaVersion: 1,
     datasetVersion: env.DATASET_VERSION,
-    coverage: { projection: "Web Mercator", minLatitude: -85.0511, maxLatitude: 85.0511, landOnly: true },
+    coverage: { projection: "Web Mercator", minLatitude: -85.0511, maxLatitude: 85.0511, landOnly: true, vectorMaxZoom: 11 },
     sources: [
       { name: "Mapzen Terrain Tiles", url: "https://registry.opendata.aws/terrain-tiles/", attribution: "See Mapzen source attribution" },
+      { name: "Protomaps Basemap 20260819", url: "https://build.protomaps.com/20260819.pmtiles", version: "4.15.2", license: "ODbL Produced Work" },
       { name: "OpenStreetMap contributors", url: "https://www.openstreetmap.org/copyright", license: "ODbL" },
     ],
   }, { headers: { "cache-control": "public, max-age=3600" } });
@@ -226,4 +252,4 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-export { isAllowedOrigin, normalizeGeoapify, validTile };
+export { isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, validTile };

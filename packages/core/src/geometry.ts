@@ -248,6 +248,10 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   if (![source.bounds.west, source.bounds.south, source.bounds.east, source.bounds.north].every(Number.isFinite) || source.bounds.west >= source.bounds.east || source.bounds.south >= source.bounds.north) throw new Error("Source geographic bounds are invalid.");
 
   const warnings: GeometryIRV1["warnings"] = [];
+  if (source.vectorStatus === "unavailable" && (config.showRoads || config.showWater)) warnings.push({
+    code: "VECTOR_DATA_UNAVAILABLE",
+    message: "Road and water data is unavailable. This project cannot be exported until the map data is restored or those details are disabled.",
+  });
   const relief = grid.max - grid.min;
   if (relief < 20) warnings.push({ code: "LOW_RELIEF", message: "This area has very little elevation change; the layers may look nearly identical." });
 
@@ -362,6 +366,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     projectName: config.name,
     configFingerprint: projectFingerprint(config),
     sourceKind: source.sourceKind,
+    vectorStatus: source.vectorStatus,
     datasetVersion: source.datasetVersion,
     bounds: source.bounds,
     resolutionM: source.resolutionM,
@@ -420,6 +425,7 @@ export function createSyntheticSource(config: ProjectConfigV1, size = 96): Sourc
       { id: "road-primary", kind: "road", operation: "engrave", points: [{ x: -w, y: h * 0.4 }, { x: -w * 0.25, y: h * 0.1 }, { x: w * 0.35, y: h * 0.2 }, { x: w, y: -h * 0.35 }] },
       { id: "river", kind: "water", operation: "score", points: [{ x: -w * 0.75, y: -h }, { x: -w * 0.35, y: -h * 0.3 }, { x: -w * 0.2, y: h * 0.25 }, { x: w * 0.15, y: h }] },
     ],
+    vectorStatus: "available",
     datasetVersion: "synthetic-v1",
     sourceKind: "synthetic",
     bounds: config.location.bounds ?? { west: config.location.lon - 0.05, south: config.location.lat - 0.035, east: config.location.lon + 0.05, north: config.location.lat + 0.035 },

@@ -26,6 +26,7 @@ const TERRAIN_ATTRIBUTION: SourceAttribution[] = [
   { name: "Kartverket", url: "https://www.kartverket.no/", license: "© Kartverket" },
   { name: "UK Environment Agency", url: "https://www.gov.uk/government/organisations/environment-agency", license: "© Environment Agency copyright and/or database right 2015" },
   { name: "U.S. Geological Survey", url: "https://www.usgs.gov/", license: "3DEP, GMTED2010, and SRTM terrain data courtesy of the U.S. Geological Survey" },
+  { name: "Protomaps Basemap 20260819", url: "https://protomaps.com", license: "ODbL Produced Work based on OpenStreetMap data" },
   { name: "OpenStreetMap contributors", url: "https://www.openstreetmap.org/copyright", license: "ODbL" },
 ];
 
@@ -101,36 +102,37 @@ async function loadElevation(window: TileWindow, signal?: AbortSignal): Promise<
     max = Math.max(max, elevation);
   }
   if (datasetVersions.size > 1) throw new Error("Terrain tiles came from inconsistent dataset versions. Try again shortly.");
-  return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+osm-pmtiles-v1" };
+  return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+protomaps-20260819-z11-v1" };
 }
 
-async function loadVectorMarkings(window: TileWindow, config: ProjectConfigV1, signal?: AbortSignal): Promise<MarkingFeature[]> {
+async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<MarkingFeature[]> {
+  const header = await vectorArchive.getHeader();
+  signal?.throwIfAborted();
+  const window = tileWindow(bounds, Math.max(header.minZoom, Math.min(header.maxZoom, requestedZoom)));
   const markings: MarkingFeature[] = [];
   await Promise.all(window.tiles.map(async (tile) => {
-    try {
-      const response = await vectorArchive.getZxy(tile.z, tile.x, tile.y, signal);
-      if (!response) return;
-      const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
-      for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
-        const lowered = layerName.toLowerCase();
-        const isRoad = lowered.includes("road") || lowered.includes("transportation");
-        const isWater = lowered === "water" || lowered.includes("waterway");
-        if (!isRoad && !isWater) continue;
-        for (let featureIndex = 0; featureIndex < layer.length && markings.length < 1800; featureIndex += 1) {
-          const feature = layer.feature(featureIndex);
-          if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
-          const featureClass = String(feature.properties.class ?? feature.properties.kind ?? "");
-          if (isRoad && ["service", "track", "path"].includes(featureClass) && config.widthMm < 250) continue;
-          feature.loadGeometry().forEach((line, lineIndex) => {
-            if (line.length < 2 || markings.length >= 1800) return;
-            markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}`, kind: isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", points: line.map((point) => ({
-              x: (((tile.x + point.x / feature.extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
-              y: (((tile.y + point.y / feature.extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
-            })) });
-          });
-        }
+    const response = await vectorArchive.getZxy(tile.z, tile.x, tile.y, signal);
+    if (!response) return;
+    const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
+    for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
+      const lowered = layerName.toLowerCase();
+      const isRoad = lowered.includes("road") || lowered.includes("transportation");
+      const isWater = lowered === "water" || lowered.includes("waterway");
+      if (!isRoad && !isWater) continue;
+      for (let featureIndex = 0; featureIndex < layer.length && markings.length < 1800; featureIndex += 1) {
+        const feature = layer.feature(featureIndex);
+        if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
+        const featureClass = String(feature.properties.class ?? feature.properties.kind ?? "");
+        if (isRoad && ["service", "track", "path"].includes(featureClass) && config.widthMm < 250) continue;
+        feature.loadGeometry().forEach((line, lineIndex) => {
+          if (line.length < 2 || markings.length >= 1800) return;
+          markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}`, kind: isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", points: line.map((point) => ({
+            x: (((tile.x + point.x / feature.extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
+            y: (((tile.y + point.y / feature.extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
+          })) });
+        });
       }
-    } catch (error) { if (signal?.aborted) throw error; }
+    }
   }));
   return markings;
 }
@@ -141,11 +143,29 @@ function groundWidthM(bounds: GeoBounds): number {
 
 export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal): Promise<{ source: SourceBundleV1; fallback: boolean }> {
   const bounds = boundsForProject(config);
+  // Compiled only into the Playwright build so browser generation/export stays
+  // deterministic and cannot accidentally depend on an external map service.
+  if (import.meta.env.VITE_E2E === "1") {
+    signal?.throwIfAborted();
+    const fixture = createSyntheticSource({ ...config, location: { ...config.location, bounds } }, 32);
+    return { fallback: false, source: { ...fixture, sourceKind: "real", datasetVersion: "topostack-browser-e2e-v1", vectorStatus: "available" } };
+  }
   const zoom = Math.max(0, Math.min(15, Math.round(config.location.zoom)));
   try {
     const window = tileWindow(bounds, zoom);
-    const [{ elevation, imagerySources, datasetVersion }, markings] = await Promise.all([loadElevation(window, signal), loadVectorMarkings(window, config, signal)]);
-    return { fallback: false, source: { schemaVersion: 1, elevation, markings, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: TERRAIN_ATTRIBUTION } };
+    const vectorRequested = config.showRoads || config.showWater;
+    const [{ elevation, imagerySources, datasetVersion }, vector] = await Promise.all([
+      loadElevation(window, signal),
+      vectorRequested
+        ? loadVectorMarkings(bounds, zoom, config, signal)
+          .then((markings) => ({ markings, status: "available" as const }))
+          .catch((error) => {
+            if (signal?.aborted) throw error;
+            return { markings: [], status: "unavailable" as const };
+          })
+        : Promise.resolve({ markings: [], status: "not-requested" as const }),
+    ]);
+    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, vectorStatus: vector.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: TERRAIN_ATTRIBUTION } };
   } catch (error) {
     if (signal?.aborted) throw error;
     return { source: createSyntheticSource({ ...config, location: { ...config.location, bounds } }), fallback: true };

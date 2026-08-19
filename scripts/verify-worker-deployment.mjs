@@ -48,6 +48,11 @@ if (!contentType.includes("text/html") || !appHtml.includes("Turn real-world ter
 const health = await fetchJson("/health");
 if (health?.service !== "topostack-map-api" || health?.status !== "ok" || health?.environment !== expectedEnvironment) throw new Error(`Unexpected Worker health response: ${JSON.stringify(health)}`);
 
+const readiness = await fetchJson("/ready");
+if (readiness?.service !== "topostack-map-api" || readiness?.status !== "ready" || readiness?.environment !== expectedEnvironment || readiness?.dependencies?.geocoder?.status !== "configured" || readiness?.dependencies?.vectorData?.status !== "available") {
+  throw new Error(`Unexpected Worker readiness response: ${JSON.stringify(readiness)}`);
+}
+
 const manifest = await fetchJson("/v1/manifest");
 if (manifest?.schemaVersion !== 1 || typeof manifest?.datasetVersion !== "string" || !Array.isArray(manifest?.sources)) throw new Error("The deployed Worker returned an invalid data manifest.");
 

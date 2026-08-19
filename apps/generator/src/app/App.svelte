@@ -100,21 +100,29 @@
     const controller = new AbortController(); generationAbort = controller;
     const generationProject: ProjectConfigV1 = { ...project, location: { ...project.location, bounds: boundsForProject(project) } };
     generationState = "loading"; status = "Fetching elevation tiles…";
-    let toast: string | undefined;
-    try { toast = window.atomm ? await window.atomm.ui.toast({ type: "info", message: "Building terrain layers…", duration: 0 }) : undefined; } catch { /* The local status remains authoritative. */ }
+    const progressToast = showToast({ type: "info", message: "Building terrain layers…", duration: 0 });
     try {
       const loaded = await loadTerrain(generationProject, controller.signal); status = "Tracing and repairing contours…";
       const next = await runGeometryWorker(generationProject, loaded.source);
       if (loaded.fallback) next.warnings.push({ code: "DATA_FALLBACK", message: "The map service was unavailable, so this preview uses deterministic sample terrain." });
       geometry = next; project = generationProject; selectedLayer = 0; mode = "3d"; generationState = "ready";
-      status = loaded.fallback ? "Sample terrain generated · connect the map API for real elevation" : `Real terrain ready · ${next.layers.length} layers`;
-      try { if (window.atomm) await window.atomm.ui.toast({ type: loaded.fallback ? "warning" : "success", message: loaded.fallback ? "Preview generated with sample terrain" : "Terrain project ready" }); } catch { /* Non-critical platform notification. */ }
+      const vectorUnavailable = next.vectorStatus === "unavailable" && (generationProject.showRoads || generationProject.showWater);
+      status = loaded.fallback ? "Sample terrain generated · connect the map API for real elevation" : vectorUnavailable ? "Terrain ready · roads and water unavailable" : `Real terrain ready · ${next.layers.length} layers`;
+      void showToast({ type: loaded.fallback || vectorUnavailable ? "warning" : "success", message: loaded.fallback ? "Preview generated with sample terrain" : vectorUnavailable ? "Terrain generated without roads or water" : "Terrain project ready" });
     } catch (error) {
       if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) { generationState = "idle"; status = "Generation canceled"; }
-      else { generationState = "error"; status = error instanceof Error ? error.message : "Generation failed. Check the location and try again."; try { if (window.atomm) await window.atomm.ui.toast({ type: "error", message: "Could not generate terrain" }); } catch { /* Visible locally too. */ } }
-    } finally { if (generationAbort === controller) generationAbort = undefined; try { if (toast && window.atomm) await window.atomm.ui.closeToast(toast); } catch { /* Toast may already be gone. */ } }
+      else { generationState = "error"; status = error instanceof Error ? error.message : "Generation failed. Check the location and try again."; void showToast({ type: "error", message: "Could not generate terrain" }); }
+    } finally {
+      if (generationAbort === controller) generationAbort = undefined;
+      void progressToast.then((toast) => toast && window.atomm ? window.atomm.ui.closeToast(toast) : undefined).catch(() => undefined);
+    }
   }
   function cancelGeneration(): void { generationAbort?.abort(); geometryWorker?.terminate(); geometryWorker = undefined; geometryReject?.(new DOMException("Generation canceled", "AbortError")); geometryReject = undefined; }
+
+  function showToast(options: Parameters<NonNullable<typeof window.atomm>["ui"]["toast"]>[0]): Promise<string | undefined> {
+    if (!window.atomm) return Promise.resolve(undefined);
+    return window.atomm.ui.toast(options).catch(() => undefined);
+  }
 
   function downloadMaster(): void {
     try { const fabrication = buildFabricationPackage(geometry, project); const url = URL.createObjectURL(fabrication.master.blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = fabrication.master.filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0); }

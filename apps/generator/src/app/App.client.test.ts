@@ -12,7 +12,7 @@ import App from "./App.svelte";
 
 describe("TopoStack Svelte shell", () => {
   let component: ReturnType<typeof mount> | undefined;
-  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); });
+  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); delete window.atomm; });
 
   it("edits and undoes the project name and switches preview modes", async () => {
     const target = document.createElement("div");
@@ -43,5 +43,20 @@ describe("TopoStack Svelte shell", () => {
     generate.click();
     await tick(); await Promise.resolve();
     expect(target.querySelector('[role="status"]')?.textContent).toContain("Generation canceled");
+  });
+
+  it("does not let an unresolved platform toast block generation", async () => {
+    window.atomm = {
+      lifecycle: { on: vi.fn() },
+      ui: { toast: vi.fn(() => new Promise<string>(() => undefined)), closeToast: vi.fn(async () => undefined) },
+      app: { getLocale: vi.fn(async () => "en-US") },
+    };
+    loadTerrainMock.mockImplementation(() => new Promise(() => undefined));
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await tick();
+    expect(loadTerrainMock).toHaveBeenCalledOnce();
   });
 });

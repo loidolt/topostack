@@ -31,6 +31,15 @@ describe("TopoStack geometry", () => {
     expect(() => buildFabricationPackage(synthetic, DEFAULT_PROJECT)).toThrow(/real terrain/i);
     const real = generateGeometry(DEFAULT_PROJECT, realSource());
     expect(() => buildFabricationPackage(real, { ...DEFAULT_PROJECT, widthMm: 301 })).toThrow(/settings changed/i);
+    real.vectorStatus = "unavailable";
+    expect(() => buildFabricationPackage(real, DEFAULT_PROJECT)).toThrow(/road and water data is unavailable/i);
+  });
+
+  it("records unavailable requested vector data as a geometry warning", () => {
+    const source = realSource();
+    source.vectorStatus = "unavailable";
+    const result = generateGeometry(DEFAULT_PROJECT, source);
+    expect(result.warnings[0]).toMatchObject({ code: "VECTOR_DATA_UNAVAILABLE" });
   });
 
   it("uses unique SVG ids in a multi-layer master", () => {

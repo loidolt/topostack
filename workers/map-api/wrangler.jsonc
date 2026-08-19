@@ -7,14 +7,14 @@
   "assets": {
     "directory": "../../apps/generator/dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/v1", "/v1/*"]
+    "run_worker_first": ["/health", "/ready", "/v1", "/v1/*"]
   },
   "vars": {
     "ENVIRONMENT": "development",
     "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://topostack.loidolt.space,https://www.atomm.com",
     "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
     "GEOCODER_ORIGIN": "https://api.geoapify.com",
-    "DATASET_VERSION": "mapzen-terrarium+osm-pmtiles-v1"
+    "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z11-v1"
   },
   "r2_buckets": [
     { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache" },
@@ -37,7 +37,7 @@
         "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,https://topostack.loidolt.space,https://www.atomm.com",
         "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
         "GEOCODER_ORIGIN": "https://api.geoapify.com",
-        "DATASET_VERSION": "mapzen-terrarium+osm-pmtiles-v1"
+        "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z11-v1"
       },
       "r2_buckets": [
         { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache-development" },
@@ -59,7 +59,7 @@
         "ALLOWED_ORIGINS": "https://topostack.loidolt.space,https://www.atomm.com",
         "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
         "GEOCODER_ORIGIN": "https://api.geoapify.com",
-        "DATASET_VERSION": "mapzen-terrarium+osm-pmtiles-v1"
+        "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z11-v1"
       },
       "r2_buckets": [
         { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache" },

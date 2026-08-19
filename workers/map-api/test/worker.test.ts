@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { exports } from "cloudflare:workers";
-import { isAllowedOrigin, normalizeGeoapify, validTile } from "../src/index";
+import { isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, validTile } from "../src/index";
 
 const env = {
   ALLOWED_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173,https://topostack.loidolt.space,https://www.atomm.com",
@@ -42,6 +42,18 @@ describe("map API validation", () => {
     const response = await exports.default.fetch("http://example.com/v1/geocode?q=Rainier", { headers: { origin: "http://localhost:5173" } });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: "Geocoder is not configured." });
+  });
+
+  it("reports missing required dependencies as not ready", async () => {
+    expect(isGeocoderConfigured({ GEOCODER_API_KEY: "replace-with-geoapify-key" })).toBe(false);
+    expect(isGeocoderConfigured({ GEOCODER_API_KEY: "configured-key" })).toBe(true);
+    const response = await exports.default.fetch("http://example.com/ready", { headers: { origin: "http://localhost:5173" } });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      service: "topostack-map-api",
+      status: "not_ready",
+      dependencies: { geocoder: { status: "unconfigured" }, vectorData: { status: "missing", key: "osm/current.pmtiles" } },
+    });
   });
 
   it("normalizes and filters managed geocoder responses", () => {

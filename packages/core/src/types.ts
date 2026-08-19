@@ -61,6 +61,7 @@ export interface SourceBundleV1 {
   schemaVersion: 1;
   elevation: ElevationGrid;
   markings: MarkingFeature[];
+  vectorStatus: "available" | "unavailable" | "not-requested";
   datasetVersion: string;
   sourceKind: "real" | "synthetic";
   bounds: GeoBounds;
@@ -97,7 +98,7 @@ export interface LayerIR {
 }
 
 export interface GeometryWarning {
-  code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK";
+  code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK" | "VECTOR_DATA_UNAVAILABLE";
   message: string;
 }
 
@@ -107,6 +108,7 @@ export interface GeometryIRV1 {
   projectName: string;
   configFingerprint: string;
   sourceKind: "real" | "synthetic";
+  vectorStatus: SourceBundleV1["vectorStatus"];
   datasetVersion: string;
   bounds: GeoBounds;
   resolutionM?: number;

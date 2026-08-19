@@ -10,4 +10,6 @@ dist/
 .env.local
 *.zip
 coverage/
+playwright-report/
+test-results/
 .DS_Store

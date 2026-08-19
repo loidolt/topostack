@@ -17,7 +17,7 @@ jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       VITE_MAP_API_URL: https://ci.invalid
     steps:
@@ -41,6 +41,12 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Install browser for end-to-end tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test browser generation and export
+        run: npm run test:e2e
 
       - name: Build
         run: npm run build

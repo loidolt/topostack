@@ -106,6 +106,7 @@ export function assemblyGuideToSvg(ir: GeometryIRV1): string {
 export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV1): FabricationPackageV1 {
   if (ir.sourceKind !== "real") throw new Error("Generate real terrain data before exporting fabrication files.");
   if (ir.configFingerprint !== projectFingerprint(config)) throw new Error("Project settings changed. Regenerate the terrain before exporting.");
+  if (ir.vectorStatus === "unavailable" && (config.showRoads || config.showWater)) throw new Error("Road and water data is unavailable. Disable those map details or regenerate after the service is restored.");
   if (ir.layers.some((layer) => layer.polygons.length === 0)) throw new Error("One or more layers are empty. Reduce the layer count or minimum feature size before exporting.");
   const base = safeName(config.name);
   const layerFiles: ExportFile[] = ir.layers.map((layer) => ({
@@ -125,6 +126,7 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
       bounds: ir.bounds,
       resolutionM: ir.resolutionM,
       datasetVersion: ir.datasetVersion,
+      vectorStatus: ir.vectorStatus,
       imagerySources: ir.imagerySources,
     },
     attribution: ir.attribution,

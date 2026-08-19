@@ -24,7 +24,7 @@ Every generated result records a deterministic project fingerprint and source qu
 
 ## Data coverage
 
-The first release supports land terrain between ±85.0511° latitude. Mapzen Terrarium tiles provide elevation. OSM-derived vector tiles in `osm/current.pmtiles` provide roads and water lines. Source resolution varies, and all output is decorative rather than survey-grade.
+The first release supports land terrain between ±85.0511° latitude. Mapzen Terrarium tiles provide elevation. The pinned Protomaps 20260819 archive provides OSM-derived roads and water through zoom 11 from `osm/current.pmtiles`; the browser clamps vector requests to the archive's advertised zoom range. Source resolution varies, and all output is decorative rather than survey-grade.
 
 ## Versioning
 

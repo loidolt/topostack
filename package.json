@@ -13,10 +13,13 @@
     "dev:api": "npm run dev -w @topostack/map-api",
     "build": "npm run build -w @topostack/core && npm run build -w @topostack/generator && npm run build -w @topostack/map-api",
     "test": "npm run test -w @topostack/core && npm run test -w @topostack/generator && npm run test -w @topostack/map-api",
+    "test:e2e": "playwright test",
     "typecheck": "npm run typecheck -w @topostack/core && npm run typecheck -w @topostack/generator && npm run typecheck -w @topostack/map-api",
+    "data:provision": "node scripts/provision-vector-data.mjs",
     "package:atomm": "node scripts/validate-submission-env.mjs && npm run build -w @topostack/generator && node scripts/verify-atomm-dist.mjs && cd apps/generator/dist && zip -FSqr ../topostack-atomm.zip ."
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.3.0",
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",

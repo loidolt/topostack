@@ -12,6 +12,15 @@ describe("Atomm export policy", () => {
     expect(exportBlockReason(geometry(), { ...DEFAULT_PROJECT, layerCount: 9 })).toMatch(/settings changed/i);
   });
 
+  it("blocks incomplete requested vector data", () => {
+    const result = geometry();
+    result.vectorStatus = "unavailable";
+    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/road and water data is unavailable/i);
+    const withoutVectorDetails = { ...DEFAULT_PROJECT, showRoads: false, showWater: false };
+    const completeWithoutVectors = generateGeometry(withoutVectorDetails, { ...createSyntheticSource(withoutVectorDetails, 32), sourceKind: "real", vectorStatus: "not-requested" });
+    expect(exportBlockReason(completeWithoutVectors, withoutVectorDetails)).toBeUndefined();
+  });
+
   it("returns one master for Studio and all files for download", () => {
     const result = geometry();
     const studio = createAtommExport(result, DEFAULT_PROJECT, "openInStudio");

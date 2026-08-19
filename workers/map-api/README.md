@@ -11,14 +11,20 @@ npx wrangler r2 bucket create topostack-map-cache
 npx wrangler r2 bucket create topostack-vector-data
 ```
 
-Upload an OSM-derived PMTiles planet or regional archive to `osm/current.pmtiles` in each environment's vector bucket:
+TopoStack pins the Protomaps `20260819` basemap build (`4.15.2`) and extracts a global zoom 0–11 archive. The upstream archive's published BLAKE3 digest is `837084e3e47de6f3ec5708f6de116d89789520e2391d67494a99e3daeb66a862`. Build and verify the smaller archive with PMTiles CLI `1.31.2` or newer:
 
 ```bash
-npx wrangler r2 object put topostack-vector-data-development/osm/current.pmtiles --file ./current.pmtiles --content-type application/vnd.pmtiles --remote
-npx wrangler r2 object put topostack-vector-data/osm/current.pmtiles --file ./current.pmtiles --content-type application/vnd.pmtiles --remote
+pmtiles extract https://build.protomaps.com/20260819.pmtiles ./current.pmtiles --maxzoom=11
+pmtiles verify ./current.pmtiles
 ```
 
-Use an archive whose source and build process comply with ODbL. Keep the source version and required notices synchronized with `DATASET_VERSION` and the manifest response.
+The result is approximately 7.9 GB, above Wrangler's 315 MB object-upload limit and R2's 5 GiB single-part limit. The provisioning script verifies the archive, mints 24-hour credentials scoped to only `osm/current.pmtiles`, performs multipart uploads to both buckets, and reads each result back. It uses the existing account-owned Cloudflare API token without storing S3 credentials:
+
+```bash
+PMTILES_BIN=/path/to/pmtiles node --env-file=.env scripts/provision-vector-data.mjs ./current.pmtiles --provision
+```
+
+The API token must allow R2 object writes and temporary-credential creation. Do not commit the token, temporary credentials, or generated archive. Keep the pinned source, maximum zoom, `DATASET_VERSION`, manifest response, and attribution synchronized when updating the data. The Protomaps archive is an ODbL Produced Work based on OpenStreetMap data.
 
 ## Develop and validate
 
@@ -28,6 +34,8 @@ npm run dev
 npm run typecheck
 npm run build
 ```
+
+Before deployment, `/ready` intentionally returns `503` unless the vector archive and geocoder secret are available. `/health` only reports that the Worker itself is running.
 
 Local R2 bindings are simulated automatically. Development and production deployments use separate environment declarations:
 

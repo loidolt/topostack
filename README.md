@@ -57,6 +57,6 @@ Production uses the `topostack` Worker as the origin for `https://topostack.loid
 
 ## Data setup
 
-The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket. An OSM-derived PMTiles archive can be uploaded as `osm/current.pmtiles` to the `topostack-vector-data` bucket. Place search is proxied to Geoapify with a Worker secret. See `workers/map-api/README.md` for deployment details.
+The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket. Roads and water come from the pinned Protomaps/OpenStreetMap PMTiles release stored as `osm/current.pmtiles` in the `topostack-vector-data` bucket. The `/ready` endpoint reports whether that archive and the geocoder configuration are present. Place search is proxied to Geoapify with a Worker secret. See `workers/map-api/README.md` for provisioning and deployment details.
 
 Terrain and map data are decorative source material, not survey, navigation, or engineering data.
