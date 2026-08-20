@@ -31,6 +31,18 @@ describe("TopoStack Svelte shell", () => {
     expect(target.querySelector('svg[aria-label^="Cut preview for layer"]')).not.toBeNull();
   });
 
+  it("lays out fabrication controls in full-width rows with a compact position pair", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Fabrication settings"))!.click();
+    await tick();
+    const fields = target.querySelector<HTMLElement>(".advanced-fields")!;
+    expect(fields.firstElementChild?.classList.contains("toggle-row")).toBe(true);
+    expect(fields.querySelectorAll(":scope > .field-row")).toHaveLength(4);
+    expect(fields.querySelectorAll(".advanced-coordinate-fields > .field-row")).toHaveLength(2);
+  });
+
   it("cancels an in-flight terrain request and reports the outcome", async () => {
     loadTerrainMock.mockImplementation((_project, signal: AbortSignal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Canceled", "AbortError")), { once: true })));
     const target = document.createElement("div");
