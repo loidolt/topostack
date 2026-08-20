@@ -91,7 +91,7 @@ function segmentDistance(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number
   return Math.min(distanceToSegment(a, c, d), distanceToSegment(b, c, d), distanceToSegment(c, a, b), distanceToSegment(d, a, b));
 }
 
-function ringFitsInsidePolygon(ring: Point2D[], polygon: Polygon2D, marginMm: number): boolean {
+function ringFitsInsidePolygon(ring: Point2D[], polygon: Polygon2D, marginMm: number, allowContainedHoles = false): boolean {
   const points = ring.slice(0, -1);
   if (!points.length || !points.every((point) => pointInPolygon(point, polygon))) return false;
   const boundaries = [polygon.outer, ...polygon.holes];
@@ -107,13 +107,13 @@ function ringFitsInsidePolygon(ring: Point2D[], polygon: Polygon2D, marginMm: nu
       }
     }
   }
-  return !polygon.holes.some((hole) => hole.slice(0, -1).some((point) => pointInRing(point, ring)));
+  return allowContainedHoles || !polygon.holes.some((hole) => hole.slice(0, -1).some((point) => pointInRing(point, ring)));
 }
 
-function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[], marginMm: number): number[] | undefined {
+function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[], marginMm: number, allowContainedHoles = false): number[] | undefined {
   const indexes: number[] = [];
   for (const child of children) {
-    const containerIndex = containers.findIndex((container) => ringFitsInsidePolygon(child.outer, container, marginMm));
+    const containerIndex = containers.findIndex((container) => ringFitsInsidePolygon(child.outer, container, marginMm, allowContainedHoles));
     if (containerIndex < 0) return undefined;
     indexes.push(containerIndex);
   }
@@ -123,22 +123,22 @@ function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[]
 function nestHasGlueMargin(nest: FabricationNest, layers: LayerIR[]): boolean {
   const nestedLayer = layers[nest.nestedLayerIndex];
   const coveringLayer = layers[nest.donorLayerIndex + 1];
-  return Boolean(nestedLayer && coveringLayer && containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, nest.glueMarginMm));
+  return Boolean(nestedLayer && coveringLayer && containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, nest.glueMarginMm, true));
 }
 
 function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): FabricationNest[] {
   if (!config.optimizeMaterialUse) return [];
   const nests: FabricationNest[] = [];
-  const donorsWithChildren = new Set<number>();
-  for (let nestedLayerIndex = 2; nestedLayerIndex < layers.length; nestedLayerIndex += 1) {
-    const nestedLayer = layers[nestedLayerIndex];
-    if (!nestedLayer || nestedLayer.polygons.length === 0) continue;
-    for (let donorLayerIndex = nestedLayerIndex - 2; donorLayerIndex >= 0; donorLayerIndex -= 1) {
-      if (donorsWithChildren.has(donorLayerIndex)) continue;
+  const nestedLayersWithParents = new Set<number>();
+  for (let donorLayerIndex = 0; donorLayerIndex < layers.length - 2; donorLayerIndex += 1) {
+    for (let nestedLayerIndex = donorLayerIndex + 2; nestedLayerIndex < layers.length; nestedLayerIndex += 1) {
+      if (nestedLayersWithParents.has(nestedLayerIndex)) continue;
+      const nestedLayer = layers[nestedLayerIndex];
+      if (!nestedLayer || nestedLayer.polygons.length === 0) continue;
       const donorLayer = layers[donorLayerIndex];
       const coveringLayer = layers[donorLayerIndex + 1];
       if (!donorLayer || !coveringLayer || coveringLayer.polygons.length === 0) continue;
-      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, config.glueMarginMm)) continue;
+      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, config.glueMarginMm, true)) continue;
       const donorPolygonIndexes = containingPolygonIndexes(nestedLayer.polygons, donorLayer.polygons, config.glueMarginMm);
       if (!donorPolygonIndexes) continue;
       const cavities = nestedLayer.polygons.map((polygon, nestedPolygonIndex) => {
@@ -161,7 +161,7 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
         continue;
       }
       nests.push(nest);
-      donorsWithChildren.add(donorLayerIndex);
+      nestedLayersWithParents.add(nestedLayerIndex);
       break;
     }
   }

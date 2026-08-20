@@ -166,6 +166,7 @@ describe("TopoStack geometry", () => {
   it("nests smaller layers into covered cavities with the configured glue margin", async () => {
     const result = generateGeometry(DEFAULT_PROJECT, realSource());
     expect(result.fabricationNests.length).toBeGreaterThan(0);
+    expect(result.fabricationNests.some((nest) => result.fabricationNests.some((next) => next.donorLayerIndex === nest.donorLayerIndex + 1))).toBe(true);
     for (const nest of result.fabricationNests) {
       expect(nest.nestedLayerIndex).toBeGreaterThan(nest.donorLayerIndex + 1);
       const donor = result.layers[nest.donorLayerIndex]!;
