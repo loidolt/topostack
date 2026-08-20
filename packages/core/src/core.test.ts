@@ -24,6 +24,10 @@ function distanceToSegment(point: { x: number; y: number }, start: { x: number; 
 }
 
 describe("TopoStack geometry", () => {
+  it("does not invent road or water markings in sample terrain", () => {
+    expect(createSyntheticSource(DEFAULT_PROJECT, 48).markings).toEqual([]);
+  });
+
   it("generates nested physical layers from a deterministic elevation grid", () => {
     const source = createSyntheticSource(DEFAULT_PROJECT, 48);
     const result = generateGeometry(DEFAULT_PROJECT, source);

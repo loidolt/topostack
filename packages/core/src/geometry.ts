@@ -686,15 +686,10 @@ export function createSyntheticSource(config: ProjectConfigV1, size = 96): Sourc
       max = Math.max(max, elevation);
     }
   }
-  const w = config.widthMm / 2;
-  const h = config.heightMm / 2;
   return {
     schemaVersion: 1,
     elevation: { width: size, height: size, values, min, max },
-    markings: [
-      { id: "road-primary", kind: "road", operation: "engrave", points: [{ x: -w, y: h * 0.4 }, { x: -w * 0.25, y: h * 0.1 }, { x: w * 0.35, y: h * 0.2 }, { x: w, y: -h * 0.35 }] },
-      { id: "river", kind: "water", operation: "score", points: [{ x: -w * 0.75, y: -h }, { x: -w * 0.35, y: -h * 0.3 }, { x: -w * 0.2, y: h * 0.25 }, { x: w * 0.15, y: h }] },
-    ],
+    markings: [],
     vectorStatus: "available",
     datasetVersion: "synthetic-v1",
     sourceKind: "synthetic",
