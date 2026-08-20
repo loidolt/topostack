@@ -1,5 +1,6 @@
 import { projectFingerprint } from "./geometry.js";
 import { labelPathData } from "./labels.js";
+import { offsetClosedRing } from "./offset.js";
 import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
@@ -21,13 +22,18 @@ function pathData(points: Point2D[], offsetX = 0, offsetY = 0, closePath = false
   return commands.join(" ");
 }
 
-function layerGroups(layer: LayerIR, offsetX = 0, offsetY = 0, omittedHoles = new Map<number, Set<number>>()): string {
+function compensatedCutPaths(points: Point2D[], distanceMm: number): Point2D[][] {
+  return offsetClosedRing(points, distanceMm, "miter");
+}
+
+function layerGroups(layer: LayerIR, laserKerfMm: number, offsetX = 0, offsetY = 0, omittedHoles = new Map<number, Set<number>>()): string {
+  const compensationMm = laserKerfMm / 2;
   const cutPaths = layer.polygons.flatMap((polygon, polygonIndex) => {
     const omittedHoleIndexes = omittedHoles.get(polygonIndex) ?? new Set<number>();
     return [
-      `<path id="${layer.id}-cut-${polygonIndex + 1}" d="${pathData(polygon.outer, offsetX, offsetY, true)}"/>`,
+      ...compensatedCutPaths(polygon.outer, compensationMm).map((ring, offsetIndex) => `<path id="${layer.id}-cut-${polygonIndex + 1}-offset-${offsetIndex + 1}" d="${pathData(ring, offsetX, offsetY, true)}"/>`),
       ...polygon.holes.flatMap((hole, holeIndex) => omittedHoleIndexes.has(holeIndex) ? [] : [
-        `<path id="${layer.id}-cut-${polygonIndex + 1}-hole-${holeIndex + 1}" d="${pathData(hole, offsetX, offsetY, true)}"/>`,
+        ...compensatedCutPaths(hole, -compensationMm).map((ring, offsetIndex) => `<path id="${layer.id}-cut-${polygonIndex + 1}-hole-${holeIndex + 1}-offset-${offsetIndex + 1}" d="${pathData(ring, offsetX, offsetY, true)}"/>`),
       ]),
     ];
   }).join("");
@@ -46,7 +52,9 @@ function escapeXml(value: string): string {
 }
 
 export function layerToSvg(ir: GeometryIRV1, layer: LayerIR): string {
-  return svgDocument(ir.widthMm, ir.heightMm, layerGroups(layer), `${ir.projectName} — ${layer.id}`);
+  const width = ir.widthMm + ir.laserKerfMm;
+  const height = ir.heightMm + ir.laserKerfMm;
+  return svgDocument(width, height, layerGroups(layer, ir.laserKerfMm), `${ir.projectName} — ${layer.id}`);
 }
 
 interface FabricationPanel {
@@ -76,28 +84,32 @@ function omittedNestHoles(nests: FabricationNest[], layerIndex: number): Map<num
 function panelGroups(ir: GeometryIRV1, panel: FabricationPanel, offsetX = 0, offsetY = 0): string {
   const layerIds = panel.layerIndexes.map((index) => ir.layers[index]?.id).filter(Boolean).join(" ");
   const layers = panel.layerIndexes.map((index) => ir.layers[index]).filter((layer): layer is LayerIR => Boolean(layer));
-  return `<g id="fabrication-panel-${panel.rootLayerIndex + 1}" data-layers="${escapeXml(layerIds)}">${layers.map((layer) => layerGroups(layer, offsetX, offsetY, omittedNestHoles(ir.fabricationNests, layer.index))).join("")}</g>`;
+  return `<g id="fabrication-panel-${panel.rootLayerIndex + 1}" data-layers="${escapeXml(layerIds)}">${layers.map((layer) => layerGroups(layer, ir.laserKerfMm, offsetX, offsetY, omittedNestHoles(ir.fabricationNests, layer.index))).join("")}</g>`;
 }
 
 function panelToSvg(ir: GeometryIRV1, panel: FabricationPanel): string {
   const layerIds = panel.layerIndexes.map((index) => ir.layers[index]?.id).filter(Boolean).join(", ");
-  return svgDocument(ir.widthMm, ir.heightMm, panelGroups(ir, panel), `${ir.projectName} — fabrication panel — ${layerIds}`);
+  const width = ir.widthMm + ir.laserKerfMm;
+  const height = ir.heightMm + ir.laserKerfMm;
+  return svgDocument(width, height, panelGroups(ir, panel), `${ir.projectName} — fabrication panel — ${layerIds}`);
 }
 
 export function masterToSvg(ir: GeometryIRV1): string {
   const gap = 12;
   const panels = fabricationPanels(ir);
+  const panelWidth = ir.widthMm + ir.laserKerfMm;
+  const panelHeight = ir.heightMm + ir.laserKerfMm;
   const columns = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(panels.length))));
   const rows = Math.ceil(panels.length / columns);
-  const width = columns * ir.widthMm + (columns - 1) * gap;
-  const height = rows * ir.heightMm + (rows - 1) * gap;
-  const startX = -width / 2 + ir.widthMm / 2;
-  const startY = -height / 2 + ir.heightMm / 2;
+  const width = columns * panelWidth + (columns - 1) * gap;
+  const height = rows * panelHeight + (rows - 1) * gap;
+  const startX = -width / 2 + panelWidth / 2;
+  const startY = -height / 2 + panelHeight / 2;
   const body = panels.map((panel, index) => {
     const column = index % columns;
     const row = Math.floor(index / columns);
-    const offsetX = startX + column * (ir.widthMm + gap);
-    const offsetY = startY + row * (ir.heightMm + gap);
+    const offsetX = startX + column * (panelWidth + gap);
+    const offsetY = startY + row * (panelHeight + gap);
     return panelGroups(ir, panel, offsetX, offsetY);
   }).join("");
   return svgDocument(width, height, body, `${ir.projectName} — master layout`, -width / 2, -height / 2);
@@ -144,6 +156,7 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
         panelCount: panels.length,
         originalPanelCount: ir.layers.length,
         glueMarginMm: config.glueMarginMm,
+        laserKerfMm: config.laserKerfMm,
         nests: ir.fabricationNests,
       },
       bounds: ir.bounds,
@@ -155,9 +168,10 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
     attribution: ir.attribution,
   };
   const attribution = `${ir.attribution.map((item) => `${item.name} — ${item.license}\n${item.url}`).join("\n\n")}\n\nImagery sources used:\n${ir.imagerySources.length ? ir.imagerySources.join("\n") : "Not reported by source service"}`;
-  const alignment = config.showAlignmentGuides ? "Each lower layer includes an engraved outline and Lxx label for positioning the layer directly above it. These marks are designed to be hidden after assembly.\n\n" : "";
+  const alignment = config.showAlignmentGuides ? `Each lower layer includes an engraved outline inset ${format(config.laserKerfMm)} mm beneath the layer directly above it, plus an Lxx label. These marks are designed to be hidden after assembly.\n\n` : "";
+  const kerf = config.laserKerfMm > 0 ? `CUT paths include ${format(config.laserKerfMm)} mm total kerf compensation: external cuts move outward and internal cuts move inward by half the kerf. Calibrate this value for your laser and material.\n\n` : "CUT paths have no kerf compensation. Calibrate your laser and material before fabrication.\n\n";
   const nesting = ir.fabricationNests.length ? `Material nesting reduced ${ir.layers.length} layer panels to ${panels.length} fabrication panels. Smaller layers share cut lines inside lower layers while preserving at least ${format(config.glueMarginMm)} mm of covered glue land. Keep every loose cutout: nested pieces belong to the layer IDs listed in each panel filename and SVG data-layers attribute.\n\n` : config.optimizeMaterialUse ? `No safe material nests fit the requested ${format(config.glueMarginMm)} mm glue margin, so every layer remains on its own panel.\n\n` : "Material-saving nesting is disabled.\n\n";
-  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\nFabrication panels: ${panels.length}\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}${nesting}Import the master SVG into xTool Studio, or use the fabrication-panel SVGs. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
+  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\nFabrication panels: ${panels.length}\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}${kerf}${nesting}Import the master SVG into xTool Studio, or use the fabrication-panel SVGs. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
   const files: ExportFile[] = [
     ...panelFiles.map(({ file }) => file),
     master,

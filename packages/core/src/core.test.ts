@@ -39,7 +39,9 @@ describe("TopoStack geometry", () => {
   it("exports 1:1 millimeter SVGs with machine operation groups", async () => {
     const result = generateGeometry(DEFAULT_PROJECT, realSource());
     const svg = layerToSvg(result, result.layers[0]!);
-    expect(svg).toContain('width="300mm"');
+    expect(svg).toContain('width="300.15mm"');
+    expect(svg).toContain('viewBox="-150.075 -100.075 300.15 200.15"');
+    expect(svg).toMatch(/M150\.075 100\.075 .*L-150\.075 -100\.075/s);
     expect(svg).toContain('data-operation="CUT"');
     expect(svg).toContain('data-operation="ENGRAVE"');
     expect(svg).toContain('id="elevation-0"');
@@ -137,6 +139,7 @@ describe("TopoStack geometry", () => {
       const outlines = layer.markings.filter((marking) => marking.id.startsWith(`alignment-layer-${String(index + 1).padStart(2, "0")}-to-`) && marking.id.includes("-outline-"));
       if (nextLayer.polygons.length) expect(outlines.length).toBeGreaterThan(0);
       expect(outlines.every((marking) => marking.operation === "engrave" && marking.kind === "guide")).toBe(true);
+      expect(outlines.flatMap((marking) => marking.points).every((point) => nextLayer.polygons.some((polygon) => pointInRing(point, polygon.outer)))).toBe(true);
     });
     expect(result.layers.at(-1)?.markings.some((marking) => marking.id.startsWith("alignment-layer-"))).toBe(false);
     expect(layerToSvg(result, result.layers[0]!)).toContain('id="alignment-layer-01-to-02-');

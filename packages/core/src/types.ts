@@ -31,6 +31,7 @@ export interface ProjectConfigV1 {
   showAlignmentGuides: boolean;
   optimizeMaterialUse: boolean;
   glueMarginMm: number;
+  laserKerfMm: number;
   showElevationLabels: boolean;
   elevationLabelPosition: Point2D;
   showNorthArrow: boolean;
@@ -133,6 +134,7 @@ export interface GeometryIRV1 {
   imagerySources: string[];
   widthMm: number;
   heightMm: number;
+  laserKerfMm: number;
   minElevationM: number;
   maxElevationM: number;
   layers: LayerIR[];
@@ -175,6 +177,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showAlignmentGuides: true,
   optimizeMaterialUse: true,
   glueMarginMm: 8,
+  laserKerfMm: 0.15,
   showElevationLabels: true,
   elevationLabelPosition: { x: -0.55, y: 0.55 },
   showNorthArrow: true,

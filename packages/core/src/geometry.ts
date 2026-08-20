@@ -1,6 +1,7 @@
 import { contours } from "d3-contour";
 import polygonClipping, { type MultiPolygon, type Pair, type Ring } from "polygon-clipping";
 import { labelDimensions } from "./labels.js";
+import { offsetClosedRing } from "./offset.js";
 import type {
   ElevationGrid,
   GeometryIRV1,
@@ -120,16 +121,17 @@ function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[]
   return indexes;
 }
 
-function nestHasGlueMargin(nest: FabricationNest, layers: LayerIR[]): boolean {
+function nestHasGlueMargin(nest: FabricationNest, layers: LayerIR[], laserKerfMm: number): boolean {
   const nestedLayer = layers[nest.nestedLayerIndex];
   const coveringLayer = layers[nest.donorLayerIndex + 1];
-  return Boolean(nestedLayer && coveringLayer && containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, nest.glueMarginMm, true));
+  return Boolean(nestedLayer && coveringLayer && containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, nest.glueMarginMm + laserKerfMm, true));
 }
 
 function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): FabricationNest[] {
   if (!config.optimizeMaterialUse) return [];
   const nests: FabricationNest[] = [];
   const nestedLayersWithParents = new Set<number>();
+  const requiredClearanceMm = config.glueMarginMm + config.laserKerfMm;
   for (let donorLayerIndex = 0; donorLayerIndex < layers.length - 2; donorLayerIndex += 1) {
     for (let nestedLayerIndex = donorLayerIndex + 2; nestedLayerIndex < layers.length; nestedLayerIndex += 1) {
       if (nestedLayersWithParents.has(nestedLayerIndex)) continue;
@@ -138,8 +140,8 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
       const donorLayer = layers[donorLayerIndex];
       const coveringLayer = layers[donorLayerIndex + 1];
       if (!donorLayer || !coveringLayer || coveringLayer.polygons.length === 0) continue;
-      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, config.glueMarginMm, true)) continue;
-      const donorPolygonIndexes = containingPolygonIndexes(nestedLayer.polygons, donorLayer.polygons, config.glueMarginMm);
+      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, requiredClearanceMm, true)) continue;
+      const donorPolygonIndexes = containingPolygonIndexes(nestedLayer.polygons, donorLayer.polygons, requiredClearanceMm);
       if (!donorPolygonIndexes) continue;
       const cavities = nestedLayer.polygons.map((polygon, nestedPolygonIndex) => {
         const donorPolygonIndex = donorPolygonIndexes[nestedPolygonIndex]!;
@@ -155,7 +157,7 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
         glueMarginMm: config.glueMarginMm,
         cavities,
       };
-      const invalidatedAdjacentNest = nests.some((existingNest) => existingNest.donorLayerIndex + 1 === donorLayerIndex && !nestHasGlueMargin(existingNest, layers));
+      const invalidatedAdjacentNest = nests.some((existingNest) => existingNest.donorLayerIndex + 1 === donorLayerIndex && !nestHasGlueMargin(existingNest, layers, config.laserKerfMm));
       if (invalidatedAdjacentNest) {
         [...cavities].reverse().forEach((cavity) => donorLayer.polygons[cavity.donorPolygonIndex]?.holes.splice(cavity.donorHoleIndex, 1));
         continue;
@@ -368,12 +370,14 @@ function addAlignmentGuides(config: ProjectConfigV1, layers: LayerIR[]): void {
     const layerNumber = String(layer.index + 1).padStart(2, "0");
     const nextLayerNumber = String(nextLayer.index + 1).padStart(2, "0");
     nextLayer.polygons.forEach((polygon, polygonIndex) => {
-      clipPolyline(polygon.outer, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
-        id: `alignment-layer-${layerNumber}-to-${nextLayerNumber}-${polygonIndex}-outline-${clipIndex}`,
-        operation: "engrave",
-        kind: "guide",
-        points,
-      }));
+      offsetClosedRing(polygon.outer, -config.laserKerfMm, "round").forEach((inset, insetIndex) => {
+        clipPolyline(inset, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
+          id: `alignment-layer-${layerNumber}-to-${nextLayerNumber}-${polygonIndex}-inset-${insetIndex}-outline-${clipIndex}`,
+          operation: "engrave",
+          kind: "guide",
+          points,
+        }));
+      });
       const label = `L${nextLayerNumber}`;
       const point = placeLabel(label, config, layer.polygons, layer.markings, polygonCenter(polygon, config), [polygon]);
       if (point) layer.markings.push({
@@ -639,6 +643,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     imagerySources: source.imagerySources,
     widthMm: config.widthMm,
     heightMm: config.heightMm,
+    laserKerfMm: config.laserKerfMm,
     minElevationM: grid.min,
     maxElevationM: grid.max,
     layers,
@@ -658,9 +663,10 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
   if (config.glueMarginMm < 2 || config.glueMarginMm > 25) throw new Error("Glue margin must be between 2 and 25 mm.");
+  if (config.laserKerfMm < 0 || config.laserKerfMm > 1) throw new Error("Laser kerf must be between 0 and 1 mm.");
   if (config.smoothing !== 0 && config.smoothing !== 1) throw new Error("Contour smoothing must be 0 or 1.");
   if (Math.abs(config.elevationLabelPosition.x) > 0.9 || Math.abs(config.elevationLabelPosition.y) > 0.9) throw new Error("Elevation label position must be between -90% and 90%.");
   const bounds = config.location.bounds;

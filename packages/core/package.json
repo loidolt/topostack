@@ -16,10 +16,12 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "clipper-lib": "^6.4.2",
     "d3-contour": "^4.0.2",
     "polygon-clipping": "^0.15.7"
   },
   "devDependencies": {
+    "@types/clipper-lib": "^6.4.0",
     "@types/d3-contour": "^3.0.6"
   }
 }

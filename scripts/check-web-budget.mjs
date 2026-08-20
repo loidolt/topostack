@@ -3,7 +3,7 @@ import { gzipSync } from "node:zlib";
 
 const dist = new URL("../apps/generator/dist/", import.meta.url);
 const budgets = {
-  totalJavaScriptGzip: 550_000,
+  totalJavaScriptGzip: 560_000,
   largestJavaScriptGzip: 300_000,
   totalCssGzip: 30_000,
   indexHtmlBytes: 10_000,

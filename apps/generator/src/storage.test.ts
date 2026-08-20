@@ -11,6 +11,7 @@ describe("project import validation", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, showAlignmentGuides: "yes" })).toThrow(/showAlignmentGuides/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, optimizeMaterialUse: "yes" })).toThrow(/optimizeMaterialUse/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, glueMarginMm: 30 })).toThrow(/glue margin/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, laserKerfMm: 1.1 })).toThrow(/laser kerf/i);
   });
   it("adds new fabrication defaults to projects saved before those fields existed", () => {
     const {
@@ -18,6 +19,7 @@ describe("project import validation", () => {
       showAlignmentGuides: _legacyAlignmentGuides,
       optimizeMaterialUse: _legacyOptimizeMaterialUse,
       glueMarginMm: _legacyGlueMarginMm,
+      laserKerfMm: _legacyLaserKerfMm,
       ...legacyProject
     } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
@@ -25,6 +27,7 @@ describe("project import validation", () => {
       showAlignmentGuides: true,
       optimizeMaterialUse: true,
       glueMarginMm: 8,
+      laserKerfMm: 0.15,
     });
   });
 });

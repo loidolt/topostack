@@ -44,6 +44,7 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     showAlignmentGuides: record.showAlignmentGuides === undefined ? DEFAULT_PROJECT.showAlignmentGuides : booleanValue(record.showAlignmentGuides, "showAlignmentGuides"),
     optimizeMaterialUse: record.optimizeMaterialUse === undefined ? DEFAULT_PROJECT.optimizeMaterialUse : booleanValue(record.optimizeMaterialUse, "optimizeMaterialUse"),
     glueMarginMm: record.glueMarginMm === undefined ? DEFAULT_PROJECT.glueMarginMm : numberValue(record.glueMarginMm),
+    laserKerfMm: record.laserKerfMm === undefined ? DEFAULT_PROJECT.laserKerfMm : numberValue(record.laserKerfMm),
     showElevationLabels: booleanValue(record.showElevationLabels, "showElevationLabels"), showNorthArrow: booleanValue(record.showNorthArrow, "showNorthArrow"), showScaleBar: booleanValue(record.showScaleBar, "showScaleBar"),
     elevationLabelPosition: labelPositionRecord ? { x: numberValue(labelPositionRecord.x), y: numberValue(labelPositionRecord.y) } : { ...DEFAULT_PROJECT.elevationLabelPosition },
     explodedPreview: numberValue(record.explodedPreview),
