@@ -12,9 +12,10 @@ TopoStack is an Atomm-first generator for turning real-world terrain into stacke
 
 ```bash
 npm install
-npm run dev:api
 npm run dev
 ```
+
+The root development command starts the Cloudflare map API first, waits for its health check, and then starts Vite on port 5173. It uses a local terrain cache and the provisioned remote development PMTiles bucket. Run `npm run dev:web` or `npm run dev:api` only when working on one side in isolation.
 
 Open the Vite URL directly, or use Atomm's local preview URL:
 
@@ -22,7 +23,7 @@ Open the Vite URL directly, or use Atomm's local preview URL:
 https://www.atomm.com/creativetools/community/generator/topographic-map-generator?local=http://localhost:5173/
 ```
 
-The app falls back to a deterministic terrain fixture when the map-data Worker is unavailable, so UI and geometry development remain possible offline.
+The app falls back to a deterministic terrain fixture when the map-data Worker is unavailable, so UI and geometry development remain possible offline. Copy `workers/map-api/.dev.vars.example` to `workers/map-api/.dev.vars` and provide a Geoapify key when local place search is needed; terrain generation does not require that secret.
 
 ## Validation and packaging
 

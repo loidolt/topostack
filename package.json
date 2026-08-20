@@ -9,7 +9,8 @@
     "workers/*"
   ],
   "scripts": {
-    "dev": "npm run dev -w @topostack/generator",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "npm run dev -w @topostack/generator",
     "dev:api": "npm run dev -w @topostack/map-api",
     "build": "npm run build -w @topostack/core && npm run build -w @topostack/generator && npm run build -w @topostack/map-api",
     "test": "npm run test -w @topostack/core && npm run test -w @topostack/generator && npm run test -w @topostack/map-api",

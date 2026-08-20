@@ -37,7 +37,7 @@ npm run build
 
 Before deployment, `/ready` intentionally returns `503` unless the vector archive and geocoder secret are available. `/health` only reports that the Worker itself is running.
 
-Local R2 bindings are simulated automatically. Development and production deployments use separate environment declarations:
+Local terrain-cache R2 storage is simulated automatically. The local development Worker reads the provisioned PMTiles archive through a remote binding to `topostack-vector-data-development`; this requires Wrangler authentication but avoids duplicating a multi-gigabyte archive on every workstation. Development and production deployments use separate environment declarations:
 
 ```bash
 npx wrangler deploy --env development

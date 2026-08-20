@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler dev --port 8787",
+    "dev": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log node --env-file-if-exists=../../.env ../../node_modules/wrangler/bin/wrangler.js dev --env development --port 8787",
     "build": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler deploy --dry-run --env=\"\" --outdir dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "types": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler types src/worker-configuration.d.ts --env-file .dev.vars.example",

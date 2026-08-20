@@ -3,6 +3,7 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [sveltekit()],
+  server: { strictPort: true },
   build: {
     target: "es2022",
     sourcemap: false,

@@ -41,7 +41,7 @@
       },
       "r2_buckets": [
         { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache-development" },
-        { "binding": "VECTOR_DATA", "bucket_name": "topostack-vector-data-development" }
+        { "binding": "VECTOR_DATA", "bucket_name": "topostack-vector-data-development", "remote": true }
       ],
       "secrets": { "required": ["GEOCODER_API_KEY"] },
       "ratelimits": [
