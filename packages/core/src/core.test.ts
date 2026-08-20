@@ -5,6 +5,16 @@ function realSource(project = DEFAULT_PROJECT) {
   return { ...createSyntheticSource(project, 48), sourceKind: "real" as const, imagerySources: ["srtm/N46W122.tif"] };
 }
 
+function pointInRing(point: { x: number; y: number }, ring: Array<{ x: number; y: number }>): boolean {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+    const a = ring[index];
+    const b = ring[previous];
+    if (a && b && (a.y > point.y) !== (b.y > point.y) && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
 describe("TopoStack geometry", () => {
   it("generates nested physical layers from a deterministic elevation grid", () => {
     const source = createSyntheticSource(DEFAULT_PROJECT, 48);
@@ -96,5 +106,37 @@ describe("TopoStack geometry", () => {
       const corners = [origin, { x: origin.x + dimensions.width, y: origin.y }, { x: origin.x, y: origin.y + dimensions.height }, { x: origin.x + dimensions.width, y: origin.y + dimensions.height }];
       expect(corners.every((point) => Math.hypot(point.x, point.y) < 100)).toBe(true);
     }
+  });
+
+  it("engraves the next layer footprint on every lower layer by default", () => {
+    const result = generateGeometry(DEFAULT_PROJECT, realSource());
+    result.layers.slice(0, -1).forEach((layer, index) => {
+      const nextLayer = result.layers[index + 1]!;
+      const outlines = layer.markings.filter((marking) => marking.id.startsWith(`alignment-layer-${String(index + 1).padStart(2, "0")}-to-`) && marking.id.includes("-outline-"));
+      if (nextLayer.polygons.length) expect(outlines.length).toBeGreaterThan(0);
+      expect(outlines.every((marking) => marking.operation === "engrave" && marking.kind === "guide")).toBe(true);
+    });
+    expect(result.layers.at(-1)?.markings.some((marking) => marking.id.startsWith("alignment-layer-"))).toBe(false);
+    expect(layerToSvg(result, result.layers[0]!)).toContain('id="alignment-layer-01-to-02-');
+  });
+
+  it("keeps alignment labels entirely under the next layer", () => {
+    const result = generateGeometry(DEFAULT_PROJECT, realSource());
+    const labels = result.layers.flatMap((layer, index) => layer.markings
+      .filter((marking) => marking.id.startsWith("alignment-layer-") && marking.id.endsWith("-label"))
+      .map((marking) => ({ marking, nextLayer: result.layers[index + 1] })));
+    expect(labels.length).toBeGreaterThan(0);
+    for (const { marking, nextLayer } of labels) {
+      const origin = marking.points[0]!;
+      const dimensions = labelDimensions(marking.label ?? "");
+      const corners = [origin, { x: origin.x + dimensions.width, y: origin.y }, { x: origin.x, y: origin.y + dimensions.height }, { x: origin.x + dimensions.width, y: origin.y + dimensions.height }];
+      expect(corners.every((point) => nextLayer?.polygons.some((polygon) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole))))).toBe(true);
+    }
+  });
+
+  it("removes all assembly registration marks when disabled", () => {
+    const project = { ...DEFAULT_PROJECT, showAlignmentGuides: false };
+    const result = generateGeometry(project, realSource(project));
+    expect(result.layers.some((layer) => layer.markings.some((marking) => marking.id.startsWith("alignment-layer-")))).toBe(false);
   });
 });

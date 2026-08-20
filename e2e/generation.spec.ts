@@ -8,6 +8,7 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Build the landscape." })).toBeVisible();
+  await expect(page.getByLabel("Assembly guides")).toBeChecked();
   await page.getByRole("button", { name: /Fabrication settings/ }).click();
   await page.getByLabel("Label X").fill("0");
   await page.getByLabel("Label Y").fill("0");
@@ -29,6 +30,7 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
   expect(svg).toContain('<svg xmlns="http://www.w3.org/2000/svg"');
   expect(svg).toContain('data-operation="CUT"');
   expect(svg).toContain('id="elevation-0"');
+  expect(svg).toContain('id="alignment-layer-01-to-02-');
   expect(svg).not.toContain("<text");
   expect(svg).toContain("Mount Rainier — master layout");
   expect(browserErrors).toEqual([]);

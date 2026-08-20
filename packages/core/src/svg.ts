@@ -106,7 +106,8 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
     attribution: ir.attribution,
   };
   const attribution = `${ir.attribution.map((item) => `${item.name} — ${item.license}\n${item.url}`).join("\n\n")}\n\nImagery sources used:\n${ir.imagerySources.length ? ir.imagerySources.join("\n") : "Not reported by source service"}`;
-  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\nImport the master SVG into xTool Studio, or use the individual files. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
+  const alignment = config.showAlignmentGuides ? "Each lower layer includes an engraved outline and Lxx label for positioning the layer directly above it. These marks are designed to be hidden after assembly.\n\n" : "";
+  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}Import the master SVG into xTool Studio, or use the individual files. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
   const files: ExportFile[] = [
     ...layerFiles,
     master,

@@ -15,5 +15,6 @@ The operator is responsible for keeping the Worker manifest, PMTiles snapshot, d
 - `CUT` uses `#ff0035`, `SCORE` uses `#2563eb`, and `ENGRAVE` uses `#111827`.
 - Users must verify operation mapping after import into xTool Studio.
 - Minimum feature filtering is geometric assistance, not automatic kerf compensation.
+- Assembly guides are enabled by default. Every layer below the top engraves the outer footprint of each piece on the next layer and, where it fits, an `Lxx` registration label. Labels are accepted only when their full vector bounds lie inside the area that the next layer will cover.
 - Elevation labels are exported as font-independent vector paths. The X/Y anchor is a preference; generation moves a label to the nearest collision-free position inside each layer, or omits it with a warning when none fits.
 - Power, speed, passes, material condition, focus, ventilation, and fire safety remain the maker's responsibility.

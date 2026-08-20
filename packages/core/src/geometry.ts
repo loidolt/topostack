@@ -167,8 +167,7 @@ function markingIntersectsBounds(marking: LayerIR["markings"][number], bounds: B
   return false;
 }
 
-function labelCandidates(config: ProjectConfigV1): Point2D[] {
-  const preferred = config.elevationLabelPosition;
+function labelCandidates(preferred: Point2D): Point2D[] {
   const candidates: Point2D[] = [{ ...preferred }];
   for (let y = -9; y <= 9; y += 1) {
     for (let x = -9; x <= 9; x += 1) {
@@ -183,16 +182,30 @@ function labelCandidates(config: ProjectConfigV1): Point2D[] {
   }).map(({ candidate }) => candidate);
 }
 
-function placeElevationLabel(label: string, config: ProjectConfigV1, layer: LayerIR): Point2D | undefined {
+function placeLabel(label: string, config: ProjectConfigV1, polygons: Polygon2D[], markings: LayerIR["markings"], preferred: Point2D): Point2D | undefined {
   const dimensions = labelDimensions(label);
-  for (const candidate of labelCandidates(config)) {
+  for (const candidate of labelCandidates(preferred)) {
     const center = { x: candidate.x * config.widthMm / 2, y: candidate.y * config.heightMm / 2 };
     const origin = { x: center.x - dimensions.width / 2, y: center.y - dimensions.height / 2 };
     const bounds = labelBounds(label, origin, 0.8);
-    const fitsMaterial = layer.polygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
-    if (fitsMaterial && !layer.markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
+    const fitsMaterial = polygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
+    if (fitsMaterial && !markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
   }
   return undefined;
+}
+
+function placeElevationLabel(label: string, config: ProjectConfigV1, layer: LayerIR): Point2D | undefined {
+  return placeLabel(label, config, layer.polygons, layer.markings, config.elevationLabelPosition);
+}
+
+function polygonCenter(polygon: Polygon2D, config: ProjectConfigV1): Point2D {
+  const points = polygon.outer.slice(0, -1);
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return {
+    x: ((Math.min(...xs) + Math.max(...xs)) / 2) / (config.widthMm / 2),
+    y: ((Math.min(...ys) + Math.max(...ys)) / 2) / (config.heightMm / 2),
+  };
 }
 
 function segmentIntersectionT(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number | undefined {
@@ -252,6 +265,33 @@ function clipPolyline(points: Point2D[], polygons: Polygon2D[]): Point2D[][] {
   }
   if (active.length > 1) result.push(active);
   return result;
+}
+
+function addAlignmentGuides(config: ProjectConfigV1, layers: LayerIR[]): void {
+  for (let index = 0; index < layers.length - 1; index += 1) {
+    const layer = layers[index];
+    const nextLayer = layers[index + 1];
+    if (!layer || !nextLayer || nextLayer.polygons.length === 0) continue;
+    const layerNumber = String(layer.index + 1).padStart(2, "0");
+    const nextLayerNumber = String(nextLayer.index + 1).padStart(2, "0");
+    nextLayer.polygons.forEach((polygon, polygonIndex) => {
+      clipPolyline(polygon.outer, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
+        id: `alignment-layer-${layerNumber}-to-${nextLayerNumber}-${polygonIndex}-outline-${clipIndex}`,
+        operation: "engrave",
+        kind: "guide",
+        points,
+      }));
+      const label = `L${nextLayerNumber}`;
+      const point = placeLabel(label, config, [polygon], layer.markings, polygonCenter(polygon, config));
+      if (point) layer.markings.push({
+        id: `alignment-layer-${layerNumber}-to-${nextLayerNumber}-${polygonIndex}-label`,
+        operation: "engrave",
+        kind: "guide",
+        points: [point],
+        label,
+      });
+    });
+  }
 }
 
 function stableProjectValue(config: ProjectConfigV1): unknown {
@@ -465,6 +505,8 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       { id: "scale-label", operation: "engrave", kind: "label", points: [{ x, y: y + 5 }], label: scaleLabel },
     );
   }
+
+  if (config.showAlignmentGuides) addAlignmentGuides(config, layers);
 
   if (config.showElevationLabels) {
     const omittedLayers: string[] = [];

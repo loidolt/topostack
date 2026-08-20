@@ -8,9 +8,13 @@ describe("project import validation", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, widthMm: "not-a-number" })).toThrow(/finite/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, location: { ...DEFAULT_PROJECT.location, lat: 90 } })).toThrow(/Mercator/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, elevationLabelPosition: { x: 1, y: 0 } })).toThrow(/label position/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showAlignmentGuides: "yes" })).toThrow(/showAlignmentGuides/i);
   });
-  it("adds the default label position to projects saved before the field existed", () => {
-    const { elevationLabelPosition: _legacyMissingField, ...legacyProject } = DEFAULT_PROJECT;
-    expect(parseProject(legacyProject).elevationLabelPosition).toEqual(DEFAULT_PROJECT.elevationLabelPosition);
+  it("adds new fabrication defaults to projects saved before those fields existed", () => {
+    const { elevationLabelPosition: _legacyLabelPosition, showAlignmentGuides: _legacyAlignmentGuides, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject)).toMatchObject({
+      elevationLabelPosition: DEFAULT_PROJECT.elevationLabelPosition,
+      showAlignmentGuides: true,
+    });
   });
 });

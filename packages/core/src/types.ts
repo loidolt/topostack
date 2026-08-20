@@ -28,6 +28,7 @@ export interface ProjectConfigV1 {
   showRoads: boolean;
   showWater: boolean;
   showContours: boolean;
+  showAlignmentGuides: boolean;
   showElevationLabels: boolean;
   elevationLabelPosition: Point2D;
   showNorthArrow: boolean;
@@ -154,6 +155,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showRoads: true,
   showWater: true,
   showContours: true,
+  showAlignmentGuides: true,
   showElevationLabels: true,
   elevationLabelPosition: { x: -0.55, y: 0.55 },
   showNorthArrow: true,
