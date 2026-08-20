@@ -40,6 +40,12 @@ describe("TopoStack geometry", () => {
     expect(svg).toContain('data-operation="ENGRAVE"');
     expect(svg).toContain('id="elevation-0"');
     expect(svg).not.toContain("<text");
+    const donorLayer = result.layers[result.fabricationNests[0]!.donorLayerIndex]!;
+    const nestedSvg = layerToSvg(result, donorLayer);
+    const cutGroup = nestedSvg.match(/data-operation="CUT"[^>]*>(.*?)<\/g>/)?.[1] ?? "";
+    const cutPathData = [...cutGroup.matchAll(/<path[^>]* d="([^"]+)"/g)].map((match) => match[1] ?? "");
+    expect(cutPathData.length).toBeGreaterThan(1);
+    expect(cutPathData.every((data) => (data.match(/M/g) ?? []).length === 1)).toBe(true);
     const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
     expect(fabrication.files).toHaveLength(DEFAULT_PROJECT.layerCount - result.fabricationNests.length + 5);
     expect(await fabrication.master.blob.text()).toContain("master layout");
@@ -65,6 +71,10 @@ describe("TopoStack geometry", () => {
     const svg = masterToSvg(generateGeometry(DEFAULT_PROJECT, realSource()));
     const ids = [...svg.matchAll(/ id="([^"]+)"/g)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
+    const cutPaths = [...svg.matchAll(/data-operation="CUT"[^>]*>(.*?)<\/g>/g)]
+      .flatMap((group) => [...(group[1] ?? "").matchAll(/<path[^>]* d="([^"]+)"/g)].map((path) => path[1] ?? ""));
+    expect(cutPaths.length).toBeGreaterThan(DEFAULT_PROJECT.layerCount);
+    expect(cutPaths.every((data) => (data.match(/M/g) ?? []).length === 1)).toBe(true);
   });
 
   it("clips markings to circular layer material", () => {

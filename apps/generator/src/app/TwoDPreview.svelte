@@ -12,7 +12,13 @@
       <defs><filter id="paper-shadow"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity="0.2" /></filter></defs>
       <g filter="url(#paper-shadow)">
         {#each layer.polygons as polygon}
-          <path d={`${pathData(polygon.outer)} Z ${polygon.holes.map((hole) => `${pathData(hole)} Z`).join(" ")}`} fill="#e7c391" stroke="#ca5425" stroke-width="0.45" fill-rule="evenodd" />
+          <g>
+            <path d={`${pathData(polygon.outer)} Z ${polygon.holes.map((hole) => `${pathData(hole)} Z`).join(" ")}`} fill="#e7c391" stroke="none" fill-rule="evenodd" />
+            <path d={`${pathData(polygon.outer)} Z`} fill="none" stroke="#ca5425" stroke-width="0.45" />
+            {#each polygon.holes as hole}
+              <path d={`${pathData(hole)} Z`} fill="none" stroke="#ca5425" stroke-width="0.45" />
+            {/each}
+          </g>
         {/each}
       </g>
       {#each layer.markings as marking (marking.id)}

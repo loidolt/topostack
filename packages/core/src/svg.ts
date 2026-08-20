@@ -1,6 +1,6 @@
 import { projectFingerprint } from "./geometry.js";
 import { labelPathData } from "./labels.js";
-import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, Polygon2D, ProjectConfigV1 } from "./types.js";
+import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
 const SCORE = "#2563eb";
@@ -21,12 +21,16 @@ function pathData(points: Point2D[], offsetX = 0, offsetY = 0, closePath = false
   return commands.join(" ");
 }
 
-function polygonPath(polygon: Polygon2D, offsetX = 0, offsetY = 0, omittedHoleIndexes = new Set<number>()): string {
-  return [pathData(polygon.outer, offsetX, offsetY, true), ...polygon.holes.flatMap((hole, index) => omittedHoleIndexes.has(index) ? [] : [pathData(hole, offsetX, offsetY, true)])].join(" ");
-}
-
 function layerGroups(layer: LayerIR, offsetX = 0, offsetY = 0, omittedHoles = new Map<number, Set<number>>()): string {
-  const cutPaths = layer.polygons.map((polygon, index) => `<path id="${layer.id}-cut-${index + 1}" d="${polygonPath(polygon, offsetX, offsetY, omittedHoles.get(index))}"/>`).join("");
+  const cutPaths = layer.polygons.flatMap((polygon, polygonIndex) => {
+    const omittedHoleIndexes = omittedHoles.get(polygonIndex) ?? new Set<number>();
+    return [
+      `<path id="${layer.id}-cut-${polygonIndex + 1}" d="${pathData(polygon.outer, offsetX, offsetY, true)}"/>`,
+      ...polygon.holes.flatMap((hole, holeIndex) => omittedHoleIndexes.has(holeIndex) ? [] : [
+        `<path id="${layer.id}-cut-${polygonIndex + 1}-hole-${holeIndex + 1}" d="${pathData(hole, offsetX, offsetY, true)}"/>`,
+      ]),
+    ];
+  }).join("");
   const scorePaths = layer.markings.filter((mark) => mark.operation === "score" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
   const engravePaths = layer.markings.filter((mark) => mark.operation === "engrave" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
   const engraveLabels = layer.markings.filter((mark) => mark.operation === "engrave" && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY)}"/>`).join("");
@@ -106,7 +110,7 @@ export function assemblyGuideToSvg(ir: GeometryIRV1): string {
   const stack = ir.layers.map((layer, index) => {
     const offsetX = 105;
     const offsetY = 90 + index * Math.min(2.2, 20 / ir.layers.length);
-    const paths = layer.polygons.map((polygon) => `<path d="${polygonPath(polygon, offsetX, offsetY)}"/>`).join("");
+    const paths = layer.polygons.flatMap((polygon) => [polygon.outer, ...polygon.holes]).map((ring) => `<path d="${pathData(ring, offsetX, offsetY, true)}"/>`).join("");
     return `<g transform="scale(${format(scale)}) translate(${format(offsetX / scale - offsetX)} ${format(offsetY / scale - offsetY)})" fill="none" stroke="#33443b" stroke-width="${format(0.25 / scale)}">${paths}</g>`;
   }).join("");
   const body = `<rect width="210" height="297" fill="#f5f0e7"/><text x="20" y="25" font-family="sans-serif" font-size="9" font-weight="700" fill="#18241f">${escapeXml(ir.projectName)}</text><text x="20" y="38" font-family="sans-serif" font-size="4" fill="#5a6b61">Stack ${ir.layers.length} layers from layer 01 upward · ${format(ir.layers[0]?.materialThicknessMm ?? 0)} mm material</text>${stack}<text x="20" y="260" font-family="sans-serif" font-size="4" fill="#18241f">Elevation range: ${Math.round(ir.minElevationM)}–${Math.round(ir.maxElevationM)} m</text><text x="20" y="271" font-family="sans-serif" font-size="3.2" fill="#5a6b61">Decorative terrain data only. Verify dimensions, material, kerf, power, and speed with a test cut.</text>`;
