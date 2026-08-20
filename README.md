@@ -1,6 +1,6 @@
 # TopoStack
 
-TopoStack is an Atomm-first generator for turning real-world terrain into stacked, laser-cut topographic projects. It produces one physical-size SVG per material layer, a master file for xTool Studio, an assembly guide, project metadata, and source attribution.
+TopoStack is an Atomm-first generator for turning real-world terrain into stacked, laser-cut topographic projects. It produces physical-size fabrication-panel SVGs, a master file for xTool Studio, an assembly guide, project metadata, and source attribution. Compatible non-adjacent terrain layers can share a panel by cutting smaller pieces from glue-safe cavities inside larger pieces.
 
 ## Workspace
 

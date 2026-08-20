@@ -13,7 +13,7 @@ The core package has no Svelte, Atomm, Cloudflare, DOM, or storage imports. The 
 
 The UI follows the same Svelte 5 runes, immutable domain-state, and static-adapter patterns as Label Studio. Atomm integration stays behind a small bridge that registers the platform lifecycle once and reads current project state through a getter, avoiding stale component closures.
 
-Every generated result records a deterministic project fingerprint and source quality. Fabrication export is rejected when settings changed after generation, the source is synthetic, or any layer is empty.
+Every generated result records a deterministic project fingerprint and source quality. Before markings are clipped and labels are placed, the geometry flow plans same-coordinate material nests and adds their glue-safe cavities to donor layers. Fabrication export groups each nest family onto one panel and emits shared donor/child cut lines once. Export is rejected when settings changed after generation, the source is synthetic, or any layer is empty.
 
 ## Coordinate conventions
 

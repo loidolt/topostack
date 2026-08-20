@@ -29,6 +29,8 @@ export interface ProjectConfigV1 {
   showWater: boolean;
   showContours: boolean;
   showAlignmentGuides: boolean;
+  optimizeMaterialUse: boolean;
+  glueMarginMm: number;
   showElevationLabels: boolean;
   elevationLabelPosition: Point2D;
   showNorthArrow: boolean;
@@ -99,6 +101,20 @@ export interface LayerIR {
   markings: OperationPath[];
 }
 
+export interface FabricationNestCavity {
+  donorPolygonIndex: number;
+  donorHoleIndex: number;
+  nestedPolygonIndex: number;
+}
+
+export interface FabricationNest {
+  id: string;
+  donorLayerIndex: number;
+  nestedLayerIndex: number;
+  glueMarginMm: number;
+  cavities: FabricationNestCavity[];
+}
+
 export interface GeometryWarning {
   code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK" | "VECTOR_DATA_UNAVAILABLE" | "LABEL_OMITTED";
   message: string;
@@ -120,6 +136,7 @@ export interface GeometryIRV1 {
   minElevationM: number;
   maxElevationM: number;
   layers: LayerIR[];
+  fabricationNests: FabricationNest[];
   warnings: GeometryWarning[];
   attribution: SourceAttribution[];
   generatedAt: string;
@@ -156,6 +173,8 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showWater: true,
   showContours: true,
   showAlignmentGuides: true,
+  optimizeMaterialUse: true,
+  glueMarginMm: 8,
   showElevationLabels: true,
   elevationLabelPosition: { x: -0.55, y: 0.55 },
   showNorthArrow: true,

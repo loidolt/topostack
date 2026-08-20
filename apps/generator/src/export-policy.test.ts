@@ -28,6 +28,6 @@ describe("Atomm export policy", () => {
     expect(Array.isArray(studio)).toBe(false);
     expect("filename" in studio && studio.filename.endsWith("-master.svg")).toBe(true);
     expect(Array.isArray(download)).toBe(true);
-    expect(Array.isArray(download) && download.length).toBe(DEFAULT_PROJECT.layerCount + 5);
+    expect(Array.isArray(download) && download.length).toBe(DEFAULT_PROJECT.layerCount - result.fabricationNests.length + 5);
   });
 });

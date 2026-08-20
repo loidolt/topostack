@@ -11,11 +11,12 @@
 - Cloudflare Worker with R2 caching, range requests, geocoding, CORS, rate limiting, and observability.
 - Editable elevation-label anchors with font-independent vector paths, material-boundary checks, and automatic collision repair.
 - Optional next-layer alignment outlines and hidden registration labels for reliable physical assembly.
+- Configurable glue-safe material reuse that cuts smaller non-adjacent layers from covered cavities and compacts them into fabrication panels.
 - Deterministic browser generation/export tests, production release artifacts, hourly canaries, and web bundle budgets.
 
 ## Next releases
 
 1. Add ocean bathymetry from GEBCO and user-uploaded DEM support for inland lakes where trustworthy depth data is unavailable.
-2. Add custom SVG crop boundaries, DXF export, sheet nesting, and multi-panel tabletop splitting.
+2. Add custom SVG crop boundaries, DXF export, general translated/rotated sheet nesting, and multi-panel tabletop splitting.
 3. Add frames, advanced joinery templates, bills of material, machine presets, and explicit kerf calibration projects.
 4. Add optional cloud project synchronization behind a portable identity adapter.

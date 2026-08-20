@@ -4,6 +4,7 @@ import { labelDimensions } from "./labels.js";
 import type {
   ElevationGrid,
   GeometryIRV1,
+  FabricationNest,
   LayerIR,
   MarkingFeature,
   Point2D,
@@ -74,6 +75,97 @@ function pointInRing(point: Point2D, ring: Point2D[]): boolean {
 
 function pointInPolygon(point: Point2D, polygon: Polygon2D): boolean {
   return pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole));
+}
+
+function distanceToSegment(point: Point2D, start: Point2D, end: Point2D): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+function segmentDistance(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number {
+  if (segmentsIntersect(a, b, c, d)) return 0;
+  return Math.min(distanceToSegment(a, c, d), distanceToSegment(b, c, d), distanceToSegment(c, a, b), distanceToSegment(d, a, b));
+}
+
+function ringFitsInsidePolygon(ring: Point2D[], polygon: Polygon2D, marginMm: number): boolean {
+  const points = ring.slice(0, -1);
+  if (!points.length || !points.every((point) => pointInPolygon(point, polygon))) return false;
+  const boundaries = [polygon.outer, ...polygon.holes];
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const start = ring[index];
+    const end = ring[index + 1];
+    if (!start || !end || !pointInPolygon(pointAt(start, end, 0.5), polygon)) return false;
+    for (const boundary of boundaries) {
+      for (let edge = 0; edge < boundary.length - 1; edge += 1) {
+        const boundaryStart = boundary[edge];
+        const boundaryEnd = boundary[edge + 1];
+        if (boundaryStart && boundaryEnd && segmentDistance(start, end, boundaryStart, boundaryEnd) < marginMm - 1e-7) return false;
+      }
+    }
+  }
+  return !polygon.holes.some((hole) => hole.slice(0, -1).some((point) => pointInRing(point, ring)));
+}
+
+function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[], marginMm: number): number[] | undefined {
+  const indexes: number[] = [];
+  for (const child of children) {
+    const containerIndex = containers.findIndex((container) => ringFitsInsidePolygon(child.outer, container, marginMm));
+    if (containerIndex < 0) return undefined;
+    indexes.push(containerIndex);
+  }
+  return indexes;
+}
+
+function nestHasGlueMargin(nest: FabricationNest, layers: LayerIR[]): boolean {
+  const nestedLayer = layers[nest.nestedLayerIndex];
+  const coveringLayer = layers[nest.donorLayerIndex + 1];
+  return Boolean(nestedLayer && coveringLayer && containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, nest.glueMarginMm));
+}
+
+function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): FabricationNest[] {
+  if (!config.optimizeMaterialUse) return [];
+  const nests: FabricationNest[] = [];
+  const donorsWithChildren = new Set<number>();
+  for (let nestedLayerIndex = 2; nestedLayerIndex < layers.length; nestedLayerIndex += 1) {
+    const nestedLayer = layers[nestedLayerIndex];
+    if (!nestedLayer || nestedLayer.polygons.length === 0) continue;
+    for (let donorLayerIndex = nestedLayerIndex - 2; donorLayerIndex >= 0; donorLayerIndex -= 1) {
+      if (donorsWithChildren.has(donorLayerIndex)) continue;
+      const donorLayer = layers[donorLayerIndex];
+      const coveringLayer = layers[donorLayerIndex + 1];
+      if (!donorLayer || !coveringLayer || coveringLayer.polygons.length === 0) continue;
+      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, config.glueMarginMm)) continue;
+      const donorPolygonIndexes = containingPolygonIndexes(nestedLayer.polygons, donorLayer.polygons, config.glueMarginMm);
+      if (!donorPolygonIndexes) continue;
+      const cavities = nestedLayer.polygons.map((polygon, nestedPolygonIndex) => {
+        const donorPolygonIndex = donorPolygonIndexes[nestedPolygonIndex]!;
+        const donorPolygon = donorLayer.polygons[donorPolygonIndex]!;
+        const donorHoleIndex = donorPolygon.holes.length;
+        donorPolygon.holes.push(signedArea(polygon.outer) > 0 ? [...polygon.outer].reverse() : [...polygon.outer]);
+        return { donorPolygonIndex, donorHoleIndex, nestedPolygonIndex };
+      });
+      const nest: FabricationNest = {
+        id: `nest-${nestedLayer.id}-inside-${donorLayer.id}`,
+        donorLayerIndex,
+        nestedLayerIndex,
+        glueMarginMm: config.glueMarginMm,
+        cavities,
+      };
+      const invalidatedAdjacentNest = nests.some((existingNest) => existingNest.donorLayerIndex + 1 === donorLayerIndex && !nestHasGlueMargin(existingNest, layers));
+      if (invalidatedAdjacentNest) {
+        [...cavities].reverse().forEach((cavity) => donorLayer.polygons[cavity.donorPolygonIndex]?.holes.splice(cavity.donorHoleIndex, 1));
+        continue;
+      }
+      nests.push(nest);
+      donorsWithChildren.add(donorLayerIndex);
+      break;
+    }
+  }
+  return nests;
 }
 
 interface Bounds2D {
@@ -182,14 +274,15 @@ function labelCandidates(preferred: Point2D): Point2D[] {
   }).map(({ candidate }) => candidate);
 }
 
-function placeLabel(label: string, config: ProjectConfigV1, polygons: Polygon2D[], markings: LayerIR["markings"], preferred: Point2D): Point2D | undefined {
+function placeLabel(label: string, config: ProjectConfigV1, polygons: Polygon2D[], markings: LayerIR["markings"], preferred: Point2D, requiredPolygons?: Polygon2D[]): Point2D | undefined {
   const dimensions = labelDimensions(label);
   for (const candidate of labelCandidates(preferred)) {
     const center = { x: candidate.x * config.widthMm / 2, y: candidate.y * config.heightMm / 2 };
     const origin = { x: center.x - dimensions.width / 2, y: center.y - dimensions.height / 2 };
     const bounds = labelBounds(label, origin, 0.8);
     const fitsMaterial = polygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
-    if (fitsMaterial && !markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
+    const fitsRequirement = !requiredPolygons || requiredPolygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
+    if (fitsMaterial && fitsRequirement && !markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
   }
   return undefined;
 }
@@ -282,7 +375,7 @@ function addAlignmentGuides(config: ProjectConfigV1, layers: LayerIR[]): void {
         points,
       }));
       const label = `L${nextLayerNumber}`;
-      const point = placeLabel(label, config, [polygon], layer.markings, polygonCenter(polygon, config));
+      const point = placeLabel(label, config, layer.polygons, layer.markings, polygonCenter(polygon, config), [polygon]);
       if (point) layer.markings.push({
         id: `alignment-layer-${layerNumber}-to-${nextLayerNumber}-${polygonIndex}-label`,
         operation: "engrave",
@@ -447,6 +540,8 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     });
   });
 
+  const fabricationNests = addMaterialNests(config, layers);
+
   for (const feature of source.markings) {
     const enabled = (feature.kind === "road" && config.showRoads) ||
       (feature.kind === "water" && config.showWater) ||
@@ -547,6 +642,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     minElevationM: grid.min,
     maxElevationM: grid.max,
     layers,
+    fabricationNests,
     warnings,
     attribution: source.attribution,
     generatedAt: new Date().toISOString(),
@@ -562,8 +658,9 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
+  if (config.glueMarginMm < 2 || config.glueMarginMm > 25) throw new Error("Glue margin must be between 2 and 25 mm.");
   if (config.smoothing !== 0 && config.smoothing !== 1) throw new Error("Contour smoothing must be 0 or 1.");
   if (Math.abs(config.elevationLabelPosition.x) > 0.9 || Math.abs(config.elevationLabelPosition.y) > 0.9) throw new Error("Elevation label position must be between -90% and 90%.");
   const bounds = config.location.bounds;

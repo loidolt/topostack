@@ -1,6 +1,6 @@
 import { projectFingerprint } from "./geometry.js";
 import { labelPathData } from "./labels.js";
-import type { ExportFile, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, Polygon2D, ProjectConfigV1 } from "./types.js";
+import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, Polygon2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
 const SCORE = "#2563eb";
@@ -21,12 +21,12 @@ function pathData(points: Point2D[], offsetX = 0, offsetY = 0, closePath = false
   return commands.join(" ");
 }
 
-function polygonPath(polygon: Polygon2D, offsetX = 0, offsetY = 0): string {
-  return [pathData(polygon.outer, offsetX, offsetY, true), ...polygon.holes.map((hole) => pathData(hole, offsetX, offsetY, true))].join(" ");
+function polygonPath(polygon: Polygon2D, offsetX = 0, offsetY = 0, omittedHoleIndexes = new Set<number>()): string {
+  return [pathData(polygon.outer, offsetX, offsetY, true), ...polygon.holes.flatMap((hole, index) => omittedHoleIndexes.has(index) ? [] : [pathData(hole, offsetX, offsetY, true)])].join(" ");
 }
 
-function layerGroups(layer: LayerIR, offsetX = 0, offsetY = 0): string {
-  const cutPaths = layer.polygons.map((polygon, index) => `<path id="${layer.id}-cut-${index + 1}" d="${polygonPath(polygon, offsetX, offsetY)}"/>`).join("");
+function layerGroups(layer: LayerIR, offsetX = 0, offsetY = 0, omittedHoles = new Map<number, Set<number>>()): string {
+  const cutPaths = layer.polygons.map((polygon, index) => `<path id="${layer.id}-cut-${index + 1}" d="${polygonPath(polygon, offsetX, offsetY, omittedHoles.get(index))}"/>`).join("");
   const scorePaths = layer.markings.filter((mark) => mark.operation === "score" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
   const engravePaths = layer.markings.filter((mark) => mark.operation === "engrave" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
   const engraveLabels = layer.markings.filter((mark) => mark.operation === "engrave" && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY)}"/>`).join("");
@@ -45,20 +45,56 @@ export function layerToSvg(ir: GeometryIRV1, layer: LayerIR): string {
   return svgDocument(ir.widthMm, ir.heightMm, layerGroups(layer), `${ir.projectName} — ${layer.id}`);
 }
 
+interface FabricationPanel {
+  rootLayerIndex: number;
+  layerIndexes: number[];
+}
+
+function fabricationPanels(ir: GeometryIRV1): FabricationPanel[] {
+  const parentByLayer = new Map(ir.fabricationNests.map((nest) => [nest.nestedLayerIndex, nest.donorLayerIndex]));
+  const childrenByLayer = new Map<number, number[]>();
+  ir.fabricationNests.forEach((nest) => childrenByLayer.set(nest.donorLayerIndex, [...(childrenByLayer.get(nest.donorLayerIndex) ?? []), nest.nestedLayerIndex]));
+  const collect = (layerIndex: number): number[] => [layerIndex, ...(childrenByLayer.get(layerIndex) ?? []).flatMap(collect)];
+  return ir.layers.filter((layer) => !parentByLayer.has(layer.index)).map((layer) => ({
+    rootLayerIndex: layer.index,
+    layerIndexes: collect(layer.index),
+  }));
+}
+
+function omittedNestHoles(nests: FabricationNest[], layerIndex: number): Map<number, Set<number>> {
+  const result = new Map<number, Set<number>>();
+  nests.filter((nest) => nest.donorLayerIndex === layerIndex).forEach((nest) => nest.cavities.forEach((cavity) => {
+    result.set(cavity.donorPolygonIndex, new Set([...(result.get(cavity.donorPolygonIndex) ?? []), cavity.donorHoleIndex]));
+  }));
+  return result;
+}
+
+function panelGroups(ir: GeometryIRV1, panel: FabricationPanel, offsetX = 0, offsetY = 0): string {
+  const layerIds = panel.layerIndexes.map((index) => ir.layers[index]?.id).filter(Boolean).join(" ");
+  const layers = panel.layerIndexes.map((index) => ir.layers[index]).filter((layer): layer is LayerIR => Boolean(layer));
+  return `<g id="fabrication-panel-${panel.rootLayerIndex + 1}" data-layers="${escapeXml(layerIds)}">${layers.map((layer) => layerGroups(layer, offsetX, offsetY, omittedNestHoles(ir.fabricationNests, layer.index))).join("")}</g>`;
+}
+
+function panelToSvg(ir: GeometryIRV1, panel: FabricationPanel): string {
+  const layerIds = panel.layerIndexes.map((index) => ir.layers[index]?.id).filter(Boolean).join(", ");
+  return svgDocument(ir.widthMm, ir.heightMm, panelGroups(ir, panel), `${ir.projectName} — fabrication panel — ${layerIds}`);
+}
+
 export function masterToSvg(ir: GeometryIRV1): string {
   const gap = 12;
-  const columns = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(ir.layers.length))));
-  const rows = Math.ceil(ir.layers.length / columns);
+  const panels = fabricationPanels(ir);
+  const columns = Math.min(4, Math.max(1, Math.ceil(Math.sqrt(panels.length))));
+  const rows = Math.ceil(panels.length / columns);
   const width = columns * ir.widthMm + (columns - 1) * gap;
   const height = rows * ir.heightMm + (rows - 1) * gap;
   const startX = -width / 2 + ir.widthMm / 2;
   const startY = -height / 2 + ir.heightMm / 2;
-  const body = ir.layers.map((layer, index) => {
+  const body = panels.map((panel, index) => {
     const column = index % columns;
     const row = Math.floor(index / columns);
     const offsetX = startX + column * (ir.widthMm + gap);
     const offsetY = startY + row * (ir.heightMm + gap);
-    return layerGroups(layer, offsetX, offsetY);
+    return panelGroups(ir, panel, offsetX, offsetY);
   }).join("");
   return svgDocument(width, height, body, `${ir.projectName} — master layout`, -width / 2, -height / 2);
 }
@@ -83,10 +119,13 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
   if (ir.vectorStatus === "unavailable" && (config.showRoads || config.showWater)) throw new Error("Road and water data is unavailable. Disable those map details or regenerate after the service is restored.");
   if (ir.layers.some((layer) => layer.polygons.length === 0)) throw new Error("One or more layers are empty. Reduce the layer count or minimum feature size before exporting.");
   const base = safeName(config.name);
-  const layerFiles: ExportFile[] = ir.layers.map((layer) => ({
-    filename: `${base}-${layer.id}.svg`,
-    blob: new Blob([layerToSvg(ir, layer)], { type: "image/svg+xml" }),
-  }));
+  const panels = fabricationPanels(ir);
+  const panelFiles = panels.map((panel, index) => {
+    const layers = panel.layerIndexes.map((layerIndex) => ir.layers[layerIndex]?.id.replace("layer-", "")).filter(Boolean).join("-");
+    const filename = panel.layerIndexes.length === 1 ? `${base}-${ir.layers[panel.rootLayerIndex]?.id}.svg` : `${base}-panel-${String(index + 1).padStart(2, "0")}-layers-${layers}.svg`;
+    return { panel, file: { filename, blob: new Blob([panelToSvg(ir, panel)], { type: "image/svg+xml" }) } satisfies ExportFile };
+  });
+  const filenameByLayer = new Map(panelFiles.flatMap(({ panel, file }) => panel.layerIndexes.map((layerIndex) => [layerIndex, file.filename] as const)));
   const master: ExportFile = { filename: `${base}-master.svg`, blob: new Blob([masterToSvg(ir)], { type: "image/svg+xml" }) };
   const manifest = {
     schemaVersion: 1,
@@ -96,7 +135,13 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
       generatedAt: ir.generatedAt,
       minElevationM: ir.minElevationM,
       maxElevationM: ir.maxElevationM,
-      layers: ir.layers.map((layer) => ({ id: layer.id, elevationM: layer.elevationM, filename: `${base}-${layer.id}.svg` })),
+      layers: ir.layers.map((layer) => ({ id: layer.id, elevationM: layer.elevationM, filename: filenameByLayer.get(layer.index) })),
+      fabrication: {
+        panelCount: panels.length,
+        originalPanelCount: ir.layers.length,
+        glueMarginMm: config.glueMarginMm,
+        nests: ir.fabricationNests,
+      },
       bounds: ir.bounds,
       resolutionM: ir.resolutionM,
       datasetVersion: ir.datasetVersion,
@@ -107,9 +152,10 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
   };
   const attribution = `${ir.attribution.map((item) => `${item.name} — ${item.license}\n${item.url}`).join("\n\n")}\n\nImagery sources used:\n${ir.imagerySources.length ? ir.imagerySources.join("\n") : "Not reported by source service"}`;
   const alignment = config.showAlignmentGuides ? "Each lower layer includes an engraved outline and Lxx label for positioning the layer directly above it. These marks are designed to be hidden after assembly.\n\n" : "";
-  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}Import the master SVG into xTool Studio, or use the individual files. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
+  const nesting = ir.fabricationNests.length ? `Material nesting reduced ${ir.layers.length} layer panels to ${panels.length} fabrication panels. Smaller layers share cut lines inside lower layers while preserving at least ${format(config.glueMarginMm)} mm of covered glue land. Keep every loose cutout: nested pieces belong to the layer IDs listed in each panel filename and SVG data-layers attribute.\n\n` : config.optimizeMaterialUse ? `No safe material nests fit the requested ${format(config.glueMarginMm)} mm glue margin, so every layer remains on its own panel.\n\n` : "Material-saving nesting is disabled.\n\n";
+  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\nFabrication panels: ${panels.length}\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}${nesting}Import the master SVG into xTool Studio, or use the fabrication-panel SVGs. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
   const files: ExportFile[] = [
-    ...layerFiles,
+    ...panelFiles.map(({ file }) => file),
     master,
     { filename: `${base}-assembly-guide.svg`, blob: new Blob([assemblyGuideToSvg(ir)], { type: "image/svg+xml" }) },
     { filename: `${base}-project.json`, blob: new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }) },

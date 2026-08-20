@@ -42,6 +42,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     layerCount: numberValue(record.layerCount), minimumFeatureMm: numberValue(record.minimumFeatureMm), smoothing: numberValue(record.smoothing),
     showRoads: booleanValue(record.showRoads, "showRoads"), showWater: booleanValue(record.showWater, "showWater"), showContours: booleanValue(record.showContours, "showContours"),
     showAlignmentGuides: record.showAlignmentGuides === undefined ? DEFAULT_PROJECT.showAlignmentGuides : booleanValue(record.showAlignmentGuides, "showAlignmentGuides"),
+    optimizeMaterialUse: record.optimizeMaterialUse === undefined ? DEFAULT_PROJECT.optimizeMaterialUse : booleanValue(record.optimizeMaterialUse, "optimizeMaterialUse"),
+    glueMarginMm: record.glueMarginMm === undefined ? DEFAULT_PROJECT.glueMarginMm : numberValue(record.glueMarginMm),
     showElevationLabels: booleanValue(record.showElevationLabels, "showElevationLabels"), showNorthArrow: booleanValue(record.showNorthArrow, "showNorthArrow"), showScaleBar: booleanValue(record.showScaleBar, "showScaleBar"),
     elevationLabelPosition: labelPositionRecord ? { x: numberValue(labelPositionRecord.x), y: numberValue(labelPositionRecord.y) } : { ...DEFAULT_PROJECT.elevationLabelPosition },
     explodedPreview: numberValue(record.explodedPreview),

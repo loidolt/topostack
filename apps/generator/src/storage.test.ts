@@ -9,12 +9,22 @@ describe("project import validation", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, location: { ...DEFAULT_PROJECT.location, lat: 90 } })).toThrow(/Mercator/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, elevationLabelPosition: { x: 1, y: 0 } })).toThrow(/label position/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, showAlignmentGuides: "yes" })).toThrow(/showAlignmentGuides/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, optimizeMaterialUse: "yes" })).toThrow(/optimizeMaterialUse/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, glueMarginMm: 30 })).toThrow(/glue margin/i);
   });
   it("adds new fabrication defaults to projects saved before those fields existed", () => {
-    const { elevationLabelPosition: _legacyLabelPosition, showAlignmentGuides: _legacyAlignmentGuides, ...legacyProject } = DEFAULT_PROJECT;
+    const {
+      elevationLabelPosition: _legacyLabelPosition,
+      showAlignmentGuides: _legacyAlignmentGuides,
+      optimizeMaterialUse: _legacyOptimizeMaterialUse,
+      glueMarginMm: _legacyGlueMarginMm,
+      ...legacyProject
+    } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
       elevationLabelPosition: DEFAULT_PROJECT.elevationLabelPosition,
       showAlignmentGuides: true,
+      optimizeMaterialUse: true,
+      glueMarginMm: 8,
     });
   });
 });

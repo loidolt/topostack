@@ -15,6 +15,14 @@ function pointInRing(point: { x: number; y: number }, ring: Array<{ x: number; y
   return inside;
 }
 
+function distanceToSegment(point: { x: number; y: number }, start: { x: number; y: number }, end: { x: number; y: number }): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)) : 0;
+  return Math.hypot(point.x - start.x - t * dx, point.y - start.y - t * dy);
+}
+
 describe("TopoStack geometry", () => {
   it("generates nested physical layers from a deterministic elevation grid", () => {
     const source = createSyntheticSource(DEFAULT_PROJECT, 48);
@@ -33,7 +41,7 @@ describe("TopoStack geometry", () => {
     expect(svg).toContain('id="elevation-0"');
     expect(svg).not.toContain("<text");
     const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
-    expect(fabrication.files).toHaveLength(DEFAULT_PROJECT.layerCount + 5);
+    expect(fabrication.files).toHaveLength(DEFAULT_PROJECT.layerCount - result.fabricationNests.length + 5);
     expect(await fabrication.master.blob.text()).toContain("master layout");
   });
 
@@ -124,13 +132,14 @@ describe("TopoStack geometry", () => {
     const result = generateGeometry(DEFAULT_PROJECT, realSource());
     const labels = result.layers.flatMap((layer, index) => layer.markings
       .filter((marking) => marking.id.startsWith("alignment-layer-") && marking.id.endsWith("-label"))
-      .map((marking) => ({ marking, nextLayer: result.layers[index + 1] })));
+      .map((marking) => ({ marking, donorLayer: layer, nextLayer: result.layers[index + 1] })));
     expect(labels.length).toBeGreaterThan(0);
-    for (const { marking, nextLayer } of labels) {
+    for (const { marking, donorLayer, nextLayer } of labels) {
       const origin = marking.points[0]!;
       const dimensions = labelDimensions(marking.label ?? "");
       const corners = [origin, { x: origin.x + dimensions.width, y: origin.y }, { x: origin.x, y: origin.y + dimensions.height }, { x: origin.x + dimensions.width, y: origin.y + dimensions.height }];
       expect(corners.every((point) => nextLayer?.polygons.some((polygon) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole))))).toBe(true);
+      expect(corners.every((point) => donorLayer.polygons.some((polygon) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole))))).toBe(true);
     }
   });
 
@@ -138,5 +147,43 @@ describe("TopoStack geometry", () => {
     const project = { ...DEFAULT_PROJECT, showAlignmentGuides: false };
     const result = generateGeometry(project, realSource(project));
     expect(result.layers.some((layer) => layer.markings.some((marking) => marking.id.startsWith("alignment-layer-")))).toBe(false);
+  });
+
+  it("nests smaller layers into covered cavities with the configured glue margin", async () => {
+    const result = generateGeometry(DEFAULT_PROJECT, realSource());
+    expect(result.fabricationNests.length).toBeGreaterThan(0);
+    for (const nest of result.fabricationNests) {
+      expect(nest.nestedLayerIndex).toBeGreaterThan(nest.donorLayerIndex + 1);
+      const donor = result.layers[nest.donorLayerIndex]!;
+      const cover = result.layers[nest.donorLayerIndex + 1]!;
+      const nested = result.layers[nest.nestedLayerIndex]!;
+      for (const cavity of nest.cavities) {
+        const childRing = nested.polygons[cavity.nestedPolygonIndex]!.outer;
+        expect(donor.polygons[cavity.donorPolygonIndex]!.holes[cavity.donorHoleIndex]).toEqual([...childRing].reverse());
+        const container = cover.polygons.find((polygon) => childRing.slice(0, -1).every((point) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole))));
+        expect(container).toBeTruthy();
+        const clearance = Math.min(...childRing.slice(0, -1).flatMap((point) => [container!.outer, ...container!.holes].flatMap((ring) => ring.slice(0, -1).map((start, index) => distanceToSegment(point, start, ring[index + 1]!)))));
+        expect(clearance).toBeGreaterThanOrEqual(DEFAULT_PROJECT.glueMarginMm - 1e-6);
+      }
+    }
+    const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
+    const panelFiles = fabrication.files.filter((file) => file.filename.endsWith(".svg") && !file.filename.endsWith("master.svg") && !file.filename.endsWith("assembly-guide.svg"));
+    expect(panelFiles).toHaveLength(DEFAULT_PROJECT.layerCount - result.fabricationNests.length);
+    expect(panelFiles.some((file) => file.filename.includes("-panel-") && file.filename.includes("-layers-"))).toBe(true);
+    expect(await fabrication.master.blob.text()).toContain("data-layers=");
+  });
+
+  it("keeps one fabrication panel per layer when material nesting is disabled", () => {
+    const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false };
+    const result = generateGeometry(project, realSource(project));
+    expect(result.fabricationNests).toEqual([]);
+    expect(buildFabricationPackage(result, project).files).toHaveLength(project.layerCount + 5);
+  });
+
+  it("accepts fewer nests as the requested glue margin grows", () => {
+    const tight = { ...DEFAULT_PROJECT, glueMarginMm: 2 };
+    const generous = { ...DEFAULT_PROJECT, glueMarginMm: 25 };
+    expect(generateGeometry(tight, realSource(tight)).fabricationNests.length)
+      .toBeGreaterThanOrEqual(generateGeometry(generous, realSource(generous)).fabricationNests.length);
   });
 });
