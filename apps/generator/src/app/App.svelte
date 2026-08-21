@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Box, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, Topbar, Workspace, type ThemePreference } from "@loidolt/theme-svelte";
-  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, millimetersFromDisplay, validateProject, type GeoBounds, type GeometryIRV1, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
+  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, millimetersFromDisplay, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, validateProject, type GeoBounds, type GeometryIRV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
   import { boundsForProject, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
@@ -27,6 +27,15 @@
   const MODE_OPTIONS = [{ value: "map", label: "Map" }, { value: "2d", label: "Cut layers" }, { value: "3d", label: "3D stack" }];
   const THEME_OPTIONS = [{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }];
   const FONT_OPTIONS: Array<{ value: TextFont; label: string }> = [{ value: "technical", label: "Technical" }, { value: "rounded", label: "Rounded" }, { value: "stencil", label: "Stencil" }];
+  const NORTH_ARROW_CHOICES: Array<{ value: NorthArrowStyle; label: string }> = [
+    { value: "minimal", label: "Minimal" }, { value: "classic", label: "Classic" }, { value: "mariner", label: "Mariner" },
+  ];
+  const NORTH_ARROW_OPTIONS: Array<{ value: NorthArrowStyle; label: string; markings: OperationPath[] }> = NORTH_ARROW_CHOICES.map((option) => ({ ...option, markings: northArrowMarkings({ ...DEFAULT_PROJECT, northArrowStyle: option.value, northArrowSizeMm: 100, northArrowPlacement: { anchor: "center", offset: { x: 0, y: 0 } } }) }));
+  const NORTH_ARROW_ANCHOR_OPTIONS: Array<{ value: NorthArrowAnchor; label: string }> = [
+    { value: "top-left", label: "Top left" }, { value: "top", label: "Top" }, { value: "top-right", label: "Top right" },
+    { value: "left", label: "Left" }, { value: "center", label: "Center" }, { value: "right", label: "Right" },
+    { value: "bottom-left", label: "Bottom left" }, { value: "bottom", label: "Bottom" }, { value: "bottom-right", label: "Bottom right" },
+  ];
 
   function previewFor(config: ProjectConfigV1, source: SourceBundleV1): GeometryIRV1 {
     const result = generateGeometry(config, source);
@@ -107,6 +116,7 @@
   const layerTicks = $derived(geometry.layers.map((layer) => Math.round(displayElevation(layer.elevationM, project.units))));
   const shownLengthUnit = $derived(lengthUnit(project.units));
   const shownElevationUnit = $derived(elevationUnit(project.units));
+  const northArrowMaximumMm = $derived(Math.min(NORTH_ARROW_MAX_SIZE_MM, Math.max(NORTH_ARROW_MIN_SIZE_MM, Math.min(project.widthMm, project.heightMm) * NORTH_ARROW_MAX_MAP_FRACTION)));
   const detailCounts = $derived.by(() => {
     const counts = { road: 0, trail: 0, transportationLabel: 0, water: 0, contour: 0, alignment: 0, elevation: 0, north: 0, scale: 0 };
     for (const layer of geometry.layers) {
@@ -135,6 +145,11 @@
 
   function shownTextSize(valueMm: number): number {
     return Number(displayLength(valueMm, project.units).toFixed(project.units === "imperial" ? 4 : 1));
+  }
+
+  function previewMarkingPath(marking: OperationPath): string {
+    if (marking.label && marking.points[0]) return labelPathData(marking.label, marking.points[0], 0, 0, 0, marking.textStyle);
+    return marking.points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`).join(" ");
   }
 
   function navigateChoice(event: KeyboardEvent & { currentTarget: HTMLButtonElement }): void {
@@ -300,6 +315,12 @@
 
 
   async function updateFabrication(patch: Partial<ProjectConfigV1>): Promise<void> {
+    const nextWidth = patch.widthMm ?? project.widthMm;
+    const nextHeight = patch.heightMm ?? project.heightMm;
+    const maximumNorthArrowSize = Math.min(NORTH_ARROW_MAX_SIZE_MM, Math.max(NORTH_ARROW_MIN_SIZE_MM, Math.min(nextWidth, nextHeight) * NORTH_ARROW_MAX_MAP_FRACTION));
+    if ((patch.widthMm !== undefined || patch.heightMm !== undefined) && (patch.northArrowSizeMm ?? project.northArrowSizeMm) > maximumNorthArrowSize) {
+      patch = { ...patch, northArrowSizeMm: maximumNorthArrowSize };
+    }
     updateProject(patch);
     const nextProject = project;
     const revision = operationRevision;
@@ -425,7 +446,34 @@
           <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
           <Switch checked={project.showAlignmentGuides} onCheckedChange={(showAlignmentGuides) => void updateMapDetails({ showAlignmentGuides })} aria-label="Assembly guides"><span class="toggle-label"><Layers3 size={16} />Assembly guides</span></Switch>
           <Switch checked={project.showElevationLabels} onCheckedChange={(showElevationLabels) => void updateMapDetails({ showElevationLabels })} aria-label="Elevation labels"><span class="toggle-label"><Mountain size={16} />Elevation labels</span></Switch>
-          <Switch checked={project.showNorthArrow} onCheckedChange={(showNorthArrow) => void updateMapDetails({ showNorthArrow })} aria-label="North arrow"><span class="toggle-label"><Compass size={16} />North arrow</span></Switch>
+          <div class="north-arrow-control">
+            <Switch checked={project.showNorthArrow} onCheckedChange={(showNorthArrow) => void updateMapDetails({ showNorthArrow })} aria-label="North arrow"><span class="toggle-label"><Compass size={16} />North arrow</span></Switch>
+            {#if project.showNorthArrow}
+              <div class="north-arrow-settings">
+                <p>Compass design</p>
+                <div class="north-arrow-options" role="radiogroup" aria-label="North arrow design">
+                  {#each NORTH_ARROW_OPTIONS as option}
+                    <button type="button" role="radio" aria-checked={project.northArrowStyle === option.value} data-state={project.northArrowStyle === option.value ? "on" : "off"} tabindex={project.northArrowStyle === option.value ? 0 : -1} onclick={() => void updateFabrication({ northArrowStyle: option.value })} onkeydown={navigateChoice}>
+                      <svg viewBox="-52 -52 104 104" aria-hidden="true">{#each option.markings as marking}<path d={previewMarkingPath(marking)} />{/each}</svg>
+                      <span>{option.label}</span>
+                    </button>
+                  {/each}
+                </div>
+                <label class="range-field north-arrow-size-range"><span><b>Diameter</b><output>{shownTextSize(project.northArrowSizeMm)} {shownLengthUnit}</output></span><input aria-label="North arrow size slider" type="range" min={displayLength(NORTH_ARROW_MIN_SIZE_MM, project.units)} max={displayLength(northArrowMaximumMm, project.units)} step={project.units === "imperial" ? 0.01 : 1} value={displayLength(project.northArrowSizeMm, project.units)} oninput={(event) => void updateFabrication({ northArrowSizeMm: storedLength(event.currentTarget.valueAsNumber) })} /><small><span>{shownTextSize(NORTH_ARROW_MIN_SIZE_MM)} {shownLengthUnit}</span><span>{shownTextSize(northArrowMaximumMm)} {shownLengthUnit}</span></small></label>
+                <Field label="Exact diameter" class="field-row north-arrow-size-field">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Exact north arrow size" value={shownTextSize(project.northArrowSizeMm)} min={displayLength(NORTH_ARROW_MIN_SIZE_MM, project.units)} max={displayLength(northArrowMaximumMm, project.units)} step={project.units === "imperial" ? 0.01 : 1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowSizeMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const sizeMm = storedLength(value); if (sizeMm !== project.northArrowSizeMm) void updateFabrication({ northArrowSizeMm: sizeMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+                <div class="north-arrow-placement-heading"><p>Placement</p><button type="button" onclick={() => void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { x: 0, y: 0 } } })}>Reset offset</button></div>
+                <div class="north-arrow-anchor-grid" role="radiogroup" aria-label="North arrow anchor">
+                  {#each NORTH_ARROW_ANCHOR_OPTIONS as option}
+                    <button type="button" role="radio" aria-label={option.label} title={option.label} aria-checked={project.northArrowPlacement.anchor === option.value} data-state={project.northArrowPlacement.anchor === option.value ? "on" : "off"} tabindex={project.northArrowPlacement.anchor === option.value ? 0 : -1} onclick={() => void updateFabrication({ northArrowPlacement: { anchor: option.value, offset: { x: 0, y: 0 } } })} onkeydown={navigateChoice}><span></span></button>
+                  {/each}
+                </div>
+                <div class="north-arrow-coordinate-fields">
+                  <Field label="Offset X" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="North arrow offset X" value={Math.round(project.northArrowPlacement.offset.x * 100)} min={-100} max={100} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, x: event.currentTarget.valueAsNumber / 100 } } })} onValueChange={(x) => x !== Math.round(project.northArrowPlacement.offset.x * 100) && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, x: x / 100 } } })} /><em>%</em></span>{/snippet}</Field>
+                  <Field label="Offset Y" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="North arrow offset Y" value={Math.round(project.northArrowPlacement.offset.y * 100)} min={-100} max={100} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, y: event.currentTarget.valueAsNumber / 100 } } })} onValueChange={(y) => y !== Math.round(project.northArrowPlacement.offset.y * 100) && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, y: y / 100 } } })} /><em>%</em></span>{/snippet}</Field>
+                </div>
+              </div>
+            {/if}
+          </div>
           <Switch checked={project.showScaleBar} onCheckedChange={(showScaleBar) => void updateMapDetails({ showScaleBar })} aria-label="Scale bar"><span class="toggle-label"><Minus size={16} />Scale bar</span></Switch>
         </div></Section>
         <Section class="config-section advanced-section">

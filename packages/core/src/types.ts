@@ -3,6 +3,20 @@ export type Operation = "cut" | "score" | "engrave";
 export type UnitSystem = "metric" | "imperial";
 export type TextFont = "technical" | "rounded" | "stencil";
 export type TransportationClass = "major-road" | "local-road" | "trail";
+export type NorthArrowStyle = "minimal" | "classic" | "mariner";
+export type NorthArrowAnchor = "top-left" | "top" | "top-right" | "left" | "center" | "right" | "bottom-left" | "bottom" | "bottom-right";
+
+export interface NorthArrowPlacementV1 {
+  anchor: NorthArrowAnchor;
+  /** Fine adjustment as a fraction of the available center travel. */
+  offset: Point2D;
+}
+
+export const NORTH_ARROW_STYLES: readonly NorthArrowStyle[] = ["minimal", "classic", "mariner"];
+export const NORTH_ARROW_ANCHORS: readonly NorthArrowAnchor[] = ["top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"];
+export const NORTH_ARROW_MIN_SIZE_MM = 12;
+export const NORTH_ARROW_MAX_SIZE_MM = 200;
+export const NORTH_ARROW_MAX_MAP_FRACTION = 0.45;
 
 export interface TextStyleV1 {
   font: TextFont;
@@ -50,6 +64,9 @@ export interface ProjectConfigV1 {
   elevationLabelPosition: Point2D;
   textStyle: TextStyleV1;
   showNorthArrow: boolean;
+  northArrowStyle: NorthArrowStyle;
+  northArrowSizeMm: number;
+  northArrowPlacement: NorthArrowPlacementV1;
   showScaleBar: boolean;
   explodedPreview: number;
 }
@@ -212,6 +229,9 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   elevationLabelPosition: { x: -0.55, y: 0.55 },
   textStyle: { ...DEFAULT_TEXT_STYLE },
   showNorthArrow: true,
+  northArrowStyle: "classic",
+  northArrowSizeMm: 24,
+  northArrowPlacement: { anchor: "bottom-right", offset: { x: 0, y: 0 } },
   showScaleBar: true,
   explodedPreview: 0.35,
 };

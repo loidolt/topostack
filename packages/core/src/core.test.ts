@@ -113,7 +113,7 @@ describe("TopoStack geometry", () => {
     const source = realSource(project);
     source.markings = [{ id: "summit", kind: "label", operation: "engrave", points: [{ x: 10, y: 10 }], label: "Summit 1", elevationM: source.elevation.min }];
     const result = generateGeometry(project, source);
-    const labels = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.label);
+    const labels = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.label && !marking.id.startsWith("north-"));
     expect(labels.length).toBeGreaterThan(0);
     expect(labels.every((marking) => marking.textStyle?.font === "rounded" && marking.textStyle.sizeMm === 4.2)).toBe(true);
     expect(layerToSvg(result, result.layers[0]!)).not.toContain("<text");
@@ -562,6 +562,67 @@ describe("TopoStack geometry", () => {
     const bounds = result.bounds;
     const groundWidthM = Math.abs(bounds.east - bounds.west) * (Math.PI / 180) * 6_371_008.8 * Math.cos(((bounds.north + bounds.south) / 2) * (Math.PI / 180));
     expect((lengthMm / project.widthMm) * groundWidthM).toBeCloseTo(labeledM, 3);
+  });
+
+  it("generates three distinct, scalable north-arrow engraving styles", () => {
+    const expectedLabels = {
+      minimal: ["N"],
+      classic: ["E", "N", "S", "W"],
+      mariner: [],
+    } as const;
+    const maximumRadius = (sizeMm: number, style: keyof typeof expectedLabels): number => {
+      const project = { ...DEFAULT_PROJECT, northArrowStyle: style, northArrowSizeMm: sizeMm, northArrowPlacement: { anchor: "center" as const, offset: { x: 0, y: 0 } } };
+      const result = generateGeometry(project, realSource(project));
+      const markings = result.layers[0]!.markings.filter((marking) => marking.id.startsWith("north-"));
+      expect(new Set(markings.map((marking) => marking.id)).size).toBe(markings.length);
+      expect(markings.filter((marking) => marking.label).map((marking) => marking.label).sort()).toEqual([...expectedLabels[style]]);
+      expect(result.layers.slice(1).every((layer) => layer.markings.every((marking) => !marking.id.startsWith("north-")))).toBe(true);
+      expect(layerToSvg(result, result.layers[0]!)).toContain(markings[0]!.id);
+      expect(masterToSvg(result)).toContain(markings[0]!.id);
+      const points = markings.flatMap((marking) => marking.label && marking.points[0]
+        ? labelLineSegments(marking.label, marking.points[0], 0, 0, marking.labelRotationRad, marking.textStyle).flatMap((segment) => [segment.start, segment.end])
+        : marking.points);
+      return Math.max(...points.map((point) => Math.hypot(point.x, point.y)));
+    };
+
+    for (const style of Object.keys(expectedLabels) as Array<keyof typeof expectedLabels>) {
+      const small = maximumRadius(24, style);
+      const large = maximumRadius(48, style);
+      expect(large / small).toBeCloseTo(2, 6);
+    }
+  });
+
+  it("keeps anchored north arrows inside rectangular and circular crops", () => {
+    for (const cropShape of ["rectangle", "circle"] as const) {
+      const project = {
+        ...DEFAULT_PROJECT,
+        cropShape,
+        widthMm: 200,
+        heightMm: 200,
+        northArrowStyle: "mariner" as const,
+        northArrowSizeMm: 60,
+        northArrowPlacement: { anchor: "top-left" as const, offset: { x: -1, y: -1 } },
+      };
+      const markings = generateGeometry(project, realSource(project)).layers[0]!.markings.filter((marking) => marking.id.startsWith("north-"));
+      const points = markings.flatMap((marking) => marking.points);
+      if (cropShape === "circle") expect(points.every((point) => Math.hypot(point.x, point.y) <= 97.001)).toBe(true);
+      else expect(points.every((point) => Math.abs(point.x) <= 97.001 && Math.abs(point.y) <= 97.001)).toBe(true);
+    }
+  });
+
+  it("reserves base-layer material beneath the north arrow when nesting is enabled", () => {
+    const project = {
+      ...DEFAULT_PROJECT,
+      widthMm: 200,
+      heightMm: 200,
+      layerCount: 6,
+      northArrowSizeMm: 40,
+      northArrowPlacement: { anchor: "center" as const, offset: { x: 0, y: 0 } },
+    };
+    const source = gridSource(project, 64, (nx, ny) => 1_500 - Math.hypot(nx, ny) * 900);
+    const result = generateGeometry(project, source);
+    expect(result.layers[0]!.markings.some((marking) => marking.id.startsWith("north-"))).toBe(true);
+    expect(result.fabricationNests.some((nest) => nest.donorLayerIndex === 0)).toBe(false);
   });
 
   it("places single-point labels and renders score-operation labels", () => {

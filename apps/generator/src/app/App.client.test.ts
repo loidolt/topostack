@@ -80,6 +80,30 @@ describe("TopoStack Svelte shell", () => {
     expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 
+  it("customizes north-arrow design, physical size, and anchored placement without refetching terrain", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const designs = target.querySelectorAll<HTMLButtonElement>('.north-arrow-options button[role="radio"]');
+    expect(designs).toHaveLength(3);
+    const mariner = [...designs].find((button) => button.textContent?.includes("Mariner"))!;
+    mariner.click();
+    await vi.waitFor(() => expect(mariner.getAttribute("aria-checked")).toBe("true"));
+    const size = target.querySelector<HTMLInputElement>('input[aria-label="Exact north arrow size"]')!;
+    size.value = "30";
+    size.dispatchEvent(new Event("input", { bubbles: true }));
+    const topLeft = target.querySelector<HTMLButtonElement>('.north-arrow-anchor-grid button[aria-label="Top left"]')!;
+    topLeft.click();
+    const offsetX = target.querySelector<HTMLInputElement>('input[aria-label="North arrow offset X"]')!;
+    offsetX.value = "15";
+    offsetX.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(topLeft.getAttribute("aria-checked")).toBe("true"));
+    await vi.waitFor(() => expect(target.querySelector<HTMLInputElement>('input[aria-label="North arrow size slider"]')?.value).toBe("30"));
+    expect(offsetX.value).toBe("15");
+    expect(Number(target.querySelector<HTMLElement>(".preview-stage")?.dataset.northMarkings)).toBeGreaterThan(10);
+    expect(loadTerrainMock).not.toHaveBeenCalled();
+  });
+
   it("applies and persists an explicit color scheme", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });

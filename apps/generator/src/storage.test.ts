@@ -23,6 +23,9 @@ describe("project import validation", () => {
       laserKerfMm: _legacyLaserKerfMm,
       units: _legacyUnits,
       textStyle: _legacyTextStyle,
+      northArrowStyle: _legacyNorthArrowStyle,
+      northArrowSizeMm: _legacyNorthArrowSize,
+      northArrowPlacement: _legacyNorthArrowPlacement,
       showTrails: _legacyTrails,
       showTransportationLabels: _legacyTransportationLabels,
       ...legacyProject
@@ -35,6 +38,9 @@ describe("project import validation", () => {
       laserKerfMm: 0.15,
       units: "metric",
       textStyle: DEFAULT_PROJECT.textStyle,
+      northArrowStyle: "classic",
+      northArrowSizeMm: 24,
+      northArrowPlacement: { anchor: "bottom-right", offset: { x: 0, y: 0 } },
       showTrails: DEFAULT_PROJECT.showRoads,
       showTransportationLabels: false,
     });
@@ -48,6 +54,14 @@ describe("project import validation", () => {
     expect(parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "stencil", sizeMm: 5 } }).textStyle).toEqual({ font: "stencil", sizeMm: 5 });
     expect(() => parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "serif", sizeMm: 5 } })).toThrow(/text font/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "technical", sizeMm: 1 } })).toThrow(/text size/i);
+  });
+  it("validates and restores north-arrow customization", () => {
+    const project = parseProject({ ...DEFAULT_PROJECT, northArrowStyle: "mariner", northArrowSizeMm: 32, northArrowPlacement: { anchor: "top-left", offset: { x: 0.2, y: -0.3 } } });
+    expect(project).toMatchObject({ northArrowStyle: "mariner", northArrowSizeMm: 32, northArrowPlacement: { anchor: "top-left", offset: { x: 0.2, y: -0.3 } } });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowStyle: "ornate" })).toThrow(/north arrow style/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowSizeMm: 4 })).toThrow(/north arrow size/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowPlacement: { anchor: "outside", offset: { x: 0, y: 0 } } })).toThrow(/north arrow anchor/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowPlacement: { anchor: "center", offset: { x: 1.1, y: 0 } } })).toThrow(/north arrow offsets/i);
   });
   it("defaults smoothing, minimum feature, and exploded preview for legacy projects", () => {
     const {

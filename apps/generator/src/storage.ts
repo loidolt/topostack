@@ -1,5 +1,5 @@
 import { del, get, set } from "idb-keyval";
-import { DEFAULT_PROJECT, validateProject, type ProjectConfigV1 } from "@topostack/core";
+import { DEFAULT_PROJECT, validateProject, type NorthArrowAnchor, type NorthArrowStyle, type ProjectConfigV1 } from "@topostack/core";
 
 const PROJECT_KEY = "topostack:project:v1";
 
@@ -16,6 +16,14 @@ function unitValue(value: unknown): ProjectConfigV1["units"] {
 function textFontValue(value: unknown): ProjectConfigV1["textStyle"]["font"] {
   if (value === "technical" || value === "rounded" || value === "stencil") return value;
   throw new Error("Text font must be technical, rounded, or stencil.");
+}
+function northArrowStyleValue(value: unknown): NorthArrowStyle {
+  if (value === "minimal" || value === "classic" || value === "mariner") return value;
+  throw new Error("North arrow style must be minimal, classic, or mariner.");
+}
+function northArrowAnchorValue(value: unknown): NorthArrowAnchor {
+  if (value === "top-left" || value === "top" || value === "top-right" || value === "left" || value === "center" || value === "right" || value === "bottom-left" || value === "bottom" || value === "bottom-right") return value;
+  throw new Error("North arrow anchor is invalid.");
 }
 
 export async function loadProject(): Promise<ProjectConfigV1 | undefined> {
@@ -41,6 +49,9 @@ export function parseProject(value: unknown): ProjectConfigV1 {
   const labelPositionRecord = record.elevationLabelPosition as Record<string, unknown> | undefined;
   if (record.textStyle !== undefined && (!record.textStyle || typeof record.textStyle !== "object")) throw new Error("Text style is invalid.");
   const textStyleRecord = record.textStyle as Record<string, unknown> | undefined;
+  if (record.northArrowPlacement !== undefined && (!record.northArrowPlacement || typeof record.northArrowPlacement !== "object")) throw new Error("North arrow placement is invalid.");
+  const northArrowPlacementRecord = record.northArrowPlacement as Record<string, unknown> | undefined;
+  const northArrowOffsetRecord = northArrowPlacementRecord?.offset && typeof northArrowPlacementRecord.offset === "object" ? northArrowPlacementRecord.offset as Record<string, unknown> : undefined;
   const project: ProjectConfigV1 = {
     ...DEFAULT_PROJECT,
     schemaVersion: 1,
@@ -71,6 +82,12 @@ export function parseProject(value: unknown): ProjectConfigV1 {
       font: textFontValue(textStyleRecord.font),
       sizeMm: numberValue(textStyleRecord.sizeMm),
     } : { ...DEFAULT_PROJECT.textStyle },
+    northArrowStyle: record.northArrowStyle === undefined ? DEFAULT_PROJECT.northArrowStyle : northArrowStyleValue(record.northArrowStyle),
+    northArrowSizeMm: record.northArrowSizeMm === undefined ? DEFAULT_PROJECT.northArrowSizeMm : numberValue(record.northArrowSizeMm),
+    northArrowPlacement: northArrowPlacementRecord ? {
+      anchor: northArrowAnchorValue(northArrowPlacementRecord.anchor),
+      offset: northArrowOffsetRecord ? { x: numberValue(northArrowOffsetRecord.x), y: numberValue(northArrowOffsetRecord.y) } : { ...DEFAULT_PROJECT.northArrowPlacement.offset },
+    } : { anchor: DEFAULT_PROJECT.northArrowPlacement.anchor, offset: { ...DEFAULT_PROJECT.northArrowPlacement.offset } },
     explodedPreview: record.explodedPreview === undefined ? DEFAULT_PROJECT.explodedPreview : numberValue(record.explodedPreview),
   };
   validateProject(project);

@@ -16,7 +16,9 @@ import {
 } from "./geometry2d.js";
 import { placeElevationLabelStack, placeLabel, placeLinearLabel } from "./label-placement.js";
 import { offsetClosedRing } from "./offset.js";
+import { northArrowFootprint, northArrowMarkings } from "./north-arrow.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
+import { NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES } from "./types.js";
 import type {
   ElevationGrid,
   GeometryIRV1,
@@ -76,6 +78,22 @@ function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[]
   return indexes;
 }
 
+function ringsOverlap(left: Point2D[], right: Point2D[]): boolean {
+  if (!boundsOverlap(ringBounds(left), ringBounds(right))) return false;
+  if (left.some((point) => pointInRing(point, right)) || right.some((point) => pointInRing(point, left))) return true;
+  for (let leftIndex = 0; leftIndex < left.length - 1; leftIndex += 1) {
+    const leftStart = left[leftIndex];
+    const leftEnd = left[leftIndex + 1];
+    if (!leftStart || !leftEnd) continue;
+    for (let rightIndex = 0; rightIndex < right.length - 1; rightIndex += 1) {
+      const rightStart = right[rightIndex];
+      const rightEnd = right[rightIndex + 1];
+      if (rightStart && rightEnd && segmentIntersectionT(leftStart, leftEnd, rightStart, rightEnd) !== undefined) return true;
+    }
+  }
+  return false;
+}
+
 // Re-validation of an existing nest after a later nest carved cavities into its
 // covering layer. Contained holes are allowed here because by then every hole
 // inside the nested ring is a chained cavity that the creation-time check below
@@ -93,6 +111,7 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
   const nestedLayersWithParents = new Set<number>();
   const requiredClearanceMm = config.glueMarginMm + config.laserKerfMm;
   for (let donorLayerIndex = 0; donorLayerIndex < layers.length - 2; donorLayerIndex += 1) {
+    const protectedNorthArrow = donorLayerIndex === 0 && config.showNorthArrow ? northArrowFootprint(config) : undefined;
     for (let nestedLayerIndex = donorLayerIndex + 2; nestedLayerIndex < layers.length; nestedLayerIndex += 1) {
       if (nestedLayersWithParents.has(nestedLayerIndex)) continue;
       const nestedLayer = layers[nestedLayerIndex];
@@ -100,6 +119,7 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
       const donorLayer = layers[donorLayerIndex];
       const coveringLayer = layers[donorLayerIndex + 1];
       if (!donorLayer || !coveringLayer || coveringLayer.polygons.length === 0) continue;
+      if (protectedNorthArrow && nestedLayer.polygons.some((polygon) => ringsOverlap(protectedNorthArrow, polygon.outer))) continue;
       // The covering layer must not have terrain holes inside the nested ring:
       // nothing above covers a terrain hole, so the cavity carved into the
       // donor would be visible through it in the assembled model. At creation
@@ -618,14 +638,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
   const baseLayer = layers[0];
   if (baseLayer && config.showNorthArrow) {
-    const radius = Math.min(config.widthMm, config.heightMm) / 2;
-    const x = config.cropShape === "circle" ? radius * 0.58 : config.widthMm / 2 - 11;
-    const y = config.cropShape === "circle" ? -radius * 0.48 : -config.heightMm / 2 + 18;
-    baseLayer.markings.push(
-      { id: "north-stem", operation: "engrave", kind: "guide", points: [{ x, y: y + 9 }, { x, y: y - 5 }] },
-      { id: "north-head-a", operation: "engrave", kind: "guide", points: [{ x, y: y - 5 }, { x: x - 3, y }] },
-      { id: "north-head-b", operation: "engrave", kind: "guide", points: [{ x, y: y - 5 }, { x: x + 3, y }] },
-    );
+    baseLayer.markings.push(...northArrowMarkings(config));
   }
   if (baseLayer && config.showScaleBar) {
     const radius = Math.min(config.widthMm, config.heightMm) / 2;
@@ -733,6 +746,7 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.cropShape !== "rectangle" && config.cropShape !== "circle") throw new Error("Crop shape must be rectangle or circle.");
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
   if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");
+  if (!config.northArrowPlacement || typeof config.northArrowPlacement !== "object" || !config.northArrowPlacement.offset || typeof config.northArrowPlacement.offset !== "object") throw new Error("North arrow placement is required.");
   for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar })) {
     if (typeof value !== "boolean") throw new Error(`${label} must be true or false.`);
   }
@@ -742,7 +756,7 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
   if (config.glueMarginMm < 2 || config.glueMarginMm > 25) throw new Error("Glue margin must be between 2 and 25 mm.");
   if (config.laserKerfMm < 0 || config.laserKerfMm > 1) throw new Error("Laser kerf must be between 0 and 1 mm.");
@@ -750,6 +764,11 @@ export function validateProject(config: ProjectConfigV1): void {
   if (Math.abs(config.elevationLabelPosition.x) > 0.9 || Math.abs(config.elevationLabelPosition.y) > 0.9) throw new Error("Elevation label position must be between -90% and 90%.");
   if (config.textStyle.font !== "technical" && config.textStyle.font !== "rounded" && config.textStyle.font !== "stencil") throw new Error("Text font must be technical, rounded, or stencil.");
   if (config.textStyle.sizeMm < 2 || config.textStyle.sizeMm > 10) throw new Error("Text size must be between 2 and 10 mm.");
+  if (!NORTH_ARROW_STYLES.includes(config.northArrowStyle)) throw new Error("North arrow style must be minimal, classic, or mariner.");
+  if (!NORTH_ARROW_ANCHORS.includes(config.northArrowPlacement.anchor)) throw new Error("North arrow anchor is invalid.");
+  const northArrowMaximum = Math.min(NORTH_ARROW_MAX_SIZE_MM, Math.max(NORTH_ARROW_MIN_SIZE_MM, Math.min(config.widthMm, config.heightMm) * NORTH_ARROW_MAX_MAP_FRACTION));
+  if (config.northArrowSizeMm < NORTH_ARROW_MIN_SIZE_MM || config.northArrowSizeMm > northArrowMaximum) throw new Error(`North arrow size must be between ${NORTH_ARROW_MIN_SIZE_MM} and ${northArrowMaximum} mm.`);
+  if (Math.abs(config.northArrowPlacement.offset.x) > 1 || Math.abs(config.northArrowPlacement.offset.y) > 1) throw new Error("North arrow offsets must be between -100% and 100%.");
   const bounds = config.location.bounds;
   if (bounds && (![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite) || bounds.west >= bounds.east || bounds.south >= bounds.north || bounds.south < -85.0511 || bounds.north > 85.0511)) throw new Error("Project geographic bounds are invalid.");
 }
