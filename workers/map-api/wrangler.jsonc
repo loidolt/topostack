@@ -15,7 +15,7 @@
     "ALLOWED_ORIGIN_SUFFIXES": ".atomm.com",
     "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
     "GEOCODER_ORIGIN": "https://api.geoapify.com",
-    "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z11-v1"
+    "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z12-v1"
   },
   // The top-level configuration is the fallback for a bare `wrangler deploy`
   // and for local tooling (tests, `--env=""` dry-run builds). It must never
@@ -43,7 +43,7 @@
         "ALLOWED_ORIGIN_SUFFIXES": ".atomm.com",
         "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
         "GEOCODER_ORIGIN": "https://api.geoapify.com",
-        "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z11-v1"
+        "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z12-v1"
       },
       "r2_buckets": [
         { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache-development" },
@@ -66,7 +66,7 @@
         "ALLOWED_ORIGIN_SUFFIXES": ".atomm.com",
         "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
         "GEOCODER_ORIGIN": "https://api.geoapify.com",
-        "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z11-v1"
+        "DATASET_VERSION": "mapzen-terrarium+protomaps-20260819-z12-v1"
       },
       "r2_buckets": [
         { "binding": "MAP_CACHE", "bucket_name": "topostack-map-cache" },

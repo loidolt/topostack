@@ -11,7 +11,7 @@ interface __BaseEnv_Env {
 	ALLOWED_ORIGIN_SUFFIXES: ".atomm.com";
 	TERRAIN_ORIGIN: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 	GEOCODER_ORIGIN: "https://api.geoapify.com";
-	DATASET_VERSION: "mapzen-terrarium+protomaps-20260819-z11-v1";
+	DATASET_VERSION: "mapzen-terrarium+protomaps-20260819-z12-v1";
 	GEOCODER_API_KEY?: string;
 }
 declare namespace Cloudflare {
@@ -28,7 +28,7 @@ declare namespace Cloudflare {
 		ALLOWED_ORIGIN_SUFFIXES: ".atomm.com";
 		TERRAIN_ORIGIN: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 		GEOCODER_ORIGIN: "https://api.geoapify.com";
-		DATASET_VERSION: "mapzen-terrarium+protomaps-20260819-z11-v1";
+		DATASET_VERSION: "mapzen-terrarium+protomaps-20260819-z12-v1";
 		GEOCODER_API_KEY: string;
 	}
 	interface ProductionEnv {
@@ -41,7 +41,7 @@ declare namespace Cloudflare {
 		ALLOWED_ORIGIN_SUFFIXES: ".atomm.com";
 		TERRAIN_ORIGIN: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 		GEOCODER_ORIGIN: "https://api.geoapify.com";
-		DATASET_VERSION: "mapzen-terrarium+protomaps-20260819-z11-v1";
+		DATASET_VERSION: "mapzen-terrarium+protomaps-20260819-z12-v1";
 		GEOCODER_API_KEY: string;
 	}
 	interface Env extends __BaseEnv_Env {}

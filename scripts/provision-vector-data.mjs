@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 
 const DATASET_SNAPSHOT = "20260819";
-const EXPECTED_MAX_ZOOM = 11;
+const EXPECTED_MAX_ZOOM = 12;
 const OBJECT_KEY = "osm/current.pmtiles";
 const DEVELOPMENT_BUCKET = "topostack-vector-data-development";
 const PRODUCTION_BUCKET = "topostack-vector-data";

@@ -7,7 +7,7 @@
 - Rectangular and circular crops, 2–24 layers, configurable dimensions and material thickness.
 - Contour polygon generation, feature filtering, cut/score/engrave IR, per-layer and master SVGs.
 - Map, 2D, and stacked/exploded 3D previews.
-- OSM PMTiles adapter for roads and water, local IndexedDB projects, undo/redo, and project JSON import/export.
+- OSM PMTiles adapter for classified roads, trails, transportation labels, and water; local IndexedDB projects; undo/redo; and project JSON import/export.
 - Cloudflare Worker with R2 caching, range requests, geocoding, CORS, rate limiting, and observability.
 - Editable elevation-label anchors with font-independent vector paths, material-boundary checks, and automatic collision repair.
 - Optional next-layer alignment outlines and hidden registration labels for reliable physical assembly.

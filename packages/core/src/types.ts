@@ -2,6 +2,7 @@ export type CropShape = "rectangle" | "circle";
 export type Operation = "cut" | "score" | "engrave";
 export type UnitSystem = "metric" | "imperial";
 export type TextFont = "technical" | "rounded" | "stencil";
+export type TransportationClass = "major-road" | "local-road" | "trail";
 
 export interface TextStyleV1 {
   font: TextFont;
@@ -38,6 +39,8 @@ export interface ProjectConfigV1 {
   minimumFeatureMm: number;
   smoothing: number;
   showRoads: boolean;
+  showTrails: boolean;
+  showTransportationLabels: boolean;
   showWater: boolean;
   showAlignmentGuides: boolean;
   optimizeMaterialUse: boolean;
@@ -67,10 +70,11 @@ export interface SourceAttribution {
 
 export interface MarkingFeature {
   id: string;
-  kind: "road" | "water" | "contour" | "label" | "guide";
+  kind: "road" | "trail" | "water" | "contour" | "label" | "guide";
   operation: Exclude<Operation, "cut">;
   points: Point2D[];
   label?: string;
+  transportationClass?: TransportationClass;
   elevationM?: number;
 }
 
@@ -112,6 +116,7 @@ export interface OperationPath {
   label?: string;
   labelRotationRad?: number;
   textStyle?: TextStyleV1;
+  transportationClass?: TransportationClass;
 }
 
 export interface LayerIR {
@@ -196,6 +201,8 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   minimumFeatureMm: 0.8,
   smoothing: 1,
   showRoads: true,
+  showTrails: true,
+  showTransportationLabels: false,
   showWater: true,
   showAlignmentGuides: true,
   optimizeMaterialUse: true,

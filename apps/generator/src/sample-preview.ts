@@ -23,7 +23,7 @@ export function createSamplePreviewSource(): SourceBundleV1 {
     },
     markings: SAMPLE_PREVIEW.markings as unknown as MarkingFeature[],
     vectorStatus: "available",
-    datasetVersion: "mapzen-terrarium+protomaps-20260819-z11-preview-v1",
+    datasetVersion: "mapzen-terrarium+protomaps-20260819-z12-preview-v1",
     sourceKind: "preview",
     bounds: { ...SAMPLE_PREVIEW.bounds },
     imagerySources: ["srtm/N42W123.tif"],

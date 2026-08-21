@@ -4,13 +4,16 @@ import { boundsForProject } from "./data-provider";
 import { createSamplePreviewSource } from "./sample-preview";
 
 describe("Crater Lake bundled preview", () => {
-  it("contains real elevation, road, and water data for the default crop", () => {
+  it("contains real elevation, classified transportation, and water data for the default crop", () => {
     const source = createSamplePreviewSource();
     const expectedBounds = boundsForProject(DEFAULT_PROJECT);
     expect(source.sourceKind).toBe("preview");
     expect(source.elevation.values).toHaveLength(66 * 44);
     expect(source.elevation.max - source.elevation.min).toBeGreaterThan(1_000);
     expect(source.markings.some((marking) => marking.kind === "road")).toBe(true);
+    expect(source.markings.some((marking) => marking.kind === "trail")).toBe(true);
+    expect(new Set(source.markings.map((marking) => marking.transportationClass).filter(Boolean))).toEqual(new Set(["major-road", "local-road", "trail"]));
+    expect(source.markings.some((marking) => marking.kind === "road" && marking.label)).toBe(true);
     expect(source.markings.some((marking) => marking.kind === "water")).toBe(true);
     expect(source.bounds.west).toBeCloseTo(expectedBounds.west, 8);
     expect(source.bounds.north).toBeCloseTo(expectedBounds.north, 8);
@@ -21,10 +24,18 @@ describe("Crater Lake bundled preview", () => {
     const geometry = generateGeometry(DEFAULT_PROJECT, createSamplePreviewSource());
     const markings = geometry.layers.flatMap((layer) => layer.markings);
     expect(markings.some((marking) => marking.kind === "road")).toBe(true);
+    expect(markings.some((marking) => marking.kind === "trail")).toBe(true);
     expect(markings.some((marking) => marking.kind === "water")).toBe(true);
     expect(markings.some((marking) => marking.id.startsWith("alignment-"))).toBe(true);
     expect(markings.filter((marking) => marking.id.startsWith("elevation-")).length).toBeGreaterThanOrEqual(Math.ceil(DEFAULT_PROJECT.layerCount / 2));
     expect(markings.some((marking) => marking.id.startsWith("north-"))).toBe(true);
     expect(markings.some((marking) => marking.id.startsWith("scale-"))).toBe(true);
+  });
+
+  it("shows named roads when transportation labels are enabled", () => {
+    const geometry = generateGeometry({ ...DEFAULT_PROJECT, showTransportationLabels: true }, createSamplePreviewSource());
+    const labels = geometry.layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("transport-label-"));
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.every((marking) => marking.operation === "engrave" && marking.label)).toBe(true);
   });
 });

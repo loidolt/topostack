@@ -48,7 +48,7 @@ describe("TopoStack Svelte shell", () => {
     await tick();
     expect(target.querySelector('svg[aria-label^="Cut preview for layer"]')).not.toBeNull();
     expect(target.querySelector('[data-marking-kind="road"]')).not.toBeNull();
-    expect(target.querySelector(".layer-heading")?.textContent).toContain("Layer 6");
+    expect(target.querySelector(".layer-heading")?.textContent).toMatch(/Layer \d+ of 10/);
   });
 
   it("lays out fabrication controls in full-width rows with a compact position pair", async () => {
@@ -147,7 +147,8 @@ describe("TopoStack Svelte shell", () => {
     await tick();
     const stage = target.querySelector<HTMLElement>(".preview-stage")!;
     const cases = [
-      ["Roads & trails", "road"],
+      ["Roads", "road"],
+      ["Trails", "trail"],
       ["Water outlines", "water"],
       ["Assembly guides", "alignment"],
       ["Elevation labels", "elevation"],
@@ -163,6 +164,23 @@ describe("TopoStack Svelte shell", () => {
       await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent, label).toMatch(/updated/i));
       await vi.waitFor(() => expect(stage.dataset[`${attribute}Markings` as keyof DOMStringMap], label).toBe("0"));
     }
+    const transportationLabels = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Transportation labels"]')!;
+    expect(transportationLabels.getAttribute("aria-checked")).toBe("false");
+    transportationLabels.click();
+    await vi.waitFor(() => expect(transportationLabels.getAttribute("aria-checked")).toBe("true"));
+    expect(loadTerrainMock).not.toHaveBeenCalled();
+  });
+
+  it("renders named road engravings when transportation labels are enabled", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const stage = target.querySelector<HTMLElement>(".preview-stage")!;
+    const labels = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Transportation labels"]')!;
+    expect(stage.dataset.transportationLabelMarkings).toBe("0");
+    labels.click();
+    await vi.waitFor(() => expect(Number(stage.dataset.transportationLabelMarkings)).toBeGreaterThan(0));
+    expect(target.querySelector(".status-line")?.textContent).toMatch(/updated/i);
     expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 
@@ -170,7 +188,7 @@ describe("TopoStack Svelte shell", () => {
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads & trails"]')!;
+    const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads"]')!;
     roads.click(); roads.click();
     const stage = target.querySelector<HTMLElement>(".preview-stage")!;
     await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
@@ -184,18 +202,18 @@ describe("TopoStack Svelte shell", () => {
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    for (const label of ["Roads & trails", "Water outlines"]) {
+    for (const label of ["Roads", "Trails", "Water outlines"]) {
       const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
       input.click();
       await vi.waitFor(() => expect(input.getAttribute("aria-checked")).toBe("false"));
     }
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
-    const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads & trails"]')!;
+    const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads"]')!;
     roads.click();
     const stage = target.querySelector<HTMLElement>(".preview-stage")!;
     await vi.waitFor(() => expect(loadVectorMarkingsMock).toHaveBeenCalledOnce());
-    expect(loadVectorMarkingsMock.mock.calls[0]?.[2]).toMatchObject({ showRoads: true, showWater: false });
+    expect(loadVectorMarkingsMock.mock.calls[0]?.[2]).toMatchObject({ showRoads: true, showTrails: false, showWater: false });
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Map details updated"));
     await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
     expect(loadTerrainMock).toHaveBeenCalledOnce();

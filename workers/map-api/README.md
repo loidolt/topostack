@@ -11,14 +11,14 @@ npx wrangler r2 bucket create topostack-map-cache
 npx wrangler r2 bucket create topostack-vector-data
 ```
 
-TopoStack pins the Protomaps `20260819` basemap build (`4.15.2`) and extracts a global zoom 0–11 archive. The upstream archive's published BLAKE3 digest is `837084e3e47de6f3ec5708f6de116d89789520e2391d67494a99e3daeb66a862`. Build and verify the smaller archive with PMTiles CLI `1.31.2` or newer:
+TopoStack pins the Protomaps `20260819` basemap build (`4.15.2`) and extracts a global zoom 0–12 archive so local roads and trails are available. The upstream archive's published BLAKE3 digest is `837084e3e47de6f3ec5708f6de116d89789520e2391d67494a99e3daeb66a862`. Build and verify the archive with PMTiles CLI `1.31.2` or newer:
 
 ```bash
-pmtiles extract https://build.protomaps.com/20260819.pmtiles ./current.pmtiles --maxzoom=11
+pmtiles extract https://build.protomaps.com/20260819.pmtiles ./current.pmtiles --maxzoom=12
 pmtiles verify ./current.pmtiles
 ```
 
-The result is approximately 7.9 GB, above Wrangler's 315 MB object-upload limit and R2's 5 GiB single-part limit. The provisioning script computes the extracted archive's SHA-256, verifies the archive, mints 24-hour credentials scoped to only `osm/current.pmtiles`, performs multipart uploads, and reads each result back. It uses the existing account-owned Cloudflare API token without storing S3 credentials.
+The result is above Wrangler's 315 MB object-upload limit and R2's 5 GiB single-part limit. The provisioning script computes the extracted archive's SHA-256, verifies the archive, mints 24-hour credentials scoped to only `osm/current.pmtiles`, performs multipart uploads, and reads each result back. It uses the existing account-owned Cloudflare API token without storing S3 credentials.
 
 The script refuses to upload unless the computed SHA-256 matches a pinned digest supplied via `--expected-sha256=<hex>` or the `EXPECTED_ARCHIVE_SHA256` environment variable. When extracting a new snapshot for the first time, run once with `--skip-digest-check`, record the printed SHA-256, and pin it here alongside the snapshot pin for all subsequent runs. By default only the development bucket is written; the production key is live client data and is only overwritten when `--prod` is passed explicitly:
 

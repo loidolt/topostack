@@ -35,7 +35,7 @@ Open the Vite URL directly, or use Atomm's local preview URL:
 https://www.atomm.com/creativetools/community/generator/topographic-map-generator?local=http://localhost:5273/
 ```
 
-The initial Crater Lake preview is a deterministic, bundled snapshot of real Mapzen elevation and Protomaps/OpenStreetMap road, trail, and water data. Its rim terrain makes roads, trails, shoreline, and elevation labels easy to inspect offline, but it remains preview-only; generate fresh terrain before fabrication export. If the map-data Worker is unavailable during generation, the app falls back to synthetic terrain so geometry development can continue. Copy `workers/map-api/.dev.vars.example` to `workers/map-api/.dev.vars` and provide a Geoapify key when local place search is needed; terrain generation does not require that secret.
+The initial Crater Lake preview is a deterministic, bundled snapshot of real Mapzen elevation and Protomaps/OpenStreetMap major-road, local-road, trail, and water data. Major roads engrave as parallel lines, local roads as solid lines, and trails as dashes; optional names and route references are placed as collision-safe vector labels. The preview remains preview-only, so generate fresh terrain before fabrication export. Fabrication SVGs separate red cuts, blue scores, and black engravings into operation layers and include registered engraving-only panel companions. If the map-data Worker is unavailable during generation, the app falls back to synthetic terrain so geometry development can continue. Copy `workers/map-api/.dev.vars.example` to `workers/map-api/.dev.vars` and provide a Geoapify key when local place search is needed; terrain generation does not require that secret.
 
 ## Validation and packaging
 

@@ -1,4 +1,4 @@
-import { createSyntheticSource, type GeoBounds, type MarkingFeature, type ProjectConfigV1, type SourceBundleV1 } from "@topostack/core";
+import { createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass } from "@topostack/core";
 import { PMTiles } from "pmtiles";
 import { VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
@@ -17,6 +17,10 @@ const apiBase = configuredApiBase ?? developmentApiBase ?? "";
 const vectorArchive = new PMTiles(`${apiBase}/v1/osm.pmtiles`);
 const TILE_SIZE = 256;
 const MAX_DATA_TILES = 24;
+const MAJOR_ROAD_DETAILS = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"]);
+const LOCAL_ROAD_DETAILS = new Set(["tertiary", "tertiary_link", "residential", "service", "unclassified", "road", "raceway", "driveway", "parking_aisle", "alley", "drive-through", "emergency_access"]);
+const TRAIL_DETAILS = new Set(["pedestrian", "track", "path", "cycleway", "bridleway", "steps", "corridor", "sidewalk", "crossing"]);
+const EXCLUDED_TRANSPORT_KINDS = new Set(["rail", "aerialway", "ferry", "pier", "aeroway"]);
 const worldSize = (zoom: number) => TILE_SIZE * 2 ** zoom;
 const lonToWorldX = (lon: number, zoom: number) => ((lon + 180) / 360) * worldSize(zoom);
 function latToWorldY(lat: number, zoom: number): number {
@@ -53,6 +57,135 @@ function tileWindow(bounds: GeoBounds, zoom: number): TileWindow {
   for (let y = minY; y <= maxY; y += 1) for (let x = minX; x <= maxX; x += 1) tiles.push({ x, y, z: zoom });
   if (!tiles.length || tiles.length > MAX_DATA_TILES) throw new Error("The selected area is too large at this zoom. Zoom in and try again.");
   return { zoom, westX, eastX, northY, southY, tiles };
+}
+
+export function classifyTransportation(properties: Record<string, unknown>): TransportationClass | undefined {
+  const kind = typeof properties.kind === "string" ? properties.kind : "";
+  const detail = typeof properties.kind_detail === "string" ? properties.kind_detail : "";
+  if (EXCLUDED_TRANSPORT_KINDS.has(kind)) return undefined;
+  if (kind === "path" || TRAIL_DETAILS.has(detail)) return "trail";
+  if (kind === "highway" || kind === "major_road" || MAJOR_ROAD_DETAILS.has(detail)) return "major-road";
+  if (kind === "minor_road" || LOCAL_ROAD_DETAILS.has(detail)) return "local-road";
+  return undefined;
+}
+
+export function transportationLabel(properties: Record<string, unknown>): string | undefined {
+  for (const key of ["name", "ref", "shield_text"] as const) {
+    const value = properties[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+// Vector tiles deliberately repeat linework in a buffer outside each tile so a
+// map renderer can draw seamless strokes. Fabrication geometry cannot retain
+// that buffer: adjacent tiles would engrave the same road several times.
+export function clipVectorTileLine(points: Point2D[], extent: number): Point2D[][] {
+  if (points.length < 2 || !(extent > 0)) return [];
+  const result: Point2D[][] = [];
+  let active: Point2D[] = [];
+  const samePoint = (left: Point2D, right: Point2D) => Math.hypot(left.x - right.x, left.y - right.y) <= 1e-7;
+  const flush = () => {
+    if (active.length > 1) result.push(active);
+    active = [];
+  };
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index]!;
+    const end = points[index + 1]!;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    let entry = 0;
+    let exit = 1;
+    let visible = true;
+    for (const [p, q] of [[-dx, start.x], [dx, extent - start.x], [-dy, start.y], [dy, extent - start.y]] as Array<[number, number]>) {
+      if (Math.abs(p) <= 1e-12) {
+        if (q < 0) { visible = false; break; }
+        continue;
+      }
+      const ratio = q / p;
+      if (p < 0) entry = Math.max(entry, ratio);
+      else exit = Math.min(exit, ratio);
+      if (entry > exit) { visible = false; break; }
+    }
+    if (!visible || exit - entry <= 1e-12) {
+      flush();
+      continue;
+    }
+    const clippedStart = { x: start.x + dx * entry, y: start.y + dy * entry };
+    const clippedEnd = { x: start.x + dx * exit, y: start.y + dy * exit };
+    const previous = active.at(-1);
+    if (!previous || !samePoint(previous, clippedStart)) {
+      flush();
+      active = [clippedStart];
+    }
+    if (!samePoint(active.at(-1)!, clippedEnd)) active.push(clippedEnd);
+  }
+  flush();
+  return result;
+}
+
+function pointKey(point: Point2D, toleranceMm = 1e-4): string {
+  return `${Math.round(point.x / toleranceMm)},${Math.round(point.y / toleranceMm)}`;
+}
+
+// Once tile buffers are removed, join matching road pieces at unambiguous
+// degree-two endpoints. This keeps offset normals continuous around bends while
+// preserving real forks and intersections as separate branches.
+export function stitchTransportationMarkings(markings: MarkingFeature[]): MarkingFeature[] {
+  const transportation = markings.filter((marking) => marking.transportationClass && marking.points.length > 1);
+  const other = markings.filter((marking) => !marking.transportationClass || marking.points.length < 2);
+  const groups = new Map<string, MarkingFeature[]>();
+  for (const marking of transportation) {
+    const key = `${marking.kind}\u0000${marking.transportationClass}\u0000${marking.label ?? ""}`;
+    groups.set(key, [...(groups.get(key) ?? []), marking]);
+  }
+  const stitched: MarkingFeature[] = [];
+  for (const features of groups.values()) {
+    const unique: MarkingFeature[] = [];
+    const paths = new Set<string>();
+    for (const feature of features) {
+      const forward = feature.points.map((point) => pointKey(point)).join(";");
+      const reverse = [...feature.points].reverse().map((point) => pointKey(point)).join(";");
+      const key = forward < reverse ? forward : reverse;
+      if (!paths.has(key)) { paths.add(key); unique.push(feature); }
+    }
+    const endpoints = new Map<string, Set<number>>();
+    unique.forEach((feature, index) => {
+      for (const point of [feature.points[0]!, feature.points.at(-1)!]) {
+        const key = pointKey(point);
+        const owners = endpoints.get(key) ?? new Set<number>();
+        owners.add(index);
+        endpoints.set(key, owners);
+      }
+    });
+    const used = new Set<number>();
+    unique.forEach((feature, featureIndex) => {
+      if (used.has(featureIndex)) return;
+      used.add(featureIndex);
+      const points = [...feature.points];
+      let extended = true;
+      while (extended) {
+        extended = false;
+        for (const atStart of [false, true]) {
+          const shared = atStart ? points[0]! : points.at(-1)!;
+          const owners = endpoints.get(pointKey(shared));
+          if (owners?.size !== 2) continue;
+          const nextIndex = [...owners].find((index) => !used.has(index));
+          if (nextIndex === undefined) continue;
+          const next = unique[nextIndex]!;
+          const sharesNextStart = pointKey(next.points[0]!) === pointKey(shared);
+          const oriented = sharesNextStart ? [...next.points] : [...next.points].reverse();
+          if (atStart) points.unshift(...oriented.reverse().slice(0, -1));
+          else points.push(...oriented.slice(1));
+          used.add(nextIndex);
+          extended = true;
+          break;
+        }
+      }
+      stitched.push({ ...feature, points });
+    });
+  }
+  return [...stitched, ...other];
 }
 
 // Terrarium tiles must be decoded to elevations at native resolution before any
@@ -124,17 +257,25 @@ async function loadElevation(window: TileWindow, signal?: AbortSignal): Promise<
       max = Math.max(max, elevation);
     }
   }
-  return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+protomaps-20260819-z11-v1" };
+  return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+protomaps-20260819-z12-v1" };
 }
 
 export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<MarkingFeature[]> {
   const header = await vectorArchive.getHeader();
   signal?.throwIfAborted();
-  const window = tileWindow(bounds, Math.max(header.minZoom, Math.min(header.maxZoom, Math.round(requestedZoom))));
-  const markings: MarkingFeature[] = [];
-  await Promise.all(window.tiles.map(async (tile) => {
+  let vectorZoom = Math.max(header.minZoom, Math.min(header.maxZoom, Math.round(requestedZoom) + 1));
+  let window: TileWindow;
+  while (true) {
+    try { window = tileWindow(bounds, vectorZoom); break; }
+    catch (error) {
+      if (vectorZoom <= header.minZoom || !(error instanceof Error) || !error.message.includes("too large")) throw error;
+      vectorZoom -= 1;
+    }
+  }
+  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<MarkingFeature[]> => {
+    const markings: MarkingFeature[] = [];
     const response = await vectorArchive.getZxy(tile.z, tile.x, tile.y, signal);
-    if (!response) return;
+    if (!response) return markings;
     const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
     for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
       const lowered = layerName.toLowerCase();
@@ -144,17 +285,24 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
       for (let featureIndex = 0; featureIndex < layer.length && markings.length < 1800; featureIndex += 1) {
         const feature = layer.feature(featureIndex);
         if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
+        const transportationClass = isRoad ? classifyTransportation(feature.properties as Record<string, unknown>) : undefined;
+        if (isRoad && !transportationClass) continue;
+        const label = isRoad ? transportationLabel(feature.properties as Record<string, unknown>) : undefined;
         feature.loadGeometry().forEach((line, lineIndex) => {
-          if (line.length < 2 || markings.length >= 1800) return;
-          markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}`, kind: isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", points: line.map((point) => ({
-            x: (((tile.x + point.x / feature.extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
-            y: (((tile.y + point.y / feature.extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
-          })) });
+          const lines = isRoad ? clipVectorTileLine(line, feature.extent) : [line];
+          lines.forEach((clippedLine, clippedIndex) => {
+            if (clippedLine.length < 2 || markings.length >= 1800) return;
+            markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}-${clippedIndex}`, kind: transportationClass === "trail" ? "trail" : isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", ...(transportationClass ? { transportationClass } : {}), ...(label ? { label } : {}), points: clippedLine.map((point) => ({
+              x: (((tile.x + point.x / feature.extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
+              y: (((tile.y + point.y / feature.extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
+            })) });
+          });
         });
       }
     }
+    return markings;
   }));
-  return markings;
+  return stitchTransportationMarkings(perTile.flat().slice(0, 1800));
 }
 
 function groundWidthM(bounds: GeoBounds): number {
@@ -175,7 +323,7 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
   const zoom = Math.max(0, Math.min(15, Math.round(config.location.zoom)));
   try {
     const window = tileWindow(bounds, zoom);
-    const vectorRequested = config.showRoads || config.showWater;
+    const vectorRequested = config.showRoads || config.showTrails || config.showWater;
     const [{ elevation, imagerySources, datasetVersion }, vector] = await Promise.all([
       loadElevation(window, signal),
       vectorRequested
@@ -191,7 +339,7 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
   } catch (error) {
     if (signal?.aborted) throw error;
     const source = createSyntheticSource({ ...config, location: { ...config.location, bounds } });
-    return { source: { ...source, vectorStatus: config.showRoads || config.showWater ? "unavailable" : "not-requested" }, fallback: true };
+    return { source: { ...source, vectorStatus: config.showRoads || config.showTrails || config.showWater ? "unavailable" : "not-requested" }, fallback: true };
   }
 }
 

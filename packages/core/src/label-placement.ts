@@ -76,25 +76,30 @@ function footprintBounds(footprint: Point2D[]): Bounds2D {
   return ringBounds(footprint);
 }
 
+function pathsIntersect(left: Point2D[], right: Point2D[]): boolean {
+  for (let leftIndex = 0; leftIndex < left.length - 1; leftIndex += 1) {
+    for (let rightIndex = 0; rightIndex < right.length - 1; rightIndex += 1) {
+      if (segmentsIntersect(left[leftIndex]!, left[leftIndex + 1]!, right[rightIndex]!, right[rightIndex + 1]!)) return true;
+    }
+  }
+  return false;
+}
+
 function footprintIntersectsPolygons(footprint: Point2D[], polygons: Polygon2D[]): boolean {
   return polygons.some((polygon) => {
     if (footprint.slice(0, -1).some((point) => pointInPolygon(point, polygon))) return true;
     if (polygon.outer.slice(0, -1).some((point) => pointInRing(point, footprint))) return true;
-    const rings = [polygon.outer, ...polygon.holes];
-    for (let footprintIndex = 0; footprintIndex < footprint.length - 1; footprintIndex += 1) {
-      const start = footprint[footprintIndex];
-      const end = footprint[footprintIndex + 1];
-      if (!start || !end) continue;
-      for (const ring of rings) {
-        for (let ringIndex = 0; ringIndex < ring.length - 1; ringIndex += 1) {
-          const ringStart = ring[ringIndex];
-          const ringEnd = ring[ringIndex + 1];
-          if (ringStart && ringEnd && segmentsIntersect(start, end, ringStart, ringEnd)) return true;
-        }
-      }
-    }
-    return false;
+    return [polygon.outer, ...polygon.holes].some((ring) => pathsIntersect(footprint, ring));
   });
+}
+
+function markingIntersectsFootprint(marking: LayerIR["markings"][number], footprint: Point2D[]): boolean {
+  if (marking.label && marking.points[0]) {
+    const other = labelFootprint(marking.label, marking.points[0], marking.labelRotationRad ?? 0, marking.textStyle ?? DEFAULT_TEXT_STYLE);
+    if (other.slice(0, -1).some((point) => pointInRing(point, footprint)) || footprint.slice(0, -1).some((point) => pointInRing(point, other))) return true;
+    if (pathsIntersect(other, footprint)) return true;
+  }
+  return marking.points.some((point) => pointInRing(point, footprint)) || pathsIntersect(marking.points, footprint);
 }
 
 export function markingIntersectsBounds(marking: LayerIR["markings"][number], bounds: Bounds2D): boolean {
@@ -145,6 +150,69 @@ export function placeLabel(label: string, config: ProjectConfigV1, polygons: Pol
 export interface ElevationLabelPlacement {
   point: Point2D;
   rotationRad: number;
+}
+
+export interface LinearLabelPlacement extends ElevationLabelPlacement {}
+
+function pointAlongPolyline(points: Point2D[], cumulative: number[], distance: number): Point2D {
+  const total = cumulative.at(-1) ?? 0;
+  const target = Math.max(0, Math.min(total, distance));
+  for (let index = 0; index < cumulative.length - 1; index += 1) {
+    const startDistance = cumulative[index]!;
+    const endDistance = cumulative[index + 1]!;
+    if (target <= endDistance || index === cumulative.length - 2) {
+      const start = points[index]!;
+      const end = points[index + 1]!;
+      return pointAt(start, end, endDistance > startDistance ? (target - startDistance) / (endDistance - startDistance) : 0);
+    }
+  }
+  return points.at(-1)!;
+}
+
+/** Places a straight vector label beside the longest usable portion of a line. */
+export function placeLinearLabel(label: string, config: ProjectConfigV1, layer: LayerIR, polylines: Point2D[][], excludedPolygons: Polygon2D[] = []): LinearLabelPlacement | undefined {
+  const dimensions = labelDimensions(label, config.textStyle);
+  const requiredSpan = dimensions.width + 2;
+  const candidates = polylines.flatMap((points) => {
+    if (points.length < 2) return [];
+    const cumulative = [0];
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const start = points[index]!;
+      const end = points[index + 1]!;
+      cumulative.push(cumulative.at(-1)! + Math.hypot(end.x - start.x, end.y - start.y));
+    }
+    const total = cumulative.at(-1)!;
+    if (total < requiredSpan) return [];
+    return [0.5, 0.35, 0.65, 0.2, 0.8].flatMap((fraction) => {
+      const centerDistance = total * fraction;
+      if (centerDistance < requiredSpan / 2 || total - centerDistance < requiredSpan / 2) return [];
+      const start = pointAlongPolyline(points, cumulative, centerDistance - requiredSpan / 2);
+      const end = pointAlongPolyline(points, cumulative, centerDistance + requiredSpan / 2);
+      const length = Math.hypot(end.x - start.x, end.y - start.y);
+      // A very curved span would make a straight engraved label misleading and
+      // may cross back over the road. Gentle multi-segment bends are allowed.
+      if (length < dimensions.width + 1) return [];
+      return [{ start, end, length, routeLength: total }];
+    });
+  }).sort((left, right) => right.routeLength - left.routeLength || right.length - left.length || left.start.y - right.start.y || left.start.x - right.start.x);
+
+  for (const { start, end, length } of candidates) {
+    let rotationRad = Math.atan2(end.y - start.y, end.x - start.x);
+    if (rotationRad > Math.PI / 2 || rotationRad < -Math.PI / 2) rotationRad += rotationRad > 0 ? -Math.PI : Math.PI;
+    const center = pointAt(start, end, 0.5);
+    const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
+    const offset = dimensions.height + 2;
+    for (const side of [1, -1]) {
+      const labelCenter = { x: center.x + normal.x * offset * side, y: center.y + normal.y * offset * side };
+      const point = labelOriginAtCenter(label, labelCenter, rotationRad, config.textStyle);
+      const footprint = labelFootprint(label, point, rotationRad, config.textStyle);
+      if (!layer.polygons.some((polygon) => ringFitsInsidePolygon(footprint, polygon, 0))) continue;
+      if (footprintIntersectsPolygons(footprint, excludedPolygons)) continue;
+      if (layer.markings.some((marking) => markingIntersectsFootprint(marking, footprint))) continue;
+      return { point, rotationRad };
+    }
+  }
+  return undefined;
 }
 
 interface ElevationLabelCandidate extends ElevationLabelPlacement {

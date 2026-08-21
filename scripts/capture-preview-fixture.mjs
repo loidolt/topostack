@@ -5,8 +5,13 @@ import { PMTiles } from "pmtiles";
 import Pbf from "pbf";
 
 const API_BASE = "https://topostack.loidolt.space";
+const VECTOR_ARCHIVE_URL = "https://build.protomaps.com/20260819.pmtiles";
 const OUTPUT = new URL("../apps/generator/src/sample-preview.generated.ts", import.meta.url);
 const TILE_SIZE = 256;
+const MAJOR_ROAD_DETAILS = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"]);
+const LOCAL_ROAD_DETAILS = new Set(["tertiary", "tertiary_link", "residential", "service", "unclassified", "road", "raceway", "driveway", "parking_aisle", "alley", "drive-through", "emergency_access"]);
+const TRAIL_DETAILS = new Set(["pedestrian", "track", "path", "cycleway", "bridleway", "steps", "corridor", "sidewalk", "crossing"]);
+const EXCLUDED_TRANSPORT_KINDS = new Set(["rail", "aerialway", "ferry", "pier", "aeroway"]);
 const zoom = 11;
 const config = { widthMm: 300, heightMm: 200, lat: 42.9446, lon: -122.109 };
 
@@ -84,7 +89,7 @@ const elevation = await page.evaluate(async ({ apiBase, tiles, westX, eastX, nor
 }, { apiBase: API_BASE, tiles, westX, eastX, northY, southY, tileSize: TILE_SIZE });
 await browser.close();
 
-function simplify(points, minimumDistance = 1.25) {
+function simplify(points, minimumDistance = 3) {
   if (points.length <= 2) return points;
   const output = [points[0]];
   let previous = points[0];
@@ -98,9 +103,19 @@ function simplify(points, minimumDistance = 1.25) {
   return output;
 }
 
-const archive = new PMTiles(`${API_BASE}/v1/osm.pmtiles`);
+function classifyTransportation(properties) {
+  const kind = typeof properties.kind === "string" ? properties.kind : "";
+  const detail = typeof properties.kind_detail === "string" ? properties.kind_detail : "";
+  if (EXCLUDED_TRANSPORT_KINDS.has(kind)) return undefined;
+  if (kind === "path" || TRAIL_DETAILS.has(detail)) return "trail";
+  if (kind === "highway" || kind === "major_road" || MAJOR_ROAD_DETAILS.has(detail)) return "major-road";
+  if (kind === "minor_road" || LOCAL_ROAD_DETAILS.has(detail)) return "local-road";
+  return undefined;
+}
+
+const archive = new PMTiles(VECTOR_ARCHIVE_URL);
 const header = await archive.getHeader();
-const vectorZoom = Math.max(header.minZoom, Math.min(header.maxZoom, zoom));
+const vectorZoom = Math.max(header.minZoom, Math.min(header.maxZoom, zoom + 1));
 const vectorScale = TILE_SIZE * 2 ** vectorZoom;
 const vectorWestX = ((bounds.west + 180) / 360) * vectorScale;
 const vectorEastX = ((bounds.east + 180) / 360) * vectorScale;
@@ -120,6 +135,9 @@ for (let y = Math.floor(vectorNorthY / TILE_SIZE); y <= Math.floor((vectorSouthY
       for (let featureIndex = 0; featureIndex < layer.length && markings.length < 1800; featureIndex += 1) {
         const feature = layer.feature(featureIndex);
         if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
+        const transportationClass = isRoad ? classifyTransportation(feature.properties) : undefined;
+        if (isRoad && !transportationClass) continue;
+        const label = isRoad ? [feature.properties.name, feature.properties.ref, feature.properties.shield_text].find((value) => typeof value === "string" && value.trim())?.trim() : undefined;
         feature.loadGeometry().forEach((line, lineIndex) => {
           if (line.length < 2) return;
           const points = simplify(line.map((point) => ({
@@ -129,16 +147,16 @@ for (let y = Math.floor(vectorNorthY / TILE_SIZE); y <= Math.floor((vectorSouthY
           const xs = points.map((point) => point.x);
           const ys = points.map((point) => point.y);
           if (Math.max(...xs) < -config.widthMm / 2 || Math.min(...xs) > config.widthMm / 2 || Math.max(...ys) < -config.heightMm / 2 || Math.min(...ys) > config.heightMm / 2) return;
-          markings.push({ id: `preview-${layerName}-${feature.id ?? featureIndex}-${x}-${y}-${lineIndex}`, kind: isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", points });
+          markings.push({ id: `preview-${layerName}-${feature.id ?? featureIndex}-${x}-${y}-${lineIndex}`, kind: transportationClass === "trail" ? "trail" : isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", ...(transportationClass ? { transportationClass } : {}), ...(label ? { label } : {}), points });
         });
       }
     }
   }
 }
 
-const selectedMarkings = ["road", "water"].flatMap((kind) => markings
-  .filter((marking) => marking.kind === kind)
-  .toSorted((left, right) => right.points.length - left.points.length)
+const selectedMarkings = ["major-road", "local-road", "trail", "water"].flatMap((category) => markings
+  .filter((marking) => category === "water" ? marking.kind === "water" : marking.transportationClass === category)
+  .toSorted((left, right) => Number(Boolean(right.label)) - Number(Boolean(left.label)) || right.points.length - left.points.length)
   .slice(0, 1));
 const elevationBytes = Buffer.allocUnsafe(elevation.values.length * 2);
 elevation.values.forEach((value, index) => elevationBytes.writeInt16LE(value, index * 2));

@@ -14,7 +14,7 @@ import {
   segmentIntersectionT,
   signedArea,
 } from "./geometry2d.js";
-import { placeElevationLabelStack, placeLabel } from "./label-placement.js";
+import { placeElevationLabelStack, placeLabel, placeLinearLabel } from "./label-placement.js";
 import { offsetClosedRing } from "./offset.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
 import type {
@@ -27,7 +27,13 @@ import type {
   Polygon2D,
   ProjectConfigV1,
   SourceBundleV1,
+  TransportationClass,
 } from "./types.js";
+
+const MAJOR_ROAD_OFFSET_MM = 0.4;
+const TRAIL_DASH_MM = 1.8;
+const TRAIL_GAP_MM = 1.2;
+const TRANSPORTATION_LABEL_LIMIT = 80;
 
 function boundary(config: ProjectConfigV1): Point2D[] {
   const w = config.widthMm / 2;
@@ -139,11 +145,11 @@ function polygonCenter(polygon: Polygon2D, config: ProjectConfigV1): Point2D {
   };
 }
 
-function clipPolyline(points: Point2D[], polygons: Polygon2D[]): Point2D[][] {
+function clipPolyline(points: Point2D[], polygons: Polygon2D[], excludedPolygons: Polygon2D[] = []): Point2D[][] {
   if (points.length < 2) return [];
   const result: Point2D[][] = [];
   let active: Point2D[] = [];
-  const rings = polygons.flatMap((polygon) => [polygon.outer, ...polygon.holes]).map((ring) => ({ ring, bounds: ringBounds(ring) }));
+  const rings = [...polygons, ...excludedPolygons].flatMap((polygon) => [polygon.outer, ...polygon.holes]).map((ring) => ({ ring, bounds: ringBounds(ring) }));
   for (let index = 0; index < points.length - 1; index += 1) {
     const a = points[index];
     const b = points[index + 1];
@@ -168,7 +174,7 @@ function clipPolyline(points: Point2D[], polygons: Polygon2D[]): Point2D[][] {
       const startT = unique[cutIndex]!;
       const endT = unique[cutIndex + 1]!;
       const midpoint = pointAt(a, b, (startT + endT) / 2);
-      if (polygons.some((polygon) => pointInPolygon(midpoint, polygon))) {
+      if (polygons.some((polygon) => pointInPolygon(midpoint, polygon)) && !excludedPolygons.some((polygon) => pointInPolygon(midpoint, polygon))) {
         const start = pointAt(a, b, startT);
         const end = pointAt(a, b, endT);
         const previous = active[active.length - 1];
@@ -185,6 +191,108 @@ function clipPolyline(points: Point2D[], polygons: Polygon2D[]): Point2D[][] {
   }
   if (active.length > 1) result.push(active);
   return result;
+}
+
+function offsetPolyline(points: Point2D[], distanceMm: number): Point2D[] {
+  if (points.length < 2) return [];
+  const segmentNormals = points.slice(0, -1).map((point, index) => {
+    const next = points[index + 1]!;
+    const length = Math.hypot(next.x - point.x, next.y - point.y);
+    return length > 1e-9 ? { x: -(next.y - point.y) / length, y: (next.x - point.x) / length } : { x: 0, y: 0 };
+  });
+  return points.map((point, index) => {
+    const previous = segmentNormals[Math.max(0, index - 1)] ?? { x: 0, y: 0 };
+    const next = segmentNormals[Math.min(segmentNormals.length - 1, index)] ?? previous;
+    const sum = { x: previous.x + next.x, y: previous.y + next.y };
+    const length = Math.hypot(sum.x, sum.y);
+    const normal = length > 1e-6 ? { x: sum.x / length, y: sum.y / length } : next;
+    const dot = Math.max(0.5, Math.abs(normal.x * next.x + normal.y * next.y));
+    const miter = Math.min(Math.abs(distanceMm) / dot, Math.abs(distanceMm) * 2) * Math.sign(distanceMm || 1);
+    return { x: point.x + normal.x * miter, y: point.y + normal.y * miter };
+  });
+}
+
+function dashPolyline(points: Point2D[], dashMm = TRAIL_DASH_MM, gapMm = TRAIL_GAP_MM): Point2D[][] {
+  const result: Point2D[][] = [];
+  let drawing = true;
+  let remaining = dashMm;
+  let active: Point2D[] = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    let start = points[index]!;
+    const end = points[index + 1]!;
+    let segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+    while (segmentLength > 1e-9) {
+      const step = Math.min(remaining, segmentLength);
+      const next = pointAt(start, end, step / segmentLength);
+      if (drawing) {
+        if (!active.length) active.push(start);
+        active.push(next);
+      }
+      start = next;
+      segmentLength -= step;
+      remaining -= step;
+      if (remaining <= 1e-9) {
+        if (drawing && active.length > 1) result.push(active);
+        active = [];
+        drawing = !drawing;
+        remaining = drawing ? dashMm : gapMm;
+      }
+    }
+  }
+  if (drawing && active.length > 1) result.push(active);
+  return result;
+}
+
+function styledTransportationPaths(points: Point2D[], transportationClass: TransportationClass, polygons: Polygon2D[], excludedPolygons: Polygon2D[] = []): Point2D[][] {
+  if (transportationClass === "major-road") {
+    return [-MAJOR_ROAD_OFFSET_MM, MAJOR_ROAD_OFFSET_MM].flatMap((distance) => clipPolyline(offsetPolyline(points, distance), polygons, excludedPolygons));
+  }
+  if (transportationClass === "trail") return dashPolyline(points).flatMap((dash) => clipPolyline(dash, polygons, excludedPolygons));
+  return clipPolyline(points, polygons, excludedPolygons);
+}
+
+function fabricationLabel(value: string): string | undefined {
+  const normalized = value.normalize("NFKD").replace(/\p{M}/gu, "").toUpperCase()
+    .replace(/[^A-Z0-9 .:\/_+\-·]/g, " ").replace(/\s+/g, " ").trim().slice(0, 48);
+  return normalized || undefined;
+}
+
+function polylineLength(points: Point2D[]): number {
+  return points.reduce((total, point, index) => {
+    const next = points[index + 1];
+    return total + (next ? Math.hypot(next.x - point.x, next.y - point.y) : 0);
+  }, 0);
+}
+
+interface TransportationJunction { point: Point2D; arms: number; hasMajorRoad: boolean }
+
+function transportationJunctions(features: MarkingFeature[]): TransportationJunction[] {
+  const junctions = new Map<string, TransportationJunction>();
+  for (const feature of features) {
+    const transportationClass = feature.transportationClass ?? (feature.kind === "road" ? "local-road" : undefined);
+    if (!transportationClass || transportationClass === "trail" || feature.points.length < 2) continue;
+    feature.points.forEach((point, index) => {
+      const key = `${Math.round(point.x * 10)},${Math.round(point.y * 10)}`;
+      const current = junctions.get(key) ?? { point, arms: 0, hasMajorRoad: false };
+      current.arms += index === 0 || index === feature.points.length - 1 ? 1 : 2;
+      current.hasMajorRoad ||= transportationClass === "major-road";
+      junctions.set(key, current);
+    });
+  }
+  return [...junctions.values()].filter((junction) => junction.arms >= 3 && junction.hasMajorRoad)
+    .sort((left, right) => left.point.y - right.point.y || left.point.x - right.point.x);
+}
+
+function junctionRing(center: Point2D): Point2D[] {
+  const points = Array.from({ length: 20 }, (_, index) => {
+    const angle = index / 20 * Math.PI * 2;
+    return { x: center.x + Math.cos(angle) * MAJOR_ROAD_OFFSET_MM, y: center.y + Math.sin(angle) * MAJOR_ROAD_OFFSET_MM };
+  });
+  return [...points, { ...points[0]! }];
+}
+
+function coveringPolygons(layers: LayerIR[], layerIndex: number): Polygon2D[] {
+  return layers.slice(layerIndex + 1).flatMap((layer) => layer.polygons);
 }
 
 function addAlignmentGuides(config: ProjectConfigV1, layers: LayerIR[]): void {
@@ -397,9 +505,9 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   if (![source.bounds.west, source.bounds.south, source.bounds.east, source.bounds.north].every(Number.isFinite) || source.bounds.west >= source.bounds.east || source.bounds.south >= source.bounds.north) throw new Error("Source geographic bounds are invalid.");
 
   const warnings: GeometryIRV1["warnings"] = [];
-  if (source.vectorStatus === "unavailable" && (config.showRoads || config.showWater)) warnings.push({
+  if (source.vectorStatus === "unavailable" && (config.showRoads || config.showTrails || config.showWater)) warnings.push({
     code: "VECTOR_DATA_UNAVAILABLE",
-    message: "Road and water data is unavailable. This project cannot be exported until the map data is restored or those details are disabled.",
+    message: "Transportation and water data is unavailable. This project cannot be exported until the map data is restored or those details are disabled.",
   });
   const relief = grid.max - grid.min;
   if (relief < 20) warnings.push({ code: "LOW_RELIEF", message: "This area has very little elevation change; the layers may look nearly identical." });
@@ -441,18 +549,38 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
   const fabricationNests = addMaterialNests(config, layers);
 
+  const transportationLabels = new Map<string, Array<{ layer: LayerIR; paths: Point2D[][]; transportationClass: TransportationClass; excludedPolygons: Polygon2D[] }>>();
   for (const feature of source.markings) {
-    const enabled = (feature.kind === "road" && config.showRoads) ||
+    const transportationClass = feature.transportationClass ?? (feature.kind === "trail" ? "trail" : feature.kind === "road" ? "local-road" : undefined);
+    const enabled = (transportationClass === "trail" && config.showTrails) ||
+      (transportationClass !== undefined && transportationClass !== "trail" && config.showRoads) ||
       (feature.kind === "water" && config.showWater) ||
       feature.kind === "contour" || feature.kind === "label" || feature.kind === "guide";
     if (!enabled) continue;
+    if (transportationClass) {
+      layers.forEach((layer, layerIndex) => {
+        const excludedPolygons = coveringPolygons(layers, layerIndex);
+        const clipped = clipPolyline(feature.points, layer.polygons, excludedPolygons);
+        styledTransportationPaths(feature.points, transportationClass, layer.polygons, excludedPolygons).forEach((points, styleIndex) => layer.markings.push({
+          id: `${feature.id}-${layer.index}-transport-${styleIndex}`,
+          operation: "engrave",
+          kind: transportationClass === "trail" ? "trail" : "road",
+          transportationClass,
+          points,
+        }));
+        const label = feature.label && config.showTransportationLabels ? fabricationLabel(feature.label) : undefined;
+        if (label && clipped.length) transportationLabels.set(label, [...(transportationLabels.get(label) ?? []), { layer, paths: clipped, transportationClass, excludedPolygons }]);
+      });
+      continue;
+    }
     for (const [segmentIndex, segment] of splitMarking(feature, thresholds, source, config).entries()) {
       const layer = layers[segment.layer];
       if (!layer) continue;
+      const clipped = clipPolyline(segment.points, layer.polygons);
       if (feature.label && segment.points[0] && layer.polygons.some((polygon) => pointInPolygon(segment.points[0]!, polygon))) {
         layer.markings.push({ id: `${feature.id}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label, textStyle: config.textStyle });
       }
-      clipPolyline(segment.points, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
+      clipped.forEach((points, clipIndex) => layer.markings.push({
         id: `${feature.id}-${layer.index}-${segmentIndex}-${clipIndex}`,
         operation: feature.operation,
         kind: feature.kind,
@@ -460,6 +588,21 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       }));
     }
   }
+
+  const enabledRoadFeatures = source.markings.filter((feature) => feature.kind === "road" && config.showRoads);
+  transportationJunctions(enabledRoadFeatures).forEach((junction, junctionIndex) => {
+    const ring = junctionRing(junction.point);
+    layers.forEach((layer, layerIndex) => {
+      const excludedPolygons = coveringPolygons(layers, layerIndex);
+      clipPolyline(ring, layer.polygons, excludedPolygons).forEach((points, clipIndex) => layer.markings.push({
+        id: `road-junction-${junctionIndex}-${layer.index}-${clipIndex}`,
+        operation: "engrave",
+        kind: "road",
+        transportationClass: "major-road",
+        points,
+      }));
+    });
+  });
 
   const baseLayer = layers[0];
   if (baseLayer && config.showNorthArrow) {
@@ -492,6 +635,30 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   }
 
   if (config.showAlignmentGuides) addAlignmentGuides(config, layers);
+
+  let transportationLabelIndex = 0;
+  const labelEntries = [...transportationLabels].sort((left, right) => {
+    const longest = (candidates: (typeof left)[1]) => Math.max(...candidates.flatMap((candidate) => candidate.paths.map(polylineLength)));
+    return longest(right[1]) - longest(left[1]) || left[0].localeCompare(right[0]);
+  }).slice(0, TRANSPORTATION_LABEL_LIMIT);
+  for (const [label, candidates] of labelEntries) {
+    const ordered = [...candidates].sort((left, right) => Math.max(...right.paths.map(polylineLength)) - Math.max(...left.paths.map(polylineLength)));
+    for (const candidate of ordered) {
+      const placement = placeLinearLabel(label, config, candidate.layer, candidate.paths, candidate.excludedPolygons);
+      if (!placement) continue;
+      candidate.layer.markings.push({
+        id: `transport-label-${transportationLabelIndex++}`,
+        operation: "engrave",
+        kind: "label",
+        transportationClass: candidate.transportationClass,
+        points: [placement.point],
+        label,
+        labelRotationRad: placement.rotationRad,
+        textStyle: config.textStyle,
+      });
+      break;
+    }
+  }
 
   if (config.showElevationLabels) {
     const omittedLayers: string[] = [];
@@ -554,6 +721,9 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.cropShape !== "rectangle" && config.cropShape !== "circle") throw new Error("Crop shape must be rectangle or circle.");
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
   if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");
+  for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar })) {
+    if (typeof value !== "boolean") throw new Error(`${label} must be true or false.`);
+  }
   if (config.widthMm <= 0) throw new Error("Project width must be greater than zero.");
   if (config.heightMm <= 0) throw new Error("Project height must be greater than zero.");
   if (!Number.isInteger(config.layerCount) || config.layerCount < 2 || config.layerCount > 24) throw new Error("Layer count must be a whole number between 2 and 24.");

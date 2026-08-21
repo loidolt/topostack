@@ -16,8 +16,8 @@ describe("Atomm export policy", () => {
   it("blocks incomplete requested vector data", () => {
     const result = geometry();
     result.vectorStatus = "unavailable";
-    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/road and water data is unavailable/i);
-    const withoutVectorDetails = { ...DEFAULT_PROJECT, showRoads: false, showWater: false };
+    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/transportation and water data is unavailable/i);
+    const withoutVectorDetails = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false };
     const completeWithoutVectors = generateGeometry(withoutVectorDetails, { ...createSyntheticSource(withoutVectorDetails, 32), sourceKind: "real", vectorStatus: "not-requested" });
     expect(exportBlockReason(completeWithoutVectors, withoutVectorDetails)).toBeUndefined();
   });
@@ -29,6 +29,6 @@ describe("Atomm export policy", () => {
     expect(Array.isArray(studio)).toBe(false);
     expect("filename" in studio && studio.filename.endsWith("-master.svg")).toBe(true);
     expect(Array.isArray(download)).toBe(true);
-    expect(Array.isArray(download) && download.length).toBe(DEFAULT_PROJECT.layerCount - result.fabricationNests.length + 5);
+    expect(Array.isArray(download) && download.length).toBe((DEFAULT_PROJECT.layerCount - result.fabricationNests.length) * 2 + 5);
   });
 });

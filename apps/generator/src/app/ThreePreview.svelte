@@ -139,6 +139,9 @@
       disposeContent(runtime.content);
       const side = new THREE.MeshStandardMaterial({ color: 0x8b6039, roughness: 0.82, metalness: 0, ...SURFACE_DEPTH_BIAS });
       const engraveMaterial = new THREE.LineBasicMaterial({ color: 0x39291d });
+      const majorRoadMaterial = new THREE.LineBasicMaterial({ color: 0x24180f });
+      const localRoadMaterial = new THREE.LineBasicMaterial({ color: 0x62442f });
+      const trailMaterial = new THREE.LineBasicMaterial({ color: 0x8a5e35 });
       const scoreMaterial = new THREE.LineBasicMaterial({ color: 0x365c79 });
       const labelMaterial = new THREE.LineBasicMaterial({ color: 0x21170f });
       activeGeometry.layers.forEach((layer) => {
@@ -155,7 +158,8 @@
         layer.markings.forEach((marking) => {
           if (marking.points.length > 1) {
             const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints(marking.points, 0));
-            addStacked(runtime!.content, new THREE.Line(lineGeometry, marking.operation === "score" ? scoreMaterial : engraveMaterial), layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
+            const material = marking.operation === "score" ? scoreMaterial : marking.transportationClass === "major-road" ? majorRoadMaterial : marking.transportationClass === "local-road" ? localRoadMaterial : marking.transportationClass === "trail" ? trailMaterial : engraveMaterial;
+            addStacked(runtime!.content, new THREE.Line(lineGeometry, material), layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
           }
           if (marking.label && marking.points[0]) {
             const labelGeometry = new THREE.BufferGeometry().setFromPoints(labelPoints(marking.label, marking.points[0], marking.labelRotationRad, marking.textStyle));

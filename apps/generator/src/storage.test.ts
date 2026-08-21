@@ -23,6 +23,8 @@ describe("project import validation", () => {
       laserKerfMm: _legacyLaserKerfMm,
       units: _legacyUnits,
       textStyle: _legacyTextStyle,
+      showTrails: _legacyTrails,
+      showTransportationLabels: _legacyTransportationLabels,
       ...legacyProject
     } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
@@ -33,7 +35,14 @@ describe("project import validation", () => {
       laserKerfMm: 0.15,
       units: "metric",
       textStyle: DEFAULT_PROJECT.textStyle,
+      showTrails: DEFAULT_PROJECT.showRoads,
+      showTransportationLabels: false,
     });
+  });
+  it("validates and restores transportation controls", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, showRoads: false, showTrails: true, showTransportationLabels: true })).toMatchObject({ showRoads: false, showTrails: true, showTransportationLabels: true });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showTrails: "yes" })).toThrow(/showTrails/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showTransportationLabels: "yes" })).toThrow(/showTransportationLabels/i);
   });
   it("validates and restores fabrication typography", () => {
     expect(parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "stencil", sizeMm: 5 } }).textStyle).toEqual({ font: "stencil", sizeMm: 5 });

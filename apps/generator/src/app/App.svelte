@@ -42,7 +42,7 @@
   function featuredLayerIndex(result: GeometryIRV1): number {
     let best = { index: 0, score: -1 };
     result.layers.forEach((layer) => {
-      const score = layer.markings.reduce((total, marking) => total + (marking.kind === "road" || marking.kind === "water" ? 3 : marking.id.startsWith("north-") || marking.id.startsWith("scale-") ? 0 : 1), 0);
+      const score = layer.markings.reduce((total, marking) => total + (marking.kind === "road" || marking.kind === "trail" || marking.kind === "water" ? 3 : marking.id.startsWith("north-") || marking.id.startsWith("scale-") ? 0 : 1), 0);
       if (score > best.score) best = { index: layer.index, score };
     });
     return best.index;
@@ -50,6 +50,8 @@
 
   function layerForEnabledDetail(result: GeometryIRV1, patch: Partial<ProjectConfigV1>): number | undefined {
     const matcher = patch.showRoads ? (id: string, kind: string) => kind === "road" :
+      patch.showTrails ? (id: string, kind: string) => kind === "trail" :
+      patch.showTransportationLabels ? (id: string) => id.startsWith("transport-label-") :
       patch.showWater ? (id: string, kind: string) => kind === "water" :
       patch.showAlignmentGuides ? (id: string) => id.startsWith("alignment-") :
       patch.showElevationLabels ? (id: string) => id.startsWith("elevation-") :
@@ -106,13 +108,15 @@
   const shownLengthUnit = $derived(lengthUnit(project.units));
   const shownElevationUnit = $derived(elevationUnit(project.units));
   const detailCounts = $derived.by(() => {
-    const counts = { road: 0, water: 0, contour: 0, alignment: 0, elevation: 0, north: 0, scale: 0 };
+    const counts = { road: 0, trail: 0, transportationLabel: 0, water: 0, contour: 0, alignment: 0, elevation: 0, north: 0, scale: 0 };
     for (const layer of geometry.layers) {
       for (const marking of layer.markings) {
         if (marking.kind === "road") counts.road += 1;
+        else if (marking.kind === "trail") counts.trail += 1;
         else if (marking.kind === "water") counts.water += 1;
         else if (marking.kind === "contour") counts.contour += 1;
         if (marking.id.startsWith("alignment-")) counts.alignment += 1;
+        else if (marking.id.startsWith("transport-label-")) counts.transportationLabel += 1;
         else if (marking.id.startsWith("elevation-")) counts.elevation += 1;
         else if (marking.id.startsWith("north-")) counts.north += 1;
         else if (marking.id.startsWith("scale-")) counts.scale += 1;
@@ -267,14 +271,14 @@
     status = "Updating map details…";
     try {
       let source = resizeSource(activeSource, sourceProject, nextProject);
-      const needsVectors = nextProject.showRoads || nextProject.showWater;
+      const needsVectors = nextProject.showRoads || nextProject.showTrails || nextProject.showWater;
       if (needsVectors && source.sourceKind !== "synthetic" && source.vectorStatus !== "available") {
         try {
           const markings = await loadVectorMarkings(source.bounds, nextProject.location.zoom, nextProject, controller.signal);
           source = { ...source, markings, vectorStatus: "available" };
         } catch (error) {
           if (controller.signal.aborted) throw error;
-          source = { ...source, markings: source.markings.filter((marking) => marking.kind !== "road" && marking.kind !== "water"), vectorStatus: "unavailable" };
+          source = { ...source, markings: source.markings.filter((marking) => marking.kind !== "road" && marking.kind !== "trail" && marking.kind !== "water"), vectorStatus: "unavailable" };
         }
       }
       const next = await runGeometryWorker(nextProject, source);
@@ -283,7 +287,7 @@
       geometry = next; activeSource = source; sourceProject = nextProject;
       if (generationState === "error") generationState = "ready";
       selectedLayer = layerForEnabledDetail(next, patch) ?? Math.min(selectedLayer, Math.max(0, next.layers.length - 1));
-      status = source.vectorStatus === "unavailable" && needsVectors ? "Map details updated · roads and water unavailable" : source.sourceKind === "preview" ? "Real-data sample preview updated" : source.sourceKind === "real" ? "Map details updated" : "Sample preview updated · generate for real map data";
+      status = source.vectorStatus === "unavailable" && needsVectors ? "Map details updated · transportation and water unavailable" : source.sourceKind === "preview" ? "Real-data sample preview updated" : source.sourceKind === "real" ? "Map details updated" : "Sample preview updated · generate for real map data";
     } catch (error) {
       if (controller.signal.aborted || revision !== operationRevision || (error instanceof DOMException && error.name === "AbortError")) return;
       generationState = "error";
@@ -334,8 +338,8 @@
       if (loaded.fallback) next.warnings.push({ code: "DATA_FALLBACK", message: "The map service was unavailable, so this preview uses deterministic sample terrain." });
       if (controller.signal.aborted || revision !== operationRevision) return;
       geometry = next; project = generationProject; activeSource = loaded.source; sourceProject = generationProject; selectedLayer = featuredLayerIndex(next); mode = "3d"; generationState = "ready";
-      const vectorUnavailable = next.vectorStatus === "unavailable" && (generationProject.showRoads || generationProject.showWater);
-      status = loaded.fallback ? "Sample terrain generated · connect the map API for real elevation" : vectorUnavailable ? "Terrain ready · roads and water unavailable" : `Real terrain ready · ${next.layers.length} layers · ${next.layers.length - next.fabricationNests.length} cut panels`;
+      const vectorUnavailable = next.vectorStatus === "unavailable" && (generationProject.showRoads || generationProject.showTrails || generationProject.showWater);
+      status = loaded.fallback ? "Sample terrain generated · connect the map API for real elevation" : vectorUnavailable ? "Terrain ready · transportation and water unavailable" : `Real terrain ready · ${next.layers.length} layers · ${next.layers.length - next.fabricationNests.length} cut panels`;
       void showToast({ type: loaded.fallback || vectorUnavailable ? "warning" : "success", message: loaded.fallback ? "Preview generated with sample terrain" : vectorUnavailable ? "Terrain generated without roads or water" : "Terrain project ready" });
     } catch (error) {
       if (revision !== operationRevision) return;
@@ -415,7 +419,9 @@
           <div class="relief-summary"><Mountain size={20} /><span><strong>{Math.round(displayElevation(geometry.maxElevationM - geometry.minElevationM, project.units)).toLocaleString()} {shownElevationUnit} relief</strong><small>≈ {Math.round(displayElevation((geometry.maxElevationM - geometry.minElevationM) / Math.max(1, project.layerCount - 1), project.units))} {shownElevationUnit} per layer</small></span></div>
         </Section>
         <Section class="config-section"><div class="section-kicker"><span>03</span> Map details</div><div class="toggle-stack">
-          <Switch checked={project.showRoads} onCheckedChange={(showRoads) => void updateMapDetails({ showRoads })} aria-label="Roads & trails"><span class="toggle-label"><Minus size={16} />Roads & trails</span></Switch>
+          <Switch checked={project.showRoads} onCheckedChange={(showRoads) => void updateMapDetails({ showRoads })} aria-label="Roads"><span class="toggle-label"><Minus size={16} />Roads</span></Switch>
+          <Switch checked={project.showTrails} onCheckedChange={(showTrails) => void updateMapDetails({ showTrails })} aria-label="Trails"><span class="toggle-label"><Minus size={16} />Trails</span></Switch>
+          <Switch checked={project.showTransportationLabels} onCheckedChange={(showTransportationLabels) => void updateMapDetails({ showTransportationLabels })} aria-label="Transportation labels"><span class="toggle-label"><Minus size={16} />Transportation labels</span></Switch>
           <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
           <Switch checked={project.showAlignmentGuides} onCheckedChange={(showAlignmentGuides) => void updateMapDetails({ showAlignmentGuides })} aria-label="Assembly guides"><span class="toggle-label"><Layers3 size={16} />Assembly guides</span></Switch>
           <Switch checked={project.showElevationLabels} onCheckedChange={(showElevationLabels) => void updateMapDetails({ showElevationLabels })} aria-label="Elevation labels"><span class="toggle-label"><Mountain size={16} />Elevation labels</span></Switch>
@@ -461,7 +467,7 @@
 
     <section class="preview-panel">
       <div class="preview-toolbar"><div class="ldt-toggle-group mode-switch" role="radiogroup" aria-label="Preview mode">{#each MODE_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={mode === option.value} data-state={mode === option.value ? "on" : "off"} tabindex={mode === option.value ? 0 : -1} onclick={() => { if (option.value === "2d" && selectedLayer === 0) selectedLayer = featuredLayerIndex(geometry); mode = option.value as PreviewMode; }} onkeydown={navigateChoice}>{#if option.value === "map"}<MapIcon size={15} />{:else if option.value === "2d"}<Layers3 size={15} />{:else}<Box size={15} />{/if}{option.label}</button>{/each}</div><div class="preview-readout"><span>{shownLength(project.widthMm)} × {shownLength(project.heightMm)} {shownLengthUnit}</span><span>{Math.round(displayElevation(geometry.minElevationM, project.units)).toLocaleString()}–{Math.round(displayElevation(geometry.maxElevationM, project.units)).toLocaleString()} {shownElevationUnit}</span></div></div>
-      <div class="preview-stage" data-road-markings={detailCounts.road} data-water-markings={detailCounts.water} data-contour-markings={detailCounts.contour} data-alignment-markings={detailCounts.alignment} data-elevation-markings={detailCounts.elevation} data-north-markings={detailCounts.north} data-scale-markings={detailCounts.scale}>{#if mode === "map"}{#if MapCanvas}<MapCanvas {project} onLocationChange={(lat: number, lon: number, zoom: number, bounds: GeoBounds) => updateLocation({ lat, lon, zoom, bounds, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` })} />{:else}<div class="preview-loading">Loading map…</div>{/if}{:else if mode === "2d"}<TwoDPreview {geometry} {selectedLayer} />{:else if ThreePreview}<ThreePreview {geometry} exploded={project.explodedPreview} />{:else}<div class="preview-loading">Loading 3D preview…</div>{/if}{#if mode !== "map"}<div class="preview-attribution">Map data © <a href={OSM_ATTRIBUTION.url} target="_blank" rel="noreferrer">{OSM_ATTRIBUTION.name}</a></div>{/if}{#if generationState === "loading"}<div class="generation-overlay"><div class="contour-loader"><span></span><span></span><span></span></div><strong>Building your terrain</strong><small>{status}</small></div>{/if}{#if visibleWarnings.length}<div class="warning-stack">{#each visibleWarnings as warning (`${warning.code}-${warning.message}`)}<div><span>!</span>{warning.message}</div>{/each}</div>{/if}</div>
+      <div class="preview-stage" data-road-markings={detailCounts.road} data-trail-markings={detailCounts.trail} data-transportation-label-markings={detailCounts.transportationLabel} data-water-markings={detailCounts.water} data-contour-markings={detailCounts.contour} data-alignment-markings={detailCounts.alignment} data-elevation-markings={detailCounts.elevation} data-north-markings={detailCounts.north} data-scale-markings={detailCounts.scale}>{#if mode === "map"}{#if MapCanvas}<MapCanvas {project} onLocationChange={(lat: number, lon: number, zoom: number, bounds: GeoBounds) => updateLocation({ lat, lon, zoom, bounds, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` })} />{:else}<div class="preview-loading">Loading map…</div>{/if}{:else if mode === "2d"}<TwoDPreview {geometry} {selectedLayer} />{:else if ThreePreview}<ThreePreview {geometry} exploded={project.explodedPreview} />{:else}<div class="preview-loading">Loading 3D preview…</div>{/if}{#if mode !== "map"}<div class="preview-attribution">Map data © <a href={OSM_ATTRIBUTION.url} target="_blank" rel="noreferrer">{OSM_ATTRIBUTION.name}</a></div>{/if}{#if generationState === "loading"}<div class="generation-overlay"><div class="contour-loader"><span></span><span></span><span></span></div><strong>Building your terrain</strong><small>{status}</small></div>{/if}{#if visibleWarnings.length}<div class="warning-stack">{#each visibleWarnings as warning (`${warning.code}-${warning.message}`)}<div><span>!</span>{warning.message}</div>{/each}</div>{/if}</div>
       <div class="layer-dock"><div class="layer-heading"><span><Layers3 size={16} /><b>Layer {selectedLayer + 1}</b> of {geometry.layers.length}</span><strong>{layerTicks[selectedLayer]?.toLocaleString()} {shownElevationUnit}</strong></div><input class="layer-range" type="range" min="0" max={Math.max(0, geometry.layers.length - 1)} value={selectedLayer} oninput={(event) => { selectedLayer = Number(event.currentTarget.value); if (mode === "3d") mode = "2d"; }} /><div class="layer-scale"><span>{layerTicks[0]?.toLocaleString()} {shownElevationUnit}</span><span>{layerTicks[Math.floor(layerTicks.length / 2)]?.toLocaleString()} {shownElevationUnit}</span><span>{layerTicks.at(-1)?.toLocaleString()} {shownElevationUnit}</span></div>{#if mode === "3d"}<label class="explode-control"><span>Stack</span><input type="range" min="0" max="1" step="0.05" value={project.explodedPreview} oninput={(event) => updateProject({ explodedPreview: Number(event.currentTarget.value) })} /><span>Exploded</span></label>{/if}</div>
     </section>
   </Workspace>

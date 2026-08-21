@@ -14,12 +14,13 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
   await expect(page.getByText("Generate before export")).toBeVisible();
   await expect(page.getByRole("button", { name: "Download SVG" })).toBeDisabled();
   await page.getByRole("radio", { name: /Cut layers/ }).click();
-  await expect(page.locator(".layer-heading")).toContainText("Layer 6");
+  await expect(page.locator(".layer-heading")).toContainText(/Layer \d+.*of 10/);
   await expect(page.locator('[data-marking-kind="road"]')).not.toHaveCount(0);
   await page.getByRole("radio", { name: /3D stack/ }).click();
   const preview = page.locator(".preview-stage");
   const mapDetails = [
-    ["Roads & trails", "data-road-markings"],
+    ["Roads", "data-road-markings"],
+    ["Trails", "data-trail-markings"],
     ["Water outlines", "data-water-markings"],
     ["Assembly guides", "data-alignment-markings"],
     ["Elevation labels", "data-elevation-markings"],
@@ -31,11 +32,15 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
     await expect.poll(async () => Number(await preview.getAttribute(attribute))).toBeGreaterThan(0);
     await row.click();
     await expect(row).not.toBeChecked();
-    await expect(preview).toHaveAttribute(attribute, "0");
+    await expect(preview).toHaveAttribute(attribute, "0", { timeout: 15_000 });
     await row.click();
     await expect(row).toBeChecked();
-    await expect.poll(async () => Number(await preview.getAttribute(attribute))).toBeGreaterThan(0);
+    await expect.poll(async () => Number(await preview.getAttribute(attribute)), { timeout: 15_000 }).toBeGreaterThan(0);
   }
+  const transportationLabels = page.getByRole("switch", { name: "Transportation labels" });
+  await expect(transportationLabels).not.toBeChecked();
+  await transportationLabels.click();
+  await expect(transportationLabels).toBeChecked();
   await expect(page.getByRole("switch", { name: "Assembly guides" })).toBeChecked();
   await page.getByRole("spinbutton", { name: "Width", exact: true }).fill("1200");
   await expect(page.locator(".status-line")).toContainText("updated");

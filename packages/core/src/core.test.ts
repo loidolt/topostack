@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayLength, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, millimetersFromDisplay, MM_PER_INCH, projectFingerprint, validateProject, type ProjectConfigV1, type SourceBundleV1 } from "./index.js";
-import { placeElevationLabel } from "./label-placement.js";
+import { placeElevationLabel, placeLinearLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
   return { ...createSyntheticSource(project, 48), sourceKind: "real" as const, imagerySources: ["srtm/N46W122.tif"] };
@@ -161,12 +161,12 @@ describe("TopoStack geometry", () => {
     expect(svg).not.toContain("<text");
     const donorLayer = result.layers[result.fabricationNests[0]!.donorLayerIndex]!;
     const nestedSvg = layerToSvg(result, donorLayer);
-    const cutGroup = nestedSvg.match(/data-operation="CUT"[^>]*>(.*?)<\/g>/)?.[1] ?? "";
+    const cutGroup = nestedSvg.slice(nestedSvg.indexOf('data-operation="CUT"'));
     const cutPathData = [...cutGroup.matchAll(/<path[^>]* d="([^"]+)"/g)].map((match) => match[1] ?? "");
     expect(cutPathData.length).toBeGreaterThan(1);
     expect(cutPathData.every((data) => (data.match(/M/g) ?? []).length === 1)).toBe(true);
     const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
-    expect(fabrication.files).toHaveLength(DEFAULT_PROJECT.layerCount - result.fabricationNests.length + 5);
+    expect(fabrication.files).toHaveLength((DEFAULT_PROJECT.layerCount - result.fabricationNests.length) * 2 + 5);
     expect(await fabrication.master.blob.text()).toContain("master layout");
   });
 
@@ -176,7 +176,7 @@ describe("TopoStack geometry", () => {
     const real = generateGeometry(DEFAULT_PROJECT, realSource());
     expect(() => buildFabricationPackage(real, { ...DEFAULT_PROJECT, widthMm: 301 })).toThrow(/settings changed/i);
     real.vectorStatus = "unavailable";
-    expect(() => buildFabricationPackage(real, DEFAULT_PROJECT)).toThrow(/road and water data is unavailable/i);
+    expect(() => buildFabricationPackage(real, DEFAULT_PROJECT)).toThrow(/transportation and water data is unavailable/i);
   });
 
   it("records unavailable requested vector data as a geometry warning", () => {
@@ -190,8 +190,8 @@ describe("TopoStack geometry", () => {
     const svg = masterToSvg(generateGeometry(DEFAULT_PROJECT, realSource()));
     const ids = [...svg.matchAll(/ id="([^"]+)"/g)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
-    const cutPaths = [...svg.matchAll(/data-operation="CUT"[^>]*>(.*?)<\/g>/g)]
-      .flatMap((group) => [...(group[1] ?? "").matchAll(/<path[^>]* d="([^"]+)"/g)].map((path) => path[1] ?? ""));
+    const cutGroup = svg.slice(svg.indexOf('data-operation="CUT"'));
+    const cutPaths = [...cutGroup.matchAll(/<path[^>]* d="([^"]+)"/g)].map((path) => path[1] ?? "");
     expect(cutPaths.length).toBeGreaterThanOrEqual(DEFAULT_PROJECT.layerCount);
     expect(cutPaths.every((data) => (data.match(/M/g) ?? []).length === 1)).toBe(true);
   });
@@ -204,6 +204,82 @@ describe("TopoStack geometry", () => {
     const crossing = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("crossing"));
     expect(crossing.length).toBeGreaterThan(0);
     expect(crossing.flatMap((marking) => marking.points).every((point) => Math.hypot(point.x, point.y) <= 100.001)).toBe(true);
+  });
+
+  it("turns transportation classes into durable physical engraving patterns", () => {
+    const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const source = realSource(project);
+    source.markings = [
+      { id: "major", kind: "road", transportationClass: "major-road", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: -30 }, { x: 100, y: -30 }] },
+      { id: "local", kind: "road", transportationClass: "local-road", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: 0 }, { x: 100, y: 0 }] },
+      { id: "trail", kind: "trail", transportationClass: "trail", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: 30 }, { x: 100, y: 30 }] },
+    ];
+    const markings = generateGeometry(project, source).layers.flatMap((layer) => layer.markings);
+    const major = markings.filter((marking) => marking.id.startsWith("major-") && marking.points.length > 1);
+    expect(major.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(major.flatMap((marking) => marking.points.map((point) => point.y.toFixed(3))))).toEqual(new Set(["-30.400", "-29.600"]));
+    expect(markings.filter((marking) => marking.id.startsWith("local-") && marking.points.length > 1).length).toBeGreaterThanOrEqual(1);
+    const trail = markings.filter((marking) => marking.id.startsWith("trail-") && marking.points.length > 1);
+    expect(trail.length).toBeGreaterThan(20);
+    expect(trail.every((marking) => Math.hypot(marking.points.at(-1)!.x - marking.points[0]!.x, marking.points.at(-1)!.y - marking.points[0]!.y) <= 1.801)).toBe(true);
+  });
+
+  it("keeps roads continuous at exact terrain-layer transitions", () => {
+    const project = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, layerCount: 5, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const source = gridSource(project, 64, (nx, ny) => 1000 - 500 * Math.hypot(nx, ny));
+    source.markings = [{ id: "ridge-road", kind: "road", transportationClass: "local-road", operation: "engrave", points: [{ x: -90, y: 0 }, { x: 0, y: 0 }, { x: 90, y: 0 }] }];
+    const markings = generateGeometry(project, source).layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("ridge-road-") && marking.points.length > 1);
+    for (let x = -89; x <= 89; x += 1) {
+      const distance = Math.min(...markings.flatMap((marking) => marking.points.slice(0, -1).map((start, index) => distanceToSegment({ x, y: 0 }, start, marking.points[index + 1]!))));
+      expect(distance).toBeLessThan(0.02);
+    }
+  });
+
+  it("joins double-line major roads cleanly at forks", () => {
+    const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const source = realSource(project);
+    source.markings = [
+      { id: "fork-main", kind: "road", transportationClass: "major-road", operation: "engrave", points: [{ x: -80, y: 0 }, { x: 0, y: 0 }, { x: 80, y: 0 }] },
+      { id: "fork-branch", kind: "road", transportationClass: "major-road", operation: "engrave", points: [{ x: 0, y: 0 }, { x: 0, y: 80 }] },
+    ];
+    const joins = generateGeometry(project, source).layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("road-junction-"));
+    expect(joins.length).toBeGreaterThan(0);
+    expect(joins.flatMap((marking) => marking.points).every((point) => Math.abs(Math.hypot(point.x, point.y) - 0.4) < 1e-6)).toBe(true);
+  });
+
+  it("independently controls trails and deduplicated transportation labels", () => {
+    const project = { ...DEFAULT_PROJECT, showTransportationLabels: true, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const source = realSource(project);
+    source.markings = [
+      { id: "road-a", kind: "road", transportationClass: "local-road", operation: "engrave", elevationM: source.elevation.min, label: "Café Road", points: [{ x: -120, y: -35 }, { x: 120, y: -35 }] },
+      { id: "road-b", kind: "road", transportationClass: "local-road", operation: "engrave", elevationM: source.elevation.min, label: "Café Road", points: [{ x: -120, y: 35 }, { x: 120, y: 35 }] },
+      { id: "trail", kind: "trail", transportationClass: "trail", operation: "engrave", elevationM: source.elevation.min, label: "Rim Trail", points: [{ x: -120, y: 0 }, { x: 120, y: 0 }] },
+    ];
+    const result = generateGeometry({ ...project, showTrails: false }, source);
+    const markings = result.layers.flatMap((layer) => layer.markings);
+    expect(markings.some((marking) => marking.kind === "trail")).toBe(false);
+    expect(markings.filter((marking) => marking.id.startsWith("transport-label-")).map((marking) => marking.label)).toEqual(["CAFE ROAD"]);
+    const labelLayer = result.layers.find((layer) => layer.markings.some((marking) => marking.id.startsWith("transport-label-")))!;
+    expect(layerToSvg(result, labelLayer)).toContain("ENGRAVE-transport-labels");
+  });
+
+  it("places road labels across continuous multi-segment bends", () => {
+    const points = Array.from({ length: 25 }, (_, index) => ({
+      x: -60 + index * 5,
+      y: index * 0.35 + Math.sin(index / 5) * 1.2,
+    }));
+    const layer = {
+      id: "layer-01",
+      index: 0,
+      elevationM: 0,
+      materialThicknessMm: 3,
+      polygons: [{ outer: [{ x: -100, y: -100 }, { x: 100, y: -100 }, { x: 100, y: 100 }, { x: -100, y: 100 }, { x: -100, y: -100 }], holes: [] }],
+      markings: [{ id: "segmented-road", operation: "engrave" as const, kind: "road" as const, transportationClass: "local-road" as const, points }],
+    };
+    expect(Math.max(...points.slice(0, -1).map((point, index) => Math.hypot(points[index + 1]!.x - point.x, points[index + 1]!.y - point.y)))).toBeLessThan(labelDimensions("BEND ROAD").width);
+    const placement = placeLinearLabel("BEND ROAD", { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200 }, layer, [points]);
+    expect(placement).toBeDefined();
+    expect(Math.abs(placement!.rotationRad)).toBeLessThan(0.2);
   });
 
   it("keeps marking ids unique when one feature re-enters an elevation layer", () => {
@@ -338,17 +414,25 @@ describe("TopoStack geometry", () => {
       }
     }
     const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
-    const panelFiles = fabrication.files.filter((file) => file.filename.endsWith(".svg") && !file.filename.endsWith("master.svg") && !file.filename.endsWith("assembly-guide.svg"));
+    const panelFiles = fabrication.files.filter((file) => file.filename.endsWith(".svg") && !file.filename.endsWith("-engrave.svg") && !file.filename.endsWith("master.svg") && !file.filename.endsWith("assembly-guide.svg"));
+    const engravingFiles = fabrication.files.filter((file) => file.filename.endsWith("-engrave.svg"));
     expect(panelFiles).toHaveLength(DEFAULT_PROJECT.layerCount - result.fabricationNests.length);
+    expect(engravingFiles).toHaveLength(panelFiles.length);
     expect(panelFiles.some((file) => file.filename.includes("-panel-") && file.filename.includes("-layers-"))).toBe(true);
     expect(await fabrication.master.blob.text()).toContain("data-layers=");
+    const engraving = await engravingFiles[0]!.blob.text();
+    expect(engraving).toContain('id="ENGRAVE" data-operation="ENGRAVE"');
+    expect(engraving).not.toContain('data-operation="CUT"');
+    expect(engraving).not.toContain('data-operation="SCORE"');
+    const manifest = JSON.parse(await fabrication.files.find((file) => file.filename.endsWith("project.json"))!.blob.text());
+    expect(manifest.result.fabrication.panels[0].engravingFilename).toMatch(/-engrave\.svg$/);
   });
 
   it("keeps one fabrication panel per layer when material nesting is disabled", () => {
     const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false };
     const result = generateGeometry(project, realSource(project));
     expect(result.fabricationNests).toEqual([]);
-    expect(buildFabricationPackage(result, project).files).toHaveLength(project.layerCount + 5);
+    expect(buildFabricationPackage(result, project).files).toHaveLength(project.layerCount * 2 + 5);
   });
 
   it("accepts fewer nests as the requested glue margin grows", () => {
