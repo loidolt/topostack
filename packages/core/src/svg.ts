@@ -1,6 +1,8 @@
+import { formatNumber as format } from "./format.js";
 import { projectFingerprint } from "./geometry.js";
 import { labelPathData } from "./labels.js";
 import { offsetClosedRing } from "./offset.js";
+import { displayElevation, displayLength, elevationUnit, lengthUnit } from "./units.js";
 import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, Point2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
@@ -10,10 +12,6 @@ const ENGRAVE = "#111827";
 function safeName(name: string): string {
   const value = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return value || "topostack-project";
-}
-
-function format(value: number): string {
-  return Number(value.toFixed(3)).toString();
 }
 
 function pathData(points: Point2D[], offsetX = 0, offsetY = 0, closePath = false): string {
@@ -37,10 +35,9 @@ function layerGroups(layer: LayerIR, laserKerfMm: number, offsetX = 0, offsetY =
       ]),
     ];
   }).join("");
-  const scorePaths = layer.markings.filter((mark) => mark.operation === "score" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
-  const engravePaths = layer.markings.filter((mark) => mark.operation === "engrave" && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
-  const engraveLabels = layer.markings.filter((mark) => mark.operation === "engrave" && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY)}"/>`).join("");
-  return `<g id="${layer.id}"><g id="${layer.id}-CUT" data-operation="CUT" fill="none" stroke="${CUT}" stroke-width="0.1" fill-rule="evenodd">${cutPaths}</g><g id="${layer.id}-SCORE" data-operation="SCORE" fill="none" stroke="${SCORE}" stroke-width="0.15">${scorePaths}</g><g id="${layer.id}-ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-width="0.2">${engravePaths}${engraveLabels}</g></g>`;
+  const strokePaths = (operation: "score" | "engrave") => layer.markings.filter((mark) => mark.operation === operation && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
+  const labelPaths = (operation: "score" | "engrave") => layer.markings.filter((mark) => mark.operation === operation && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY, mark.labelRotationRad)}"/>`).join("");
+  return `<g id="${layer.id}"><g id="${layer.id}-CUT" data-operation="CUT" fill="none" stroke="${CUT}" stroke-width="0.1" fill-rule="evenodd">${cutPaths}</g><g id="${layer.id}-SCORE" data-operation="SCORE" fill="none" stroke="${SCORE}" stroke-width="0.15">${strokePaths("score")}${labelPaths("score")}</g><g id="${layer.id}-ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-width="0.2">${strokePaths("engrave")}${labelPaths("engrave")}</g></g>`;
 }
 
 function svgDocument(width: number, height: number, body: string, title: string, viewX = -width / 2, viewY = -height / 2): string {
@@ -125,7 +122,7 @@ export function assemblyGuideToSvg(ir: GeometryIRV1): string {
     const paths = layer.polygons.flatMap((polygon) => [polygon.outer, ...polygon.holes]).map((ring) => `<path d="${pathData(ring, offsetX, offsetY, true)}"/>`).join("");
     return `<g transform="scale(${format(scale)}) translate(${format(offsetX / scale - offsetX)} ${format(offsetY / scale - offsetY)})" fill="none" stroke="#33443b" stroke-width="${format(0.25 / scale)}">${paths}</g>`;
   }).join("");
-  const body = `<rect width="210" height="297" fill="#f5f0e7"/><text x="20" y="25" font-family="sans-serif" font-size="9" font-weight="700" fill="#18241f">${escapeXml(ir.projectName)}</text><text x="20" y="38" font-family="sans-serif" font-size="4" fill="#5a6b61">Stack ${ir.layers.length} layers from layer 01 upward · ${format(ir.layers[0]?.materialThicknessMm ?? 0)} mm material</text>${stack}<text x="20" y="260" font-family="sans-serif" font-size="4" fill="#18241f">Elevation range: ${Math.round(ir.minElevationM)}–${Math.round(ir.maxElevationM)} m</text><text x="20" y="271" font-family="sans-serif" font-size="3.2" fill="#5a6b61">Decorative terrain data only. Verify dimensions, material, kerf, power, and speed with a test cut.</text>`;
+  const body = `<rect width="210" height="297" fill="#f5f0e7"/><text x="20" y="25" font-family="sans-serif" font-size="9" font-weight="700" fill="#18241f">${escapeXml(ir.projectName)}</text><text x="20" y="38" font-family="sans-serif" font-size="4" fill="#5a6b61">Stack ${ir.layers.length} layers from layer 01 upward · ${format(displayLength(ir.layers[0]?.materialThicknessMm ?? 0, ir.units))} ${lengthUnit(ir.units)} material</text>${stack}<text x="20" y="260" font-family="sans-serif" font-size="4" fill="#18241f">Elevation range: ${Math.round(displayElevation(ir.minElevationM, ir.units))}–${Math.round(displayElevation(ir.maxElevationM, ir.units))} ${elevationUnit(ir.units)}</text><text x="20" y="271" font-family="sans-serif" font-size="3.2" fill="#5a6b61">Decorative terrain data only. Verify dimensions, material, kerf, power, and speed with a test cut.</text>`;
   return svgDocument(width, height, body, `${ir.projectName} — assembly guide`, 0, 0);
 }
 
@@ -168,10 +165,12 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
     attribution: ir.attribution,
   };
   const attribution = `${ir.attribution.map((item) => `${item.name} — ${item.license}\n${item.url}`).join("\n\n")}\n\nImagery sources used:\n${ir.imagerySources.length ? ir.imagerySources.join("\n") : "Not reported by source service"}`;
-  const alignment = config.showAlignmentGuides ? `Each lower layer includes an engraved outline inset ${format(config.laserKerfMm)} mm beneath the layer directly above it, plus an Lxx label. These marks are designed to be hidden after assembly.\n\n` : "";
-  const kerf = config.laserKerfMm > 0 ? `CUT paths include ${format(config.laserKerfMm)} mm total kerf compensation: external cuts move outward and internal cuts move inward by half the kerf. Calibrate this value for your laser and material.\n\n` : "CUT paths have no kerf compensation. Calibrate your laser and material before fabrication.\n\n";
-  const nesting = ir.fabricationNests.length ? `Material nesting reduced ${ir.layers.length} layer panels to ${panels.length} fabrication panels. Smaller layers share cut lines inside lower layers while preserving at least ${format(config.glueMarginMm)} mm of covered glue land. Keep every loose cutout: nested pieces belong to the layer IDs listed in each panel filename and SVG data-layers attribute.\n\n` : config.optimizeMaterialUse ? `No safe material nests fit the requested ${format(config.glueMarginMm)} mm glue margin, so every layer remains on its own panel.\n\n` : "Material-saving nesting is disabled.\n\n";
-  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${config.materialThicknessMm} mm each\nFinished stack height: ${format(ir.layers.length * config.materialThicknessMm)} mm\nFabrication panels: ${panels.length}\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}${kerf}${nesting}Import the master SVG into xTool Studio, or use the fabrication-panel SVGs. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
+  const cutUnit = lengthUnit(config.units);
+  const shownLength = (valueMm: number) => `${format(displayLength(valueMm, config.units))} ${cutUnit}`;
+  const alignment = config.showAlignmentGuides ? `Each lower layer includes an engraved outline inset ${shownLength(config.laserKerfMm)} beneath the layer directly above it, plus an Lxx label. These marks are designed to be hidden after assembly.\n\n` : "";
+  const kerf = config.laserKerfMm > 0 ? `CUT paths include ${shownLength(config.laserKerfMm)} total kerf compensation: external cuts move outward and internal cuts move inward by half the kerf. Calibrate this value for your laser and material.\n\n` : "CUT paths have no kerf compensation. Calibrate your laser and material before fabrication.\n\n";
+  const nesting = ir.fabricationNests.length ? `Material nesting reduced ${ir.layers.length} layer panels to ${panels.length} fabrication panels. Smaller layers share cut lines inside lower layers while preserving at least ${shownLength(config.glueMarginMm)} of covered glue land. Keep every loose cutout: nested pieces belong to the layer IDs listed in each panel filename and SVG data-layers attribute.\n\n` : config.optimizeMaterialUse ? `No safe material nests fit the requested ${shownLength(config.glueMarginMm)} glue margin, so every layer remains on its own panel.\n\n` : "Material-saving nesting is disabled.\n\n";
+  const readme = `${ir.projectName}\n\n${ir.layers.length} layers at ${shownLength(config.materialThicknessMm)} each\nFinished stack height: ${shownLength(ir.layers.length * config.materialThicknessMm)}\nFabrication panels: ${panels.length}\n\nCUT ${CUT}\nSCORE ${SCORE}\nENGRAVE ${ENGRAVE}\n\n${alignment}${kerf}${nesting}Import the master SVG into xTool Studio, or use the fabrication-panel SVGs. Verify dimensions and run a material test before fabrication. Terrain data is decorative and is not survey or engineering data.\n`;
   const files: ExportFile[] = [
     ...panelFiles.map(({ file }) => file),
     master,

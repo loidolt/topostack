@@ -22,9 +22,16 @@ async function fetchWithRetry(path, init) {
         ...init,
         signal: AbortSignal.timeout(10_000),
       });
-      if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`${path} returned HTTP ${response.status}`);
+        // Only transient statuses are worth retrying; a 404/403/4xx is a
+        // deterministic deployment problem and should fail immediately.
+        error.retryable = response.status >= 500 || response.status === 429;
+        throw error;
+      }
       return response;
     } catch (error) {
+      if (error?.retryable === false) throw error;
       lastError = error;
       if (Date.now() + retryDelayMs >= deadline) break;
       console.warn(`Deployment verification attempt ${attempt} for ${path} failed; retrying.`);
@@ -41,7 +48,10 @@ async function fetchJson(path) {
 const appResponse = await fetchWithRetry("/", { headers: { accept: "text/html" } });
 const contentType = appResponse.headers.get("content-type") ?? "";
 const appHtml = await appResponse.text();
-if (!contentType.includes("text/html") || !appHtml.includes("Turn real-world terrain into layered, laser-ready topographic projects.")) {
+// Structural markers from apps/generator/src/app.html rather than marketing
+// copy: the SvelteKit body attribute and the Atomm platform SDK script survive
+// copy edits, and the built entry page has no <title> element to match on.
+if (!contentType.includes("text/html") || !appHtml.includes("data-sveltekit-preload-data") || !appHtml.includes("static-res.atomm.com/scripts/js/generator-sdk/platform-sdk.js")) {
   throw new Error("The public deployment did not return the TopoStack frontend.");
 }
 

@@ -6,6 +6,7 @@ export default defineConfig({
   resolve: { conditions: ["browser"] },
   test: {
     environment: "jsdom",
-    include: ["src/app/NumberField.test.ts", "src/app/App.client.test.ts"],
+    environmentOptions: { jsdom: { url: "http://localhost/" } },
+    include: ["src/app/App.client.test.ts"],
   },
 });

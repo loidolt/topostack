@@ -1,16 +1,28 @@
 import { access, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
+import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 
 const DATASET_SNAPSHOT = "20260819";
 const EXPECTED_MAX_ZOOM = 11;
 const OBJECT_KEY = "osm/current.pmtiles";
-const BUCKETS = ["topostack-vector-data-development", "topostack-vector-data"];
+const DEVELOPMENT_BUCKET = "topostack-vector-data-development";
+const PRODUCTION_BUCKET = "topostack-vector-data";
 const credentialTtlSeconds = 24 * 60 * 60;
 
+const flags = process.argv.slice(2).filter((argument) => argument.startsWith("--"));
 const archivePath = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
-if (!archivePath || !process.argv.includes("--provision")) {
-  throw new Error("Usage: node scripts/provision-vector-data.mjs <archive.pmtiles> --provision");
+const includeProduction = flags.includes("--prod");
+const skipDigestCheck = flags.includes("--skip-digest-check");
+const expectedDigest = (flags.find((flag) => flag.startsWith("--expected-sha256="))?.slice("--expected-sha256=".length)
+  ?? process.env.EXPECTED_ARCHIVE_SHA256 ?? "").trim().toLowerCase();
+if (!archivePath || !flags.includes("--provision")) {
+  throw new Error("Usage: node scripts/provision-vector-data.mjs <archive.pmtiles> --provision [--prod] [--expected-sha256=<hex> | EXPECTED_ARCHIVE_SHA256=<hex>] [--skip-digest-check]");
 }
+// The object key is overwritten in place, so touching the production bucket is
+// destructive for live clients. Default to development only.
+const buckets = includeProduction ? [DEVELOPMENT_BUCKET, PRODUCTION_BUCKET] : [DEVELOPMENT_BUCKET];
 
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 const apiToken = process.env.CLOUDFLARE_API_TOKEN;
@@ -53,6 +65,18 @@ async function cloudflare(path, init = {}) {
 }
 
 console.log(`Verifying ${archivePath} (${(archive.size / 1_000_000_000).toFixed(2)} GB).`);
+const hash = createHash("sha256");
+await pipeline(createReadStream(archivePath), hash);
+const archiveDigest = hash.digest("hex");
+console.log(`Archive SHA-256: ${archiveDigest}`);
+if (expectedDigest) {
+  if (archiveDigest !== expectedDigest) throw new Error(`Archive digest mismatch: expected ${expectedDigest}, computed ${archiveDigest}. Refusing to upload.`);
+  console.log("Archive digest matches the pinned SHA-256.");
+} else if (skipDigestCheck) {
+  console.warn("Digest pin check skipped (--skip-digest-check). Record the SHA-256 above and pin it for future runs.");
+} else {
+  throw new Error("No pinned digest provided. Pass --expected-sha256=<hex> (or set EXPECTED_ARCHIVE_SHA256), or use --skip-digest-check for a first-time pin capture.");
+}
 await run(pmtilesBin, ["verify", archivePath]);
 const header = JSON.parse(await capture(pmtilesBin, ["show", archivePath, "--header-json"]));
 if (header.minzoom !== 0 || header.maxzoom !== EXPECTED_MAX_ZOOM) {
@@ -63,7 +87,7 @@ const parent = await cloudflare(`/accounts/${accountId}/tokens/verify`);
 if (!parent?.id || parent.status !== "active") throw new Error("The Cloudflare account API token is not active.");
 const endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
 
-for (const bucket of BUCKETS) {
+for (const bucket of buckets) {
   console.log(`Uploading Protomaps ${DATASET_SNAPSHOT} to ${bucket}/${OBJECT_KEY}.`);
   const credentials = await cloudflare(`/accounts/${accountId}/r2/temp-access-credentials`, {
     method: "POST",
@@ -86,4 +110,4 @@ for (const bucket of BUCKETS) {
   await run(pmtilesBin, ["show", OBJECT_KEY, `--bucket=${bucketUrl}`], awsEnv);
 }
 
-console.log(`Provisioned ${OBJECT_KEY} in development and production.`);
+console.log(`Provisioned ${OBJECT_KEY} in ${includeProduction ? "development and production" : "development only (pass --prod to update production)"}.`);

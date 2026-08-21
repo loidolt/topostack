@@ -1,6 +1,6 @@
 # TopoStack
 
-TopoStack is an Atomm-first generator for turning real-world terrain into stacked, laser-cut topographic projects. It produces physical-size fabrication-panel SVGs, a master file for xTool Studio, an assembly guide, project metadata, and source attribution. Compatible non-adjacent terrain layers can share a panel by cutting smaller pieces from glue-safe cavities inside larger pieces.
+TopoStack is an Atomm-first generator for turning real-world terrain into stacked, laser-cut topographic projects. It produces physical-size fabrication-panel SVGs, a master file for xTool Studio, an assembly guide, project metadata, and source attribution. Geographic map bounds are selected independently from the uncapped physical cut dimensions. Metric and imperial display modes convert inputs, readouts, map engravings, and documentation while preserving millimeter fabrication coordinates internally. Compatible non-adjacent terrain layers can share a panel by cutting smaller pieces from glue-safe cavities inside larger pieces.
 
 ## Workspace
 
@@ -15,15 +15,27 @@ npm install
 npm run dev
 ```
 
-The root development command starts the Cloudflare map API first, waits for its health check, and then starts Vite on port 5173. It uses a local terrain cache and the provisioned remote development PMTiles bucket. Run `npm run dev:web` or `npm run dev:api` only when working on one side in isolation.
+The root development command starts the Cloudflare map API first, waits for its health check, and then starts Vite on port 5273. It uses a local terrain cache and the provisioned remote development PMTiles bucket. Run `npm run dev:web` or `npm run dev:api` only when working on one side in isolation.
+
+The map API listens on 8787 and the generator on 5273 — Vite's own 5173 and Wrangler's 8787 collide with nearly every other local project, so only the API keeps its conventional default. `npm run dev` probes both ports before starting anything and, when one is taken, falls forward to the next free port (scanning 20 above the default) and prints the choice. The app is always pointed at whichever API port was picked.
+
+Pin either port with `VITE_MAP_API_PORT` and `TOPOSTACK_WEB_PORT`. A pinned port that is busy is reported as an error rather than moved, so scripted setups fail loudly:
+
+```bash
+VITE_MAP_API_PORT=8799 TOPOSTACK_WEB_PORT=5299 npm run dev
+```
+
+Both variables also apply to `npm run dev:api` and `npm run dev:web` run separately, minus the automatic fallback. `VITE_MAP_API_PORT` carries the Vite prefix because the browser bundle reads it too; set `VITE_MAP_API_URL` instead to point the local app at an already-running or deployed Worker, which overrides the port variable.
+
+The development Worker accepts any `http://localhost`, `http://127.0.0.1`, or `http://[::1]` origin regardless of port so a relocated dev server still passes CORS. Deployed environments keep the exact `ALLOWED_ORIGINS` list in `workers/map-api/wrangler.jsonc`.
 
 Open the Vite URL directly, or use Atomm's local preview URL:
 
 ```text
-https://www.atomm.com/creativetools/community/generator/topographic-map-generator?local=http://localhost:5173/
+https://www.atomm.com/creativetools/community/generator/topographic-map-generator?local=http://localhost:5273/
 ```
 
-The app falls back to a deterministic terrain fixture when the map-data Worker is unavailable, so UI and geometry development remain possible offline. Copy `workers/map-api/.dev.vars.example` to `workers/map-api/.dev.vars` and provide a Geoapify key when local place search is needed; terrain generation does not require that secret.
+The initial Crater Lake preview is a deterministic, bundled snapshot of real Mapzen elevation and Protomaps/OpenStreetMap road, trail, and water data. Its rim terrain makes roads, trails, shoreline, and elevation labels easy to inspect offline, but it remains preview-only; generate fresh terrain before fabrication export. If the map-data Worker is unavailable during generation, the app falls back to synthetic terrain so geometry development can continue. Copy `workers/map-api/.dev.vars.example` to `workers/map-api/.dev.vars` and provide a Geoapify key when local place search is needed; terrain generation does not require that secret.
 
 ## Validation and packaging
 
@@ -35,7 +47,7 @@ VITE_MAP_API_URL="$DEPLOYED_WORKER_URL" npm run package:atomm
 ```
 
 The Atomm-ready artifact is written to `apps/generator/topostack-atomm.zip`.
-Packaging fails closed when the Worker URL is missing, local, or an obvious placeholder. Deploy the production Worker and set its `GEOCODER_API_KEY` secret before creating a submission artifact.
+Packaging fails closed when the Worker URL is missing, non-HTTPS, local, on a reserved test/placeholder domain (`.invalid`, `.test`, `.local`, `.localhost`, `example.*`), or a `*.workers.dev` preview URL; the built artifact is scanned for the same endpoint families. Deploy the production Worker and set its `GEOCODER_API_KEY` secret before creating a submission artifact.
 
 After every successful production deployment and readiness smoke test, CI packages the production URL, generates a SHA-256 checksum, and uploads a 30-day `topostack-atomm-<commit>` workflow artifact containing the generator ZIP, checksum, cover image, and listing copy. Run `VITE_MAP_API_URL=https://topostack.loidolt.space npm run release:atomm` to reproduce the same release files locally.
 
@@ -62,6 +74,6 @@ The `Production Monitor` workflow runs an hourly canary against the frontend, `/
 
 ## Data setup
 
-The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket. Roads and water come from the pinned Protomaps/OpenStreetMap PMTiles release stored as `osm/current.pmtiles` in the `topostack-vector-data` bucket. The `/ready` endpoint reports whether that archive and the geocoder configuration are present. Place search is proxied to Geoapify with a Worker secret. See `workers/map-api/README.md` for provisioning and deployment details.
+The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket under dataset-versioned keys. Roads and water come from the pinned Protomaps/OpenStreetMap PMTiles release stored as `osm/current.pmtiles` in the `topostack-vector-data` bucket, served with a short revalidating cache policy because that key is overwritten on dataset updates. The `/ready` endpoint reports whether that archive and the geocoder configuration are present. Place search is proxied to Geoapify with a Worker secret. Provisioning (`scripts/provision-vector-data.mjs`) verifies a pinned SHA-256 digest, writes the development bucket by default, and touches production only with an explicit `--prod` flag. See `workers/map-api/README.md` for provisioning and deployment details.
 
 Terrain and map data are decorative source material, not survey, navigation, or engineering data.

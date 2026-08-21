@@ -1,9 +1,11 @@
 import { mount, tick, unmount } from "svelte";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PROJECT } from "@topostack/core";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSyntheticSource, DEFAULT_PROJECT } from "@topostack/core";
+import { theme } from "../lib/theme";
 
 const loadTerrainMock = vi.hoisted(() => vi.fn());
-vi.mock("../data-provider", async (importOriginal) => ({ ...await importOriginal<typeof import("../data-provider")>(), loadTerrain: loadTerrainMock }));
+const loadVectorMarkingsMock = vi.hoisted(() => vi.fn());
+vi.mock("../data-provider", async (importOriginal) => ({ ...await importOriginal<typeof import("../data-provider")>(), loadTerrain: loadTerrainMock, loadVectorMarkings: loadVectorMarkingsMock }));
 vi.mock("../storage", async (importOriginal) => ({ ...await importOriginal<typeof import("../storage")>(), loadProject: vi.fn(async () => undefined), saveProject: vi.fn(async () => undefined) }));
 vi.mock("./atomm-bridge", () => ({ connectAtomm: vi.fn(() => () => undefined) }));
 vi.mock("./ThreePreview.svelte", async () => ({ default: (await import("./TestPreview.svelte")).default }));
@@ -12,7 +14,23 @@ import App from "./App.svelte";
 
 describe("TopoStack Svelte shell", () => {
   let component: ReturnType<typeof mount> | undefined;
-  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); delete window.atomm; });
+  const stored = new Map<string, string>();
+  const localStorageStub: Storage = {
+    get length() { return stored.size; },
+    clear: () => stored.clear(),
+    getItem: (key) => stored.get(key) ?? null,
+    key: (index) => [...stored.keys()][index] ?? null,
+    removeItem: (key) => { stored.delete(key); },
+    setItem: (key, value) => { stored.set(key, String(value)); },
+  };
+  // The app lazy-loads the 3D preview. Resolve the mocked module once up front
+  // so the first in-test dynamic import cannot race mock registration and pull
+  // in the real WebGL component.
+  beforeAll(async () => {
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorageStub });
+    await import("./ThreePreview.svelte");
+  });
+  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); theme.preference = "system"; localStorage.removeItem("topostack-theme"); delete window.atomm; });
 
   it("edits and undoes the project name and switches preview modes", async () => {
     const target = document.createElement("div");
@@ -29,6 +47,8 @@ describe("TopoStack Svelte shell", () => {
     [...target.querySelectorAll("button")].find((button) => button.textContent?.includes("Cut layers"))!.click();
     await tick();
     expect(target.querySelector('svg[aria-label^="Cut preview for layer"]')).not.toBeNull();
+    expect(target.querySelector('[data-marking-kind="road"]')).not.toBeNull();
+    expect(target.querySelector(".layer-heading")?.textContent).toContain("Layer 6");
   });
 
   it("lays out fabrication controls in full-width rows with a compact position pair", async () => {
@@ -38,9 +58,41 @@ describe("TopoStack Svelte shell", () => {
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Fabrication settings"))!.click();
     await tick();
     const fields = target.querySelector<HTMLElement>(".advanced-fields")!;
-    expect(fields.firstElementChild?.classList.contains("toggle-row")).toBe(true);
+    expect(fields.firstElementChild?.getAttribute("role")).toBe("switch");
     expect(fields.querySelectorAll(":scope > .field-row")).toHaveLength(4);
     expect(fields.querySelectorAll(".advanced-coordinate-fields > .field-row")).toHaveLength(2);
+  });
+
+  it("applies and persists an explicit color scheme", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const system = [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("System"))!;
+    system.focus();
+    system.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await tick();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("topostack-theme")).toBe("dark");
+    expect(document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]')).not.toBeNull();
+  });
+
+  it("resizes cut geometry without changing or refetching the map area", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const width = target.querySelector<HTMLInputElement>('input[type="number"]')!;
+    expect(width.max).toBe("");
+    width.value = "1200";
+    width.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toMatch(/updated/i));
+    expect(target.querySelector(".preview-readout")?.textContent).toContain("1200 × 200 mm");
+    expect(loadTerrainMock).not.toHaveBeenCalled();
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Imperial"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".preview-readout")?.textContent).toContain("47.244 × 7.874 in"));
+    expect(width.value).toBe("47.244");
+    expect(width.closest(".field-row")?.textContent).toContain("in");
+    expect(target.querySelector(".layer-heading")?.textContent).toContain("ft");
+    expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 
   it("cancels an in-flight terrain request and reports the outcome", async () => {
@@ -54,7 +106,7 @@ describe("TopoStack Svelte shell", () => {
     expect(generate.textContent).toContain("Cancel generation");
     generate.click();
     await tick(); await Promise.resolve();
-    expect(target.querySelector('[role="status"]')?.textContent).toContain("Generation canceled");
+    expect(target.querySelector(".status-line")?.textContent).toContain("Generation canceled");
   });
 
   it("does not let an unresolved platform toast block generation", async () => {
@@ -69,6 +121,66 @@ describe("TopoStack Svelte shell", () => {
     await tick();
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
     await tick();
+    expect(loadTerrainMock).toHaveBeenCalledOnce();
+  });
+
+  it("updates every Map Details feature without pressing Generate", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const stage = target.querySelector<HTMLElement>(".preview-stage")!;
+    const cases = [
+      ["Roads & trails", "road"],
+      ["Water outlines", "water"],
+      ["Assembly guides", "alignment"],
+      ["Elevation labels", "elevation"],
+      ["North arrow", "north"],
+      ["Scale bar", "scale"],
+    ] as const;
+
+    for (const [label, attribute] of cases) {
+      const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
+      expect(Number(stage.dataset[`${attribute}Markings` as keyof DOMStringMap])).toBeGreaterThan(0);
+      input.click();
+      await vi.waitFor(() => expect(input.getAttribute("aria-checked"), label).toBe("false"));
+      await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent, label).toMatch(/updated/i));
+      await vi.waitFor(() => expect(stage.dataset[`${attribute}Markings` as keyof DOMStringMap], label).toBe("0"));
+    }
+    expect(loadTerrainMock).not.toHaveBeenCalled();
+  });
+
+  it("commits only the latest result when a detail is toggled rapidly", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads & trails"]')!;
+    roads.click(); roads.click();
+    const stage = target.querySelector<HTMLElement>(".preview-stage")!;
+    await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
+    expect(roads.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("fetches only vector markings when a generated source did not request them", async () => {
+    const source = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const, vectorStatus: "not-requested" as const };
+    loadTerrainMock.mockResolvedValue({ source, fallback: false });
+    loadVectorMarkingsMock.mockResolvedValue([{ id: "fetched-road", kind: "road", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: -80 }, { x: 100, y: -80 }] }]);
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    for (const label of ["Roads & trails", "Water outlines"]) {
+      const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
+      input.click();
+      await vi.waitFor(() => expect(input.getAttribute("aria-checked")).toBe("false"));
+    }
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+    const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads & trails"]')!;
+    roads.click();
+    const stage = target.querySelector<HTMLElement>(".preview-stage")!;
+    await vi.waitFor(() => expect(loadVectorMarkingsMock).toHaveBeenCalledOnce());
+    expect(loadVectorMarkingsMock.mock.calls[0]?.[2]).toMatchObject({ showRoads: true, showWater: false });
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Map details updated"));
+    await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
     expect(loadTerrainMock).toHaveBeenCalledOnce();
   });
 });

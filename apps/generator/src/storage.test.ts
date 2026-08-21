@@ -12,6 +12,7 @@ describe("project import validation", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, optimizeMaterialUse: "yes" })).toThrow(/optimizeMaterialUse/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, glueMarginMm: 30 })).toThrow(/glue margin/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, laserKerfMm: 1.1 })).toThrow(/laser kerf/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, units: "yards" })).toThrow(/units/i);
   });
   it("adds new fabrication defaults to projects saved before those fields existed", () => {
     const {
@@ -20,6 +21,7 @@ describe("project import validation", () => {
       optimizeMaterialUse: _legacyOptimizeMaterialUse,
       glueMarginMm: _legacyGlueMarginMm,
       laserKerfMm: _legacyLaserKerfMm,
+      units: _legacyUnits,
       ...legacyProject
     } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
@@ -28,6 +30,20 @@ describe("project import validation", () => {
       optimizeMaterialUse: true,
       glueMarginMm: 8,
       laserKerfMm: 0.15,
+      units: "metric",
+    });
+  });
+  it("defaults smoothing, minimum feature, and exploded preview for legacy projects", () => {
+    const {
+      smoothing: _legacySmoothing,
+      minimumFeatureMm: _legacyMinimumFeature,
+      explodedPreview: _legacyExplodedPreview,
+      ...legacyProject
+    } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject)).toMatchObject({
+      smoothing: DEFAULT_PROJECT.smoothing,
+      minimumFeatureMm: DEFAULT_PROJECT.minimumFeatureMm,
+      explodedPreview: DEFAULT_PROJECT.explodedPreview,
     });
   });
 });

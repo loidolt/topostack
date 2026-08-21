@@ -1,5 +1,6 @@
 export type CropShape = "rectangle" | "circle";
 export type Operation = "cut" | "score" | "engrave";
+export type UnitSystem = "metric" | "imperial";
 
 export interface GeoPoint {
   lat: number;
@@ -19,6 +20,7 @@ export interface ProjectConfigV1 {
   name: string;
   location: GeoPoint & { label: string; zoom: number; bounds?: GeoBounds };
   cropShape: CropShape;
+  units: UnitSystem;
   widthMm: number;
   heightMm: number;
   materialThicknessMm: number;
@@ -27,7 +29,6 @@ export interface ProjectConfigV1 {
   smoothing: number;
   showRoads: boolean;
   showWater: boolean;
-  showContours: boolean;
   showAlignmentGuides: boolean;
   optimizeMaterialUse: boolean;
   glueMarginMm: number;
@@ -68,7 +69,7 @@ export interface SourceBundleV1 {
   markings: MarkingFeature[];
   vectorStatus: "available" | "unavailable" | "not-requested";
   datasetVersion: string;
-  sourceKind: "real" | "synthetic";
+  sourceKind: "real" | "preview" | "synthetic";
   bounds: GeoBounds;
   imagerySources: string[];
   resolutionM?: number;
@@ -80,6 +81,13 @@ export interface Point2D {
   y: number;
 }
 
+/**
+ * Ring invariants relied on throughout the geometry engine:
+ * - every ring is explicitly closed (first point equals last point exactly);
+ * - `outer` is wound positively (counter-clockwise in the mm coordinate
+ *   space), `holes` are wound negatively;
+ * - coordinates are millimeters centered on the material origin.
+ */
 export interface Polygon2D {
   outer: Point2D[];
   holes: Point2D[][];
@@ -91,6 +99,7 @@ export interface OperationPath {
   kind: MarkingFeature["kind"];
   points: Point2D[];
   label?: string;
+  labelRotationRad?: number;
 }
 
 export interface LayerIR {
@@ -125,8 +134,9 @@ export interface GeometryIRV1 {
   schemaVersion: 1;
   projectId: string;
   projectName: string;
+  units: UnitSystem;
   configFingerprint: string;
-  sourceKind: "real" | "synthetic";
+  sourceKind: SourceBundleV1["sourceKind"];
   vectorStatus: SourceBundleV1["vectorStatus"];
   datasetVersion: string;
   bounds: GeoBounds;
@@ -152,6 +162,7 @@ export interface ExportFile {
 export interface FabricationPackageV1 {
   schemaVersion: 1;
   files: ExportFile[];
+  /** Convenience pointer to the master-layout SVG; the same file is also present in `files`. */
   master: ExportFile;
 }
 
@@ -162,9 +173,10 @@ export interface MapDataProvider {
 export const DEFAULT_PROJECT: ProjectConfigV1 = {
   schemaVersion: 1,
   id: "topostack-demo",
-  name: "Mount Rainier",
-  location: { lat: 46.8523, lon: -121.7603, label: "Mount Rainier, Washington", zoom: 11 },
+  name: "Crater Lake",
+  location: { lat: 42.9446, lon: -122.109, label: "Crater Lake, Oregon", zoom: 11 },
   cropShape: "rectangle",
+  units: "metric",
   widthMm: 300,
   heightMm: 200,
   materialThicknessMm: 3,
@@ -173,7 +185,6 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   smoothing: 1,
   showRoads: true,
   showWater: true,
-  showContours: true,
   showAlignmentGuides: true,
   optimizeMaterialUse: true,
   glueMarginMm: 8,

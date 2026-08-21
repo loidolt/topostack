@@ -1,8 +1,14 @@
 const MAX_TERRAIN_BYTES = 2_000_000;
 const MAX_GEOCODER_BYTES = 256_000;
 const TERRAIN_CACHE_SECONDS = 60 * 60 * 24 * 30;
+// The vector archive key is overwritten in place on dataset updates, so client
+// and edge caching must stay short and revalidate by etag; a long `immutable`
+// TTL would let PMTiles readers mix byte ranges from different archive
+// generations for the full cache lifetime.
+const VECTOR_CACHE_SECONDS = 60 * 60;
 const GEOCODE_CACHE_SECONDS = 60 * 60 * 24;
 const VECTOR_ARCHIVE_KEY = "osm/current.pmtiles";
+const DEFAULT_ALLOWED_ORIGIN_SUFFIXES = ".atomm.com";
 
 async function readBounded(body: ReadableStream<Uint8Array> | null, maximumBytes: number): Promise<Uint8Array<ArrayBuffer>> {
   if (!body) return new Uint8Array();
@@ -30,10 +36,43 @@ function json(value: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(value), { ...init, headers });
 }
 
-function isAllowedOrigin(origin: string | null, env: Pick<Env, "ALLOWED_ORIGINS">): boolean {
+interface OriginPolicyEnv {
+  ALLOWED_ORIGINS: string;
+  // Comma-separated host suffixes allowed over HTTPS (default ".atomm.com").
+  // Set to an empty string to disable suffix-based origins entirely.
+  ALLOWED_ORIGIN_SUFFIXES?: string;
+  ENVIRONMENT?: string;
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// The local dev server moves to another port whenever its default is taken, so
+// pinning exact loopback origins would break `npm run dev` at the first
+// collision. Only the development Worker accepts a floating port this way;
+// staging and production keep the exact ALLOWED_ORIGINS list.
+function isDevelopmentLoopbackOrigin(origin: string, env: OriginPolicyEnv): boolean {
+  if (env.ENVIRONMENT !== "development") return false;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOrigin(origin: string | null, env: OriginPolicyEnv): boolean {
   if (!origin) return true;
-  if (origin.endsWith(".atomm.com") && origin.startsWith("https://")) return true;
-  return env.ALLOWED_ORIGINS.split(",").map((value) => value.trim()).includes(origin);
+  if (env.ALLOWED_ORIGINS.split(",").map((value) => value.trim()).includes(origin)) return true;
+  if (isDevelopmentLoopbackOrigin(origin, env)) return true;
+  if (!origin.startsWith("https://")) return false;
+  const suffixes = (env.ALLOWED_ORIGIN_SUFFIXES ?? DEFAULT_ALLOWED_ORIGIN_SUFFIXES)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    // A leading dot keeps the label boundary: ".atomm.com" matches
+    // https://runtime.atomm.com but not https://evil-atomm.com.
+    .map((suffix) => (suffix.startsWith(".") ? suffix : `.${suffix}`));
+  return suffixes.some((suffix) => origin.endsWith(suffix));
 }
 
 function corsHeaders(request: Request, env: Env): Headers {
@@ -93,29 +132,55 @@ async function readinessResponse(env: Env): Promise<Response> {
   }, { status: ready ? 200 : 503, headers: { "cache-control": "no-store" } });
 }
 
-function objectResponse(object: R2ObjectBody, cacheStatus: "HIT" | "MISS", dataset: string, rangeRequested = false): Response {
+type ParsedRange = { kind: "full" } | { kind: "partial"; offset: number; length: number } | { kind: "unsatisfiable" };
+
+// Single-range parsing only. Multipart range requests (`bytes=0-1,5-6`) are
+// rejected with 416 rather than answered with a multipart/byteranges body.
+// Malformed Range headers are ignored per RFC 9110 and answered with 200.
+function parseRangeHeader(header: string | null, size: number): ParsedRange {
+  if (header === null) return { kind: "full" };
+  if (header.includes(",")) return { kind: "unsatisfiable" };
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match || (match[1] === "" && match[2] === "")) return { kind: "full" };
+  if (size === 0) return { kind: "unsatisfiable" };
+  if (match[1] === "") {
+    const suffix = Number(match[2]);
+    if (suffix === 0) return { kind: "unsatisfiable" };
+    const length = Math.min(suffix, size);
+    return { kind: "partial", offset: size - length, length };
+  }
+  const start = Number(match[1]);
+  if (start >= size) return { kind: "unsatisfiable" };
+  if (match[2] === "") return { kind: "partial", offset: start, length: size - start };
+  const end = Number(match[2]);
+  if (end < start) return { kind: "full" };
+  return { kind: "partial", offset: start, length: Math.min(end, size - 1) - start + 1 };
+}
+
+function etagMatches(ifNoneMatch: string | null, etag: string): boolean {
+  if (!ifNoneMatch) return false;
+  if (ifNoneMatch.trim() === "*") return true;
+  const normalize = (value: string) => value.trim().replace(/^W\//, "");
+  return ifNoneMatch.split(",").some((candidate) => normalize(candidate) === normalize(etag));
+}
+
+function terrainCachedResponse(object: R2ObjectBody, dataset: string): Response {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
-  headers.set("accept-ranges", "bytes");
-  headers.set("x-topostack-cache", cacheStatus);
+  headers.set("x-topostack-cache", "HIT");
   headers.set("x-topostack-dataset", dataset);
   if (object.customMetadata?.imagerySources) headers.set("x-topostack-imagery-sources", object.customMetadata.imagerySources);
+  // Terrain keys embed the dataset version, so their content is stable and may
+  // cache long. Range requests are not honored here, so do not advertise them.
   headers.set("cache-control", `public, max-age=${TERRAIN_CACHE_SECONDS}, immutable`);
-  if (object.range) {
-    const range = object.range;
-    if ("offset" in range && "length" in range && typeof range.offset === "number" && typeof range.length === "number") {
-      headers.set("content-range", `bytes ${range.offset}-${range.offset + range.length - 1}/${object.size}`);
-      headers.set("content-length", String(range.length));
-    }
-  }
-  return new Response(object.body, { status: rangeRequested && object.range ? 206 : 200, headers });
+  return new Response(object.body, { headers });
 }
 
 async function terrainResponse(request: Request, env: Env, ctx: ExecutionContext, tile: { z: number; x: number; y: number }): Promise<Response> {
-  const key = `terrain/terrarium/${tile.z}/${tile.x}/${tile.y}.png`;
+  const key = `terrain/${env.DATASET_VERSION}/terrarium/${tile.z}/${tile.x}/${tile.y}.png`;
   const cached = await env.MAP_CACHE.get(key);
-  if (cached) return objectResponse(cached, "HIT", env.DATASET_VERSION);
+  if (cached) return terrainCachedResponse(cached, cached.customMetadata?.dataset ?? env.DATASET_VERSION);
 
   const upstream = await fetch(`${env.TERRAIN_ORIGIN}/${tile.z}/${tile.x}/${tile.y}.png`, {
     headers: { "user-agent": "TopoStack/0.1 (terrain fabrication generator)" },
@@ -159,9 +224,15 @@ function normalizeGeoapify(payload: unknown): Array<{ place_id: string; display_
   });
 }
 
+function geocodeLimit(value: string | null): number {
+  if (value === null || value.trim() === "") return 5;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(8, Math.trunc(parsed))) : 5;
+}
+
 async function geocodeResponse(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
   const query = (url.searchParams.get("q") ?? "").trim().slice(0, 160);
-  const limit = Math.max(1, Math.min(8, Number(url.searchParams.get("limit") ?? 5)));
+  const limit = geocodeLimit(url.searchParams.get("limit"));
   if (query.length < 2) return json({ error: "Query must contain at least two characters." }, { status: 400 });
   const keyHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${query.toLowerCase()}|${limit}`));
   const key = `geocode/${Array.from(new Uint8Array(keyHash)).map((byte) => byte.toString(16).padStart(2, "0")).join("")}.json`;
@@ -195,16 +266,37 @@ async function geocodeResponse(request: Request, env: Env, ctx: ExecutionContext
 }
 
 async function pmtilesResponse(request: Request, env: Env): Promise<Response> {
+  const head = await env.VECTOR_DATA.head(VECTOR_ARCHIVE_KEY);
+  if (!head) return json({ error: "OSM archive has not been provisioned." }, { status: 404 });
+  const headers = new Headers({
+    "etag": head.httpEtag,
+    "accept-ranges": "bytes",
+    "content-type": "application/vnd.pmtiles",
+    "cache-control": `public, max-age=${VECTOR_CACHE_SECONDS}`,
+    "x-topostack-cache": "HIT",
+    "x-topostack-dataset": env.DATASET_VERSION,
+  });
+  if (etagMatches(request.headers.get("if-none-match"), head.httpEtag)) return new Response(null, { status: 304, headers });
   if (request.method === "HEAD") {
-    const object = await env.VECTOR_DATA.head(VECTOR_ARCHIVE_KEY);
-    if (!object) return json({ error: "OSM archive has not been provisioned." }, { status: 404 });
-    const headers = new Headers({ "content-length": String(object.size), "etag": object.httpEtag, "accept-ranges": "bytes", "content-type": "application/vnd.pmtiles" });
+    headers.set("content-length", String(head.size));
     return new Response(null, { headers });
   }
-  const rangeRequested = request.headers.has("range");
-  const object = await env.VECTOR_DATA.get(VECTOR_ARCHIVE_KEY, rangeRequested ? { range: request.headers } : undefined);
+  const range = parseRangeHeader(request.headers.get("range"), head.size);
+  if (range.kind === "unsatisfiable") {
+    return json({ error: "Requested range is not satisfiable." }, { status: 416, headers: { "content-range": `bytes */${head.size}` } });
+  }
+  const object = range.kind === "partial"
+    ? await env.VECTOR_DATA.get(VECTOR_ARCHIVE_KEY, { range: { offset: range.offset, length: range.length } })
+    : await env.VECTOR_DATA.get(VECTOR_ARCHIVE_KEY);
   if (!object) return json({ error: "OSM archive has not been provisioned." }, { status: 404 });
-  return objectResponse(object, "HIT", env.DATASET_VERSION, rangeRequested);
+  headers.set("etag", object.httpEtag);
+  if (range.kind === "partial") {
+    headers.set("content-range", `bytes ${range.offset}-${range.offset + range.length - 1}/${head.size}`);
+    headers.set("content-length", String(range.length));
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set("content-length", String(head.size));
+  return new Response(object.body, { status: 200, headers });
 }
 
 async function route(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -252,4 +344,4 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-export { isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, validTile };
+export { geocodeLimit, isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, parseRangeHeader, validTile };

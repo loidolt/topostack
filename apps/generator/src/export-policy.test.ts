@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { createSyntheticSource, DEFAULT_PROJECT, generateGeometry } from "@topostack/core";
+import { createSyntheticSource, DEFAULT_PROJECT, generateGeometry, type SourceBundleV1 } from "@topostack/core";
 import { createAtommExport, exportBlockReason } from "./export-policy";
 
-function geometry(kind: "real" | "synthetic" = "real") {
+function geometry(kind: SourceBundleV1["sourceKind"] = "real") {
   return generateGeometry(DEFAULT_PROJECT, { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: kind });
 }
 
 describe("Atomm export policy", () => {
   it("blocks synthetic and stale results", () => {
     expect(exportBlockReason(geometry("synthetic"), DEFAULT_PROJECT)).toMatch(/real terrain/i);
+    expect(exportBlockReason(geometry("preview"), DEFAULT_PROJECT)).toMatch(/real terrain/i);
     expect(exportBlockReason(geometry(), { ...DEFAULT_PROJECT, layerCount: 9 })).toMatch(/settings changed/i);
   });
 

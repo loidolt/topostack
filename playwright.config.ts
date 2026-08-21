@@ -16,7 +16,9 @@ export default defineConfig({
     ...devices["Desktop Chrome"],
   },
   webServer: {
-    command: "npm run build -w @topostack/generator && npm run preview -w @topostack/generator -- --host 127.0.0.1 --port 4173",
+    // Build in the dedicated "e2e" Vite mode: the deterministic terrain fixture
+    // in data-provider.ts requires both VITE_E2E=1 and a non-production mode.
+    command: "npm run build -w @topostack/generator -- --mode e2e && npm run preview -w @topostack/generator -- --host 127.0.0.1 --port 4173",
     url: "http://127.0.0.1:4173",
     env: { VITE_E2E: "1" },
     reuseExistingServer: !process.env.CI,

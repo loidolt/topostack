@@ -8,13 +8,21 @@ function booleanValue(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new Error(`${label} must be true or false.`);
   return value;
 }
+function unitValue(value: unknown): ProjectConfigV1["units"] {
+  if (value === undefined) return DEFAULT_PROJECT.units;
+  if (value === "metric" || value === "imperial") return value;
+  throw new Error("Project units must be metric or imperial.");
+}
 
 export async function loadProject(): Promise<ProjectConfigV1 | undefined> {
   try {
     const value = await get<unknown>(PROJECT_KEY);
     if (value === undefined) return undefined;
     return parseProject(value);
-  } catch { return undefined; }
+  } catch (error) {
+    console.warn("TopoStack: ignoring a saved project that could not be restored.", error);
+    return undefined;
+  }
 }
 
 export function parseProject(value: unknown): ProjectConfigV1 {
@@ -38,16 +46,19 @@ export function parseProject(value: unknown): ProjectConfigV1 {
       ...(boundsRecord ? { bounds: { west: numberValue(boundsRecord.west), south: numberValue(boundsRecord.south), east: numberValue(boundsRecord.east), north: numberValue(boundsRecord.north) } } : {}),
     },
     cropShape: record.cropShape === "circle" ? "circle" : record.cropShape === "rectangle" ? "rectangle" : DEFAULT_PROJECT.cropShape,
+    units: unitValue(record.units),
     widthMm: numberValue(record.widthMm), heightMm: numberValue(record.heightMm), materialThicknessMm: numberValue(record.materialThicknessMm),
-    layerCount: numberValue(record.layerCount), minimumFeatureMm: numberValue(record.minimumFeatureMm), smoothing: numberValue(record.smoothing),
-    showRoads: booleanValue(record.showRoads, "showRoads"), showWater: booleanValue(record.showWater, "showWater"), showContours: booleanValue(record.showContours, "showContours"),
+    layerCount: numberValue(record.layerCount),
+    minimumFeatureMm: record.minimumFeatureMm === undefined ? DEFAULT_PROJECT.minimumFeatureMm : numberValue(record.minimumFeatureMm),
+    smoothing: record.smoothing === undefined ? DEFAULT_PROJECT.smoothing : numberValue(record.smoothing),
+    showRoads: booleanValue(record.showRoads, "showRoads"), showWater: booleanValue(record.showWater, "showWater"),
     showAlignmentGuides: record.showAlignmentGuides === undefined ? DEFAULT_PROJECT.showAlignmentGuides : booleanValue(record.showAlignmentGuides, "showAlignmentGuides"),
     optimizeMaterialUse: record.optimizeMaterialUse === undefined ? DEFAULT_PROJECT.optimizeMaterialUse : booleanValue(record.optimizeMaterialUse, "optimizeMaterialUse"),
     glueMarginMm: record.glueMarginMm === undefined ? DEFAULT_PROJECT.glueMarginMm : numberValue(record.glueMarginMm),
     laserKerfMm: record.laserKerfMm === undefined ? DEFAULT_PROJECT.laserKerfMm : numberValue(record.laserKerfMm),
     showElevationLabels: booleanValue(record.showElevationLabels, "showElevationLabels"), showNorthArrow: booleanValue(record.showNorthArrow, "showNorthArrow"), showScaleBar: booleanValue(record.showScaleBar, "showScaleBar"),
     elevationLabelPosition: labelPositionRecord ? { x: numberValue(labelPositionRecord.x), y: numberValue(labelPositionRecord.y) } : { ...DEFAULT_PROJECT.elevationLabelPosition },
-    explodedPreview: numberValue(record.explodedPreview),
+    explodedPreview: record.explodedPreview === undefined ? DEFAULT_PROJECT.explodedPreview : numberValue(record.explodedPreview),
   };
   validateProject(project);
   if (!Number.isFinite(project.explodedPreview) || project.explodedPreview < 0 || project.explodedPreview > 1) throw new Error("Exploded preview must be between 0 and 1.");

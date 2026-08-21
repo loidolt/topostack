@@ -1,30 +1,31 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Map as MapIcon, Mountain, Search, X } from "@lucide/svelte";
+  import { Map as MapIcon, Mountain, Search } from "@lucide/svelte";
+  import { Button, Field, IconButton, Input, NumberField } from "@loidolt/theme-svelte";
   import type { ProjectConfigV1 } from "@topostack/core";
   import { searchPlaces, type PlaceResult } from "../data-provider";
 
   let { project, presets, onChoose, onCoordinates, onClose }: { project: ProjectConfigV1; presets: PlaceResult[]; onChoose: (place: PlaceResult) => void; onCoordinates: (lat: number, lon: number) => void; onClose: () => void } = $props();
-  let dialog: HTMLElement;
-  let searchInput: HTMLInputElement;
   let query = $state("");
   let results = $state.raw<PlaceResult[]>([]);
   let searchError = $state("");
+  let dialog: HTMLDialogElement;
 
   onMount(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    searchInput.focus();
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
-      if (event.key !== "Tab") return;
-      const focusable = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), a[href], [tabindex="0"]')];
-      const first = focusable[0]; const last = focusable.at(-1); if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener("keydown", keydown);
-    return () => { document.removeEventListener("keydown", keydown); previous?.focus(); };
+    dialog.showModal();
+    return () => { if (dialog.open) dialog.close(); };
   });
+
+  function closeFromBackdrop(event: MouseEvent): void {
+    const bounds = dialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+  }
+
+  function commitCoordinate(value: number, axis: "lat" | "lon"): void {
+    if (!Number.isFinite(value)) return;
+    if (axis === "lat") onCoordinates(Math.max(-85.0511, Math.min(85.0511, value)), project.location.lon);
+    else onCoordinates(project.location.lat, Math.max(-180, Math.min(180, value)));
+  }
 
   $effect(() => {
     const term = query.trim();
@@ -35,11 +36,15 @@
   });
 </script>
 
-<div class="modal-backdrop" role="presentation" onmousedown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-  <div bind:this={dialog} class="search-modal" role="dialog" aria-modal="true" aria-labelledby="location-dialog-title">
-    <header><div><span id="location-dialog-title">Choose anywhere</span><small>Search for a mountain, lake, park, city, or address.</small></div><button onclick={onClose} aria-label="Close"><X size={19} /></button></header>
-    <label class="search-input"><Search size={19} /><input bind:this={searchInput} aria-label="Search places" bind:value={query} placeholder="Try ‘Rocky Mountain National Park’" /></label>
-    <div class="coordinate-row"><label>Latitude<input type="number" min="-85.0511" max="85.0511" value={project.location.lat} oninput={(event) => onCoordinates(Number(event.currentTarget.value), project.location.lon)} /></label><label>Longitude<input type="number" min="-180" max="180" value={project.location.lon} oninput={(event) => onCoordinates(project.location.lat, Number(event.currentTarget.value))} /></label><button onclick={onClose}>Use coordinates</button></div>
+<dialog bind:this={dialog} class="ldt-dialog ldt-dialog--lg search-modal" aria-labelledby="location-dialog-title" aria-describedby="location-dialog-description" onclose={onClose} onmousedown={closeFromBackdrop}>
+  <header class="ldt-dialog__header"><div><h2 id="location-dialog-title" class="ldt-dialog__title">Choose anywhere</h2><p id="location-dialog-description" class="ldt-dialog__description">Search for a mountain, lake, park, city, or address.</p></div><IconButton label="Close dialog" onclick={() => dialog.close()}>×</IconButton></header>
+  <div class="ldt-dialog__body">
+    <label class="search-input"><Search size={19} /><Input autofocus aria-label="Search places" bind:value={query} placeholder="Try ‘Rocky Mountain National Park’" boxed /></label>
+    <div class="coordinate-row">
+      <Field label="Latitude">{#snippet children({ id })}<NumberField {id} label="Latitude" min={-85.0511} max={85.0511} step={0.0001} value={project.location.lat} boxed oninput={(event) => event.currentTarget.value !== "" && commitCoordinate(event.currentTarget.valueAsNumber, "lat")} onValueChange={(value) => commitCoordinate(value, "lat")} />{/snippet}</Field>
+      <Field label="Longitude">{#snippet children({ id })}<NumberField {id} label="Longitude" min={-180} max={180} step={0.0001} value={project.location.lon} boxed oninput={(event) => event.currentTarget.value !== "" && commitCoordinate(event.currentTarget.valueAsNumber, "lon")} onValueChange={(value) => commitCoordinate(value, "lon")} />{/snippet}</Field>
+      <Button onclick={() => dialog.close()}>Use coordinates</Button>
+    </div>
     <div class="search-results">
       {#each results as result (result.id)}<button onclick={() => onChoose(result)}><span><MapIcon size={17} /></span><span><strong>{result.label.split(",")[0]}</strong><small>{result.label.split(",").slice(1).join(",")}</small></span></button>{/each}
       {#if searchError}<p role="status">{searchError}</p>{/if}
@@ -47,4 +52,4 @@
     </div>
     <small class="provider-attribution">Place search by <a href="https://www.geoapify.com/" target="_blank" rel="noreferrer">Geoapify</a> · © OpenStreetMap contributors</small>
   </div>
-</div>
+</dialog>

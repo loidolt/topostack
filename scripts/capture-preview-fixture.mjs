@@ -1,0 +1,148 @@
+import { writeFile } from "node:fs/promises";
+import { chromium } from "playwright";
+import { VectorTile } from "@mapbox/vector-tile";
+import { PMTiles } from "pmtiles";
+import Pbf from "pbf";
+
+const API_BASE = "https://topostack.loidolt.space";
+const OUTPUT = new URL("../apps/generator/src/sample-preview.generated.ts", import.meta.url);
+const TILE_SIZE = 256;
+const zoom = 11;
+const config = { widthMm: 300, heightMm: 200, lat: 42.9446, lon: -122.109 };
+
+const worldSize = TILE_SIZE * 2 ** zoom;
+const lonToWorldX = (lon) => ((lon + 180) / 360) * worldSize;
+const latToWorldY = (lat) => ((1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2) * worldSize;
+const worldXToLon = (x) => (x / worldSize) * 360 - 180;
+const worldYToLat = (y) => Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / worldSize))) * 180 / Math.PI;
+const centerX = lonToWorldX(config.lon);
+const centerY = latToWorldY(config.lat);
+const bounds = {
+  west: worldXToLon(centerX - 210),
+  south: worldYToLat(centerY + 140),
+  east: worldXToLon(centerX + 210),
+  north: worldYToLat(centerY - 140),
+};
+const westX = lonToWorldX(bounds.west);
+const eastX = lonToWorldX(bounds.east);
+const northY = latToWorldY(bounds.north);
+const southY = latToWorldY(bounds.south);
+const tiles = [];
+for (let y = Math.floor(northY / TILE_SIZE); y <= Math.floor((southY - 1e-6) / TILE_SIZE); y += 1) {
+  for (let x = Math.floor(westX / TILE_SIZE); x <= Math.floor((eastX - 1e-6) / TILE_SIZE); x += 1) tiles.push({ x, y, z: zoom });
+}
+
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage();
+await page.goto(API_BASE, { waitUntil: "domcontentloaded" });
+const elevation = await page.evaluate(async ({ apiBase, tiles, westX, eastX, northY, southY, tileSize }) => {
+  const decoded = await Promise.all(tiles.map(async (tile) => {
+    const response = await fetch(`${apiBase}/v1/terrain/${tile.z}/${tile.x}/${tile.y}.png`);
+    if (!response.ok) throw new Error(`Terrain request failed: ${response.status}`);
+    return { tile, bitmap: await createImageBitmap(await response.blob()) };
+  }));
+  // Decode terrarium tiles to elevations at native resolution first, then
+  // resample the elevation field. Scaling the PNGs directly interpolates the
+  // R/G/B channels independently and blends tile edges into the empty canvas,
+  // both of which fabricate elevations (see loadElevation in data-provider.ts).
+  const width = 66;
+  const height = 44;
+  const minTileX = Math.min(...tiles.map((tile) => tile.x));
+  const minTileY = Math.min(...tiles.map((tile) => tile.y));
+  const mosaicWidth = (Math.max(...tiles.map((tile) => tile.x)) - minTileX + 1) * tileSize;
+  const mosaicHeight = (Math.max(...tiles.map((tile) => tile.y)) - minTileY + 1) * tileSize;
+  const canvas = new OffscreenCanvas(mosaicWidth, mosaicHeight);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Canvas context unavailable");
+  context.imageSmoothingEnabled = false;
+  for (const { tile, bitmap } of decoded) {
+    context.drawImage(bitmap, (tile.x - minTileX) * tileSize, (tile.y - minTileY) * tileSize);
+    bitmap.close();
+  }
+  const rgba = context.getImageData(0, 0, mosaicWidth, mosaicHeight).data;
+  const mosaic = new Float32Array(mosaicWidth * mosaicHeight);
+  for (let index = 0; index < mosaic.length; index += 1) {
+    const pixel = index * 4;
+    mosaic[index] = rgba[pixel] * 256 + rgba[pixel + 1] + rgba[pixel + 2] / 256 - 32768;
+  }
+  const sampleMosaic = (x, y) => mosaic[Math.max(0, Math.min(mosaicHeight - 1, y)) * mosaicWidth + Math.max(0, Math.min(mosaicWidth - 1, x))];
+  const values = [];
+  for (let row = 0; row < height; row += 1) {
+    const worldY = northY + ((southY - northY) * row) / (height - 1) - minTileY * tileSize - 0.5;
+    const y0 = Math.floor(worldY);
+    const fy = worldY - y0;
+    for (let column = 0; column < width; column += 1) {
+      const worldX = westX + ((eastX - westX) * column) / (width - 1) - minTileX * tileSize - 0.5;
+      const x0 = Math.floor(worldX);
+      const fx = worldX - x0;
+      const top = sampleMosaic(x0, y0) * (1 - fx) + sampleMosaic(x0 + 1, y0) * fx;
+      const bottom = sampleMosaic(x0, y0 + 1) * (1 - fx) + sampleMosaic(x0 + 1, y0 + 1) * fx;
+      values.push(Math.round(top * (1 - fy) + bottom * fy));
+    }
+  }
+  return { width, height, values };
+}, { apiBase: API_BASE, tiles, westX, eastX, northY, southY, tileSize: TILE_SIZE });
+await browser.close();
+
+function simplify(points, minimumDistance = 1.25) {
+  if (points.length <= 2) return points;
+  const output = [points[0]];
+  let previous = points[0];
+  for (const point of points.slice(1, -1)) {
+    if (Math.hypot(point.x - previous.x, point.y - previous.y) >= minimumDistance) {
+      output.push(point);
+      previous = point;
+    }
+  }
+  output.push(points.at(-1));
+  return output;
+}
+
+const archive = new PMTiles(`${API_BASE}/v1/osm.pmtiles`);
+const header = await archive.getHeader();
+const vectorZoom = Math.max(header.minZoom, Math.min(header.maxZoom, zoom));
+const vectorScale = TILE_SIZE * 2 ** vectorZoom;
+const vectorWestX = ((bounds.west + 180) / 360) * vectorScale;
+const vectorEastX = ((bounds.east + 180) / 360) * vectorScale;
+const vectorNorthY = ((1 - Math.asinh(Math.tan(bounds.north * Math.PI / 180)) / Math.PI) / 2) * vectorScale;
+const vectorSouthY = ((1 - Math.asinh(Math.tan(bounds.south * Math.PI / 180)) / Math.PI) / 2) * vectorScale;
+const markings = [];
+for (let y = Math.floor(vectorNorthY / TILE_SIZE); y <= Math.floor((vectorSouthY - 1e-6) / TILE_SIZE); y += 1) {
+  for (let x = Math.floor(vectorWestX / TILE_SIZE); x <= Math.floor((vectorEastX - 1e-6) / TILE_SIZE); x += 1) {
+    const response = await archive.getZxy(vectorZoom, x, y);
+    if (!response) continue;
+    const vectorTile = new VectorTile(new Pbf(new Uint8Array(response.data)));
+    for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
+      const lowered = layerName.toLowerCase();
+      const isRoad = lowered.includes("road") || lowered.includes("transportation");
+      const isWater = lowered === "water" || lowered.includes("waterway");
+      if (!isRoad && !isWater) continue;
+      for (let featureIndex = 0; featureIndex < layer.length && markings.length < 1800; featureIndex += 1) {
+        const feature = layer.feature(featureIndex);
+        if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
+        feature.loadGeometry().forEach((line, lineIndex) => {
+          if (line.length < 2) return;
+          const points = simplify(line.map((point) => ({
+            x: Number(((((x + point.x / feature.extent) * TILE_SIZE - vectorWestX) / (vectorEastX - vectorWestX) - 0.5) * config.widthMm).toFixed(3)),
+            y: Number(((((y + point.y / feature.extent) * TILE_SIZE - vectorNorthY) / (vectorSouthY - vectorNorthY) - 0.5) * config.heightMm).toFixed(3)),
+          })));
+          const xs = points.map((point) => point.x);
+          const ys = points.map((point) => point.y);
+          if (Math.max(...xs) < -config.widthMm / 2 || Math.min(...xs) > config.widthMm / 2 || Math.max(...ys) < -config.heightMm / 2 || Math.min(...ys) > config.heightMm / 2) return;
+          markings.push({ id: `preview-${layerName}-${feature.id ?? featureIndex}-${x}-${y}-${lineIndex}`, kind: isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", points });
+        });
+      }
+    }
+  }
+}
+
+const selectedMarkings = ["road", "water"].flatMap((kind) => markings
+  .filter((marking) => marking.kind === kind)
+  .toSorted((left, right) => right.points.length - left.points.length)
+  .slice(0, 1));
+const elevationBytes = Buffer.allocUnsafe(elevation.values.length * 2);
+elevation.values.forEach((value, index) => elevationBytes.writeInt16LE(value, index * 2));
+const body = `// Generated by scripts/capture-preview-fixture.mjs from the pinned TopoStack datasets.\n` +
+`export const SAMPLE_PREVIEW = ${JSON.stringify({ ...elevation, values: elevationBytes.toString("base64"), bounds, markings: selectedMarkings })} as const;\n`;
+await writeFile(OUTPUT, body);
+console.log(`Wrote ${OUTPUT.pathname}: ${elevation.values.length} elevations, ${selectedMarkings.length} markings`);

@@ -1,92 +1,245 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Box, ChevronDown, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Settings2, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
-  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, generateGeometry, type GeoBounds, type GeometryIRV1, type ProjectConfigV1, type SourceBundleV1 } from "@topostack/core";
-  import { boundsForProject, loadTerrain, type PlaceResult } from "../data-provider";
+  import { Box, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
+  import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, Topbar, Workspace, type ThemePreference } from "@loidolt/theme-svelte";
+  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, lengthUnit, millimetersFromDisplay, validateProject, type GeoBounds, type GeometryIRV1, type ProjectConfigV1, type SourceBundleV1 } from "@topostack/core";
+  import { boundsForProject, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
+  import { theme } from "../lib/theme";
+  import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
+  import { createSamplePreviewSource } from "../sample-preview";
   import { exportBlockReason } from "../export-policy";
   import { loadProject, parseProject, saveProject } from "../storage";
   import { connectAtomm } from "./atomm-bridge";
   import LocationDialog from "./LocationDialog.svelte";
-  import MapCanvas from "./MapCanvas.svelte";
-  import NumberField from "./NumberField.svelte";
-  import ThreePreview from "./ThreePreview.svelte";
-  import Toggle from "./Toggle.svelte";
   import TwoDPreview from "./TwoDPreview.svelte";
 
   type PreviewMode = "map" | "2d" | "3d";
   type GenerateState = "idle" | "loading" | "ready" | "error";
+  const OSM_ATTRIBUTION = MAP_DATA_ATTRIBUTION.find((entry) => entry.name === "OpenStreetMap contributors") ?? { name: "OpenStreetMap contributors", url: "https://www.openstreetmap.org/copyright" };
   const PRESETS: PlaceResult[] = [
+    { id: "crater-lake", label: "Crater Lake, Oregon, USA", lat: 42.9446, lon: -122.109 },
+    { id: "grand-teton", label: "Grand Teton and Jenny Lake, Wyoming, USA", lat: 43.76, lon: -110.73 },
     { id: "rainier", label: "Mount Rainier, Washington, USA", lat: 46.8523, lon: -121.7603 },
     { id: "grand-canyon", label: "Grand Canyon, Arizona, USA", lat: 36.1069, lon: -112.1129 },
-    { id: "matterhorn", label: "Matterhorn, Alps, Switzerland", lat: 45.9763, lon: 7.6586 },
-    { id: "fuji", label: "Mount Fuji, Honshu, Japan", lat: 35.3606, lon: 138.7274 },
   ];
+  const UNIT_OPTIONS = [{ value: "metric", label: "Metric" }, { value: "imperial", label: "Imperial" }];
+  const SHAPE_OPTIONS = [{ value: "rectangle", label: "Rectangle" }, { value: "circle", label: "Circle" }];
+  const MODE_OPTIONS = [{ value: "map", label: "Map" }, { value: "2d", label: "Cut layers" }, { value: "3d", label: "3D stack" }];
+  const THEME_OPTIONS = [{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }];
 
-  function previewFor(config: ProjectConfigV1): GeometryIRV1 {
-    const result = generateGeometry(config, createSyntheticSource(config));
-    result.warnings.push({ code: "DATA_FALLBACK", message: "Sample preview only. Generate real terrain before exporting." });
+  function previewFor(config: ProjectConfigV1, source: SourceBundleV1): GeometryIRV1 {
+    const result = generateGeometry(config, source);
+    addPreviewWarning(result, source);
     return result;
   }
 
+  function addPreviewWarning(result: GeometryIRV1, source: SourceBundleV1): void {
+    if (source.sourceKind === "real" || result.warnings.some((warning) => warning.code === "DATA_FALLBACK")) return;
+    result.warnings.push({ code: "DATA_FALLBACK", message: source.sourceKind === "preview" ? "Bundled real-data preview. Generate fresh terrain before exporting." : "Sample preview only. Generate real terrain before exporting." });
+  }
+
+  function featuredLayerIndex(result: GeometryIRV1): number {
+    let best = { index: 0, score: -1 };
+    result.layers.forEach((layer) => {
+      const score = layer.markings.reduce((total, marking) => total + (marking.kind === "road" || marking.kind === "water" ? 3 : marking.id.startsWith("north-") || marking.id.startsWith("scale-") ? 0 : 1), 0);
+      if (score > best.score) best = { index: layer.index, score };
+    });
+    return best.index;
+  }
+
+  function layerForEnabledDetail(result: GeometryIRV1, patch: Partial<ProjectConfigV1>): number | undefined {
+    const matcher = patch.showRoads ? (id: string, kind: string) => kind === "road" :
+      patch.showWater ? (id: string, kind: string) => kind === "water" :
+      patch.showAlignmentGuides ? (id: string) => id.startsWith("alignment-") :
+      patch.showElevationLabels ? (id: string) => id.startsWith("elevation-") :
+      patch.showNorthArrow ? (id: string) => id.startsWith("north-") :
+      patch.showScaleBar ? (id: string) => id.startsWith("scale-") : undefined;
+    if (!matcher) return undefined;
+    return result.layers.find((layer) => layer.markings.some((marking) => matcher(marking.id, marking.kind)))?.index;
+  }
+
+  const defaultPreviewSource = createSamplePreviewSource();
+  const defaultPreviewGeometry = previewFor(DEFAULT_PROJECT, defaultPreviewSource);
   let project = $state.raw<ProjectConfigV1>(DEFAULT_PROJECT);
-  let geometry = $state.raw<GeometryIRV1>(previewFor(DEFAULT_PROJECT));
+  let activeSource = $state.raw<SourceBundleV1>(defaultPreviewSource);
+  let sourceProject = $state.raw<ProjectConfigV1>(DEFAULT_PROJECT);
+  let geometry = $state.raw<GeometryIRV1>(defaultPreviewGeometry);
   let mode = $state<PreviewMode>("3d");
   let generationState = $state<GenerateState>("ready");
-  let status = $state("Preview fixture ready");
-  let selectedLayer = $state(0);
+  let status = $state("Real-data sample preview ready");
+  let detailsUpdating = $state(false);
+  let selectedLayer = $state(featuredLayerIndex(defaultPreviewGeometry));
   let searchOpen = $state(false);
   let advancedOpen = $state(false);
   let atommReady = $state(false);
+  let themeColor = $state("");
   let booted = $state(false);
   let history = $state.raw<ProjectConfigV1[]>([]);
   let future = $state.raw<ProjectConfigV1[]>([]);
   let importInput: HTMLInputElement;
   let requestId = 0;
+  let operationRevision = 0;
   let generationAbort: AbortController | undefined;
+  let detailAbort: AbortController | undefined;
   let geometryWorker: Worker | undefined;
   let geometryReject: ((reason?: unknown) => void) | undefined;
+  // Heavy preview components (maplibre-gl, three) load on first use of their mode.
+  let MapCanvas = $state.raw<typeof import("./MapCanvas.svelte").default | undefined>(undefined);
+  let ThreePreview = $state.raw<typeof import("./ThreePreview.svelte").default | undefined>(undefined);
+
+  $effect(() => {
+    theme.resolved;
+    themeColor = getComputedStyle(document.documentElement).getPropertyValue("--loidolt-background").trim();
+  });
+
+  $effect(() => {
+    if (mode === "map" && !MapCanvas) void import("./MapCanvas.svelte").then((module) => { MapCanvas = module.default; });
+    else if (mode === "3d" && !ThreePreview) void import("./ThreePreview.svelte").then((module) => { ThreePreview = module.default; });
+  });
 
   const totalHeight = $derived(geometry.layers.length * project.materialThicknessMm);
   const fabricationPanelCount = $derived(geometry.layers.length - geometry.fabricationNests.length);
   const exportReady = $derived(!exportBlockReason(geometry, project));
   const visibleWarnings = $derived(geometry.warnings.slice(0, 2));
-  const layerTicks = $derived(geometry.layers.map((layer) => Math.round(layer.elevationM)));
+  const layerTicks = $derived(geometry.layers.map((layer) => Math.round(displayElevation(layer.elevationM, project.units))));
+  const shownLengthUnit = $derived(lengthUnit(project.units));
+  const shownElevationUnit = $derived(elevationUnit(project.units));
+  const detailCounts = $derived.by(() => {
+    const counts = { road: 0, water: 0, contour: 0, alignment: 0, elevation: 0, north: 0, scale: 0 };
+    for (const layer of geometry.layers) {
+      for (const marking of layer.markings) {
+        if (marking.kind === "road") counts.road += 1;
+        else if (marking.kind === "water") counts.water += 1;
+        else if (marking.kind === "contour") counts.contour += 1;
+        if (marking.id.startsWith("alignment-")) counts.alignment += 1;
+        else if (marking.id.startsWith("elevation-")) counts.elevation += 1;
+        else if (marking.id.startsWith("north-")) counts.north += 1;
+        else if (marking.id.startsWith("scale-")) counts.scale += 1;
+      }
+    }
+    return counts;
+  });
+
+  function shownLength(valueMm: number): number {
+    return Number(displayLength(valueMm, project.units).toFixed(3));
+  }
+
+  function storedLength(value: number): number {
+    return millimetersFromDisplay(value, project.units);
+  }
+
+  function navigateChoice(event: KeyboardEvent & { currentTarget: HTMLButtonElement }): void {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    const choices = [...(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('button[role="radio"]') ?? [])];
+    const current = choices.indexOf(event.currentTarget);
+    if (current < 0 || !choices.length) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? 0 : event.key === "End" ? choices.length - 1 : (current + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + choices.length) % choices.length;
+    choices[next]?.focus();
+    choices[next]?.click();
+  }
 
   onMount(() => {
     let cancelled = false;
     const disconnectAtomm = connectAtomm(() => ({ geometry, project }), () => atommReady = true);
     void loadProject().then((saved) => {
       if (cancelled) return;
-      if (saved) { project = saved; geometry = previewFor(saved); status = "Local project restored · generate to refresh terrain"; }
+      if (saved) { const source = createSyntheticSource(saved); project = saved; sourceProject = saved; activeSource = source; geometry = previewFor(saved, source); selectedLayer = featuredLayerIndex(geometry); status = "Local project restored · generate to refresh terrain"; }
       booted = true;
     });
-    return () => { cancelled = true; disconnectAtomm(); generationAbort?.abort(); geometryWorker?.terminate(); geometryReject?.(new DOMException("Generator closed", "AbortError")); };
+    return () => { cancelled = true; disconnectAtomm(); generationAbort?.abort(); detailAbort?.abort(); geometryWorker?.terminate(); geometryReject?.(new DOMException("Generator closed", "AbortError")); };
   });
 
   $effect(() => {
     const current = project;
     if (!booted) return;
-    const timeout = window.setTimeout(() => { void saveProject(current).catch(() => status = "Local save is unavailable in this browser"); }, 450);
+    const timeout = window.setTimeout(() => {
+      // Never persist a project that would fail validation on the next load —
+      // parse failures there would silently reset the user to the default project.
+      try { validateProject(current); } catch { return; }
+      if (!Number.isFinite(current.explodedPreview) || current.explodedPreview < 0 || current.explodedPreview > 1) return;
+      void saveProject(current).catch(() => status = "Local save is unavailable in this browser");
+    }, 450);
     return () => window.clearTimeout(timeout);
   });
 
+  const HISTORY_LIMIT = 40;
+  const HISTORY_COALESCE_MS = 1200;
+  const COSMETIC_KEYS: ReadonlySet<string> = new Set(["name", "explodedPreview"]);
+  let lastEditSignature = "";
+  let lastEditTime = 0;
+
+  function affectsGeneration(patch: Partial<ProjectConfigV1>): boolean {
+    return Object.keys(patch).some((key) => !COSMETIC_KEYS.has(key));
+  }
+
+  // Coalesce rapid edits to the same field(s) — slider drags, keystrokes — into
+  // a single undo entry so one drag cannot flood the history stack.
+  function pushHistory(keys: string[]): void {
+    const signature = [...keys].sort().join("|");
+    const now = Date.now();
+    future = [];
+    const coalesce = signature !== "" && signature === lastEditSignature && now - lastEditTime < HISTORY_COALESCE_MS && history.length > 0;
+    lastEditSignature = signature;
+    lastEditTime = now;
+    if (coalesce) return;
+    history = [...history, project].slice(-HISTORY_LIMIT);
+  }
+
+  function pushHistoryEntry(): void {
+    lastEditSignature = "";
+    future = [];
+    history = [...history, project].slice(-HISTORY_LIMIT);
+  }
+
   function updateProject(patch: Partial<ProjectConfigV1>): void {
-    history = [...history, project].slice(-40); future = [];
-    const invalidatesBounds = "widthMm" in patch || "heightMm" in patch || "cropShape" in patch;
-    project = { ...project, ...patch, ...(invalidatesBounds ? { location: { ...project.location, bounds: undefined } } : {}) };
+    // Cosmetic edits (rename, exploded-preview slider) must not abort an
+    // in-flight generation.
+    if (affectsGeneration(patch)) invalidatePendingPreview();
+    pushHistory(Object.keys(patch));
+    project = { ...project, ...patch };
   }
   function updateLocation(patch: Partial<ProjectConfigV1["location"]>): void {
+    invalidatePendingPreview();
+    pushHistory(["location"]);
     project = { ...project, location: { ...project.location, ...patch, ...(("lat" in patch || "lon" in patch || "zoom" in patch) && !("bounds" in patch) ? { bounds: undefined } : {}) } };
   }
   function choosePlace(place: PlaceResult): void {
-    history = [...history, project].slice(-40); future = [];
+    invalidatePendingPreview();
+    pushHistoryEntry();
     project = { ...project, name: place.label.split(",")[0] ?? "Terrain project", location: { ...project.location, lat: place.lat, lon: place.lon, label: place.label, zoom: 11, bounds: undefined } };
     searchOpen = false;
   }
-  function undo(): void { const previous = history.at(-1); if (!previous) return; future = [...future, project]; history = history.slice(0, -1); project = previous; }
-  function redo(): void { const next = future.at(-1); if (!next) return; history = [...history, project]; future = future.slice(0, -1); project = next; }
+  function undo(): void { const previous = history.at(-1); if (!previous) return; invalidatePendingPreview(); lastEditSignature = ""; future = [...future, project]; history = history.slice(0, -1); project = previous; }
+  function redo(): void { const next = future.at(-1); if (!next) return; invalidatePendingPreview(); lastEditSignature = ""; history = [...history, project]; future = future.slice(0, -1); project = next; }
+
+  function invalidatePendingPreview(): void {
+    const wasGenerating = generationState === "loading";
+    operationRevision += 1;
+    generationAbort?.abort();
+    detailAbort?.abort();
+    if (geometryWorker) {
+      geometryWorker.terminate(); geometryWorker = undefined;
+      geometryReject?.(new DOMException("Preview superseded", "AbortError")); geometryReject = undefined;
+    }
+    detailsUpdating = false;
+    if (wasGenerating) generationState = "idle";
+  }
+
+  function sameMapArea(left: ProjectConfigV1, right: ProjectConfigV1): boolean {
+    return left.location.lat === right.location.lat && left.location.lon === right.location.lon && left.location.zoom === right.location.zoom &&
+      JSON.stringify(left.location.bounds) === JSON.stringify(right.location.bounds);
+  }
+
+  function resizeSource(source: SourceBundleV1, from: ProjectConfigV1, to: ProjectConfigV1): SourceBundleV1 {
+    if (from.widthMm === to.widthMm && from.heightMm === to.heightMm) return source;
+    const scaleX = to.widthMm / from.widthMm;
+    const scaleY = to.heightMm / from.heightMm;
+    return { ...source, markings: source.markings.map((marking) => ({ ...marking, points: marking.points.map((point) => ({ x: point.x * scaleX, y: point.y * scaleY })) })) };
+  }
 
   function runGeometryWorker(config: ProjectConfigV1, source: SourceBundleV1): Promise<GeometryIRV1> {
+    if (typeof Worker === "undefined") return Promise.resolve(generateGeometry(config, source));
     return new Promise((resolve, reject) => {
       const id = ++requestId;
       const worker = new Worker(new URL("../geometry.worker.ts", import.meta.url), { type: "module" });
@@ -97,7 +250,75 @@
     });
   }
 
+  async function updateMapDetails(patch: Partial<ProjectConfigV1>): Promise<void> {
+    updateProject(patch);
+    const nextProject = project;
+    const revision = operationRevision;
+    if (!sameMapArea(sourceProject, nextProject)) {
+      status = "Map details changed · generate to refresh this area";
+      return;
+    }
+    const controller = new AbortController(); detailAbort = controller; detailsUpdating = true;
+    status = "Updating map details…";
+    try {
+      let source = resizeSource(activeSource, sourceProject, nextProject);
+      const needsVectors = nextProject.showRoads || nextProject.showWater;
+      if (needsVectors && source.sourceKind !== "synthetic" && source.vectorStatus !== "available") {
+        try {
+          const markings = await loadVectorMarkings(source.bounds, nextProject.location.zoom, nextProject, controller.signal);
+          source = { ...source, markings, vectorStatus: "available" };
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          source = { ...source, markings: source.markings.filter((marking) => marking.kind !== "road" && marking.kind !== "water"), vectorStatus: "unavailable" };
+        }
+      }
+      const next = await runGeometryWorker(nextProject, source);
+      if (controller.signal.aborted || revision !== operationRevision) return;
+      addPreviewWarning(next, source);
+      geometry = next; activeSource = source; sourceProject = nextProject;
+      if (generationState === "error") generationState = "ready";
+      selectedLayer = layerForEnabledDetail(next, patch) ?? Math.min(selectedLayer, Math.max(0, next.layers.length - 1));
+      status = source.vectorStatus === "unavailable" && needsVectors ? "Map details updated · roads and water unavailable" : source.sourceKind === "preview" ? "Real-data sample preview updated" : source.sourceKind === "real" ? "Map details updated" : "Sample preview updated · generate for real map data";
+    } catch (error) {
+      if (controller.signal.aborted || revision !== operationRevision || (error instanceof DOMException && error.name === "AbortError")) return;
+      generationState = "error";
+      status = error instanceof Error ? error.message : "Could not update map details.";
+    } finally {
+      if (detailAbort === controller) detailAbort = undefined;
+      if (revision === operationRevision) detailsUpdating = false;
+    }
+  }
+
+
+  async function updateFabrication(patch: Partial<ProjectConfigV1>): Promise<void> {
+    updateProject(patch);
+    const nextProject = project;
+    const revision = operationRevision;
+    if (!sameMapArea(sourceProject, nextProject)) { status = "Cut size changed · generate to refresh terrain"; return; }
+    const controller = new AbortController(); detailAbort = controller; detailsUpdating = true;
+    status = "Resizing cut geometry…";
+    try {
+      const source = resizeSource(activeSource, sourceProject, nextProject);
+      const next = await runGeometryWorker(nextProject, source);
+      if (controller.signal.aborted || revision !== operationRevision) return;
+      addPreviewWarning(next, source);
+      geometry = next; activeSource = source; sourceProject = nextProject;
+      if (generationState === "error") generationState = "ready";
+      selectedLayer = Math.min(selectedLayer, Math.max(0, next.layers.length - 1));
+      status = source.sourceKind === "preview" ? "Real-data sample updated" : source.sourceKind === "real" ? "Fabrication geometry updated" : "Sample preview updated · generate for real map data";
+    } catch (error) {
+      if (controller.signal.aborted || revision !== operationRevision || (error instanceof DOMException && error.name === "AbortError")) return;
+      generationState = "error";
+      status = error instanceof Error ? error.message : "Could not resize the cut geometry.";
+    } finally {
+      if (detailAbort === controller) detailAbort = undefined;
+      if (revision === operationRevision) detailsUpdating = false;
+    }
+  }
+
   async function generate(): Promise<void> {
+    invalidatePendingPreview();
+    const revision = operationRevision;
     const controller = new AbortController(); generationAbort = controller;
     const generationProject: ProjectConfigV1 = { ...project, location: { ...project.location, bounds: boundsForProject(project) } };
     generationState = "loading"; status = "Fetching elevation tiles…";
@@ -106,11 +327,13 @@
       const loaded = await loadTerrain(generationProject, controller.signal); status = "Tracing and repairing contours…";
       const next = await runGeometryWorker(generationProject, loaded.source);
       if (loaded.fallback) next.warnings.push({ code: "DATA_FALLBACK", message: "The map service was unavailable, so this preview uses deterministic sample terrain." });
-      geometry = next; project = generationProject; selectedLayer = 0; mode = "3d"; generationState = "ready";
+      if (controller.signal.aborted || revision !== operationRevision) return;
+      geometry = next; project = generationProject; activeSource = loaded.source; sourceProject = generationProject; selectedLayer = featuredLayerIndex(next); mode = "3d"; generationState = "ready";
       const vectorUnavailable = next.vectorStatus === "unavailable" && (generationProject.showRoads || generationProject.showWater);
       status = loaded.fallback ? "Sample terrain generated · connect the map API for real elevation" : vectorUnavailable ? "Terrain ready · roads and water unavailable" : `Real terrain ready · ${next.layers.length} layers · ${next.layers.length - next.fabricationNests.length} cut panels`;
       void showToast({ type: loaded.fallback || vectorUnavailable ? "warning" : "success", message: loaded.fallback ? "Preview generated with sample terrain" : vectorUnavailable ? "Terrain generated without roads or water" : "Terrain project ready" });
     } catch (error) {
+      if (revision !== operationRevision) return;
       if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) { generationState = "idle"; status = "Generation canceled"; }
       else { generationState = "error"; status = error instanceof Error ? error.message : "Generation failed. Check the location and try again."; void showToast({ type: "error", message: "Could not generate terrain" }); }
     } finally {
@@ -131,59 +354,98 @@
   }
   async function importProject(file: File | undefined): Promise<void> {
     if (!file) return;
-    try { const parsed: unknown = JSON.parse(await file.text()); const candidate = parsed && typeof parsed === "object" && "project" in parsed ? (parsed as { project: unknown }).project : parsed; const imported = parseProject(candidate); history = [...history, project].slice(-40); future = []; project = imported; geometry = previewFor(imported); selectedLayer = 0; generationState = "ready"; status = "Project imported · generate to refresh its terrain"; }
+    try { const parsed: unknown = JSON.parse(await file.text()); const candidate = parsed && typeof parsed === "object" && "project" in parsed ? (parsed as { project: unknown }).project : parsed; const imported = parseProject(candidate); const source = createSyntheticSource(imported); invalidatePendingPreview(); pushHistoryEntry(); project = imported; sourceProject = imported; activeSource = source; geometry = previewFor(imported, source); selectedLayer = featuredLayerIndex(geometry); generationState = "ready"; status = "Project imported · generate to refresh its terrain"; }
     catch (error) { status = error instanceof Error ? error.message : "Could not import this project."; generationState = "error"; }
     finally { if (importInput) importInput.value = ""; }
   }
 </script>
 
-<main class="app-shell">
-  <header class="app-header">
-    <div class="topbar">
-      <div class="brand"><strong>TopoStack</strong><span>Terrain studio</span></div>
-      <label class="project-name"><span>Project</span><input aria-label="Project name" value={project.name} oninput={(event) => updateProject({ name: event.currentTarget.value })} /></label>
-      <div class="history-actions"><button class="icon-button" onclick={undo} disabled={!history.length} aria-label="Undo"><Undo2 size={17} /></button><button class="icon-button" onclick={redo} disabled={!future.length} aria-label="Redo"><Redo2 size={17} /></button><button class="icon-button" onclick={() => importInput.click()} aria-label="Import project JSON"><Upload size={17} /></button><input bind:this={importInput} class="visually-hidden" type="file" accept="application/json,.json" onchange={(event) => void importProject(event.currentTarget.files?.[0])} /></div>
-      <div class="bar-meta"><span>{geometry.layers.length} layers</span><span>{fabricationPanelCount} cut panels</span><span>{totalHeight.toFixed(1)} mm tall</span></div>
-      <div class="export-slot"><div data-atomm-export-button class:atomm-export-pending={!atommReady}></div>{#if !atommReady}<button class="button fallback-export" disabled={!exportReady} onclick={downloadMaster}><Download size={15} /> Download SVG</button>{/if}</div>
-    </div>
-    <div class="contextbar"><div class="context-location"><span>Terrain</span><strong>{project.location.label.split(",")[0]}</strong><small>{project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}</small></div><div class="context-actions"><span class:ready={exportReady} class:error={!exportReady}>{exportReady ? "Ready to export" : "Generate before export"}</span></div></div>
-  </header>
+<svelte:head>
+  <meta name="theme-color" content={themeColor} />
+</svelte:head>
 
-  <div class="workspace">
-    <aside class="config-panel">
+<AppShell class="app-shell">
+  {#snippet header()}
+    <div class="app-header">
+      <Topbar class="topbar">
+        {#snippet brand()}<Brand name="TopoStack" meta="Terrain studio" />{/snippet}
+        {#snippet navigation()}
+          <label class="project-name"><span>Project</span><Input aria-label="Project name" value={project.name} oninput={(event) => updateProject({ name: event.currentTarget.value })} /></label>
+          <div class="history-actions">
+            <IconButton label="Undo" onclick={undo} disabled={!history.length}><Undo2 size={17} /></IconButton>
+            <IconButton label="Redo" onclick={redo} disabled={!future.length}><Redo2 size={17} /></IconButton>
+            <IconButton label="Import project JSON" onclick={() => importInput.click()}><Upload size={17} /></IconButton>
+            <input bind:this={importInput} class="ldt-visually-hidden" type="file" accept="application/json,.json" onchange={(event) => void importProject(event.currentTarget.files?.[0])} />
+          </div>
+        {/snippet}
+        {#snippet actions()}
+          <div class="bar-meta"><span>{geometry.layers.length} layers</span><span>{fabricationPanelCount} cut panels</span><span>{shownLength(totalHeight)} {shownLengthUnit} tall</span></div>
+          <div class="ldt-toggle-group ldt-toggle-group--sm theme-toggle" role="radiogroup" aria-label="Colour scheme">{#each THEME_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={theme.preference === option.value} data-state={theme.preference === option.value ? "on" : "off"} tabindex={theme.preference === option.value ? 0 : -1} onclick={() => theme.preference = option.value as ThemePreference} onkeydown={navigateChoice}>{option.label}</button>{/each}</div>
+          <div class="export-slot"><div data-atomm-export-button class:atomm-export-pending={!atommReady}></div>{#if !atommReady}<Button class="fallback-export" disabled={!exportReady} onclick={downloadMaster}><Download size={15} /> Download SVG</Button>{/if}</div>
+        {/snippet}
+      </Topbar>
+      <ContextBar section="Terrain" title={project.location.label.split(",")[0]} detail={project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}>
+        {#snippet actions()}<span class:ready={exportReady} class:error={!exportReady}>{exportReady ? "Ready to export" : "Generate before export"}</span>{/snippet}
+      </ContextBar>
+    </div>
+  {/snippet}
+
+  <Workspace class="workspace">
+    {#snippet sidebar()}
+    <Sidebar class="config-panel">
       <div class="panel-scroll">
-        <section class="config-section"><p class="eyebrow">Terrain source</p><h1>Build the landscape.</h1><button class="location-card" onclick={() => searchOpen = true}><span class="location-icon"><MapIcon size={18} /></span><span><strong>{project.location.label.split(",")[0]}</strong><small>{project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}</small></span><Search size={17} /></button><div class="preset-row">{#each PRESETS.slice(0, 3) as preset}<button onclick={() => choosePlace(preset)}>{preset.label.split(",")[0].replace("Mount ", "Mt. ")}</button>{/each}</div></section>
-        <section class="config-section"><div class="section-kicker"><span>01</span> Project size</div><div class="shape-switch"><button aria-pressed={project.cropShape === "rectangle"} class:active={project.cropShape === "rectangle"} onclick={() => updateProject({ cropShape: "rectangle" })}><Square size={15} /> Rectangle</button><button aria-pressed={project.cropShape === "circle"} class:active={project.cropShape === "circle"} onclick={() => updateProject({ cropShape: "circle", heightMm: project.widthMm })}><Circle size={15} /> Circle</button></div><div class="field-grid"><NumberField label="Width" value={project.widthMm} min={50} max={600} suffix="mm" onChange={(widthMm) => updateProject({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) })} /><NumberField label="Height" value={project.heightMm} min={50} max={600} suffix="mm" onChange={(heightMm) => updateProject({ heightMm })} /></div></section>
-        <section class="config-section"><div class="section-kicker"><span>02</span> Terrain layers</div><label class="range-field"><span><b>Layer count</b><output>{project.layerCount}</output></span><input type="range" min="2" max="24" value={project.layerCount} oninput={(event) => updateProject({ layerCount: Number(event.currentTarget.value) })} /><small><span>2</span><span>24</span></small></label><NumberField label="Material" value={project.materialThicknessMm} min={0.5} max={25} step={0.1} suffix="mm" onChange={(materialThicknessMm) => updateProject({ materialThicknessMm })} /><div class="relief-summary"><Mountain size={20} /><span><strong>{Math.round(geometry.maxElevationM - geometry.minElevationM).toLocaleString()} m relief</strong><small>≈ {Math.round((geometry.maxElevationM - geometry.minElevationM) / Math.max(1, project.layerCount - 1))} m per layer</small></span></div></section>
-        <section class="config-section"><div class="section-kicker"><span>03</span> Map details</div><div class="toggle-stack"><Toggle checked={project.showRoads} onChange={(showRoads) => updateProject({ showRoads })} icon={Minus} label="Roads & trails" /><Toggle checked={project.showWater} onChange={(showWater) => updateProject({ showWater })} icon={Waves} label="Water outlines" /><Toggle checked={project.showContours} onChange={(showContours) => updateProject({ showContours })} icon={Layers3} label="Contour marks" /><Toggle checked={project.showAlignmentGuides} onChange={(showAlignmentGuides) => updateProject({ showAlignmentGuides })} icon={Layers3} label="Assembly guides" /><Toggle checked={project.showElevationLabels} onChange={(showElevationLabels) => updateProject({ showElevationLabels })} icon={Mountain} label="Elevation labels" /><Toggle checked={project.showNorthArrow} onChange={(showNorthArrow) => updateProject({ showNorthArrow })} icon={Compass} label="North arrow" /><Toggle checked={project.showScaleBar} onChange={(showScaleBar) => updateProject({ showScaleBar })} icon={Minus} label="Scale bar" /></div></section>
-        <section class="config-section advanced-section">
-          <button class="advanced-trigger" aria-expanded={advancedOpen} onclick={() => advancedOpen = !advancedOpen}><Settings2 size={16} /> Fabrication settings <ChevronDown size={16} class={advancedOpen ? "rotate" : ""} /></button>
+        <Section class="config-section"><p class="ldt-eyebrow">Terrain source</p><h1>Build the landscape.</h1><button class="location-card" onclick={() => searchOpen = true}><span class="location-icon"><MapIcon size={18} /></span><span><strong>{project.location.label.split(",")[0]}</strong><small>{project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}</small></span><Search size={17} /></button><div class="preset-row">{#each PRESETS.slice(0, 3) as preset}<button onclick={() => choosePlace(preset)}>{preset.label.split(",")[0].replace("Mount ", "Mt. ")}</button>{/each}</div></Section>
+        <Section class="config-section">
+          <div class="section-kicker"><span>01</span> Cut size</div>
+          <div class="ldt-toggle-group unit-switch" role="radiogroup" aria-label="Display units">{#each UNIT_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.units === option.value} data-state={project.units === option.value ? "on" : "off"} tabindex={project.units === option.value ? 0 : -1} onclick={() => void updateFabrication({ units: option.value as ProjectConfigV1["units"] })} onkeydown={navigateChoice}>{option.label}</button>{/each}</div>
+          <div class="ldt-toggle-group shape-switch" role="radiogroup" aria-label="Crop shape">{#each SHAPE_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.cropShape === option.value} data-state={project.cropShape === option.value ? "on" : "off"} tabindex={project.cropShape === option.value ? 0 : -1} onclick={() => void updateFabrication({ cropShape: option.value as ProjectConfigV1["cropShape"], ...(option.value === "circle" ? { heightMm: project.widthMm } : {}) })} onkeydown={navigateChoice}>{#if option.value === "rectangle"}<Square size={15} />{:else}<Circle size={15} />{/if}{option.label}</button>{/each}</div>
+          <div class="field-grid">
+            <Field label="Width" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Width" value={shownLength(project.widthMm)} min={project.units === "imperial" ? 0.001 : 0.01} step={project.units === "imperial" ? 0.01 : 1} oninput={(event) => { if (event.currentTarget.value !== "") { const widthMm = storedLength(event.currentTarget.valueAsNumber); void updateFabrication({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) }); } }} onValueChange={(width) => { const widthMm = storedLength(width); if (widthMm !== project.widthMm) void updateFabrication({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+            <Field label="Height" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Height" value={shownLength(project.heightMm)} min={project.units === "imperial" ? 0.001 : 0.01} step={project.units === "imperial" ? 0.01 : 1} disabled={project.cropShape === "circle"} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ heightMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(height) => { const heightMm = storedLength(height); if (heightMm !== project.heightMm) void updateFabrication({ heightMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+          </div>
+        </Section>
+        <Section class="config-section">
+          <div class="section-kicker"><span>02</span> Terrain layers</div><label class="range-field"><span><b>Layer count</b><output>{project.layerCount}</output></span><input type="range" min="2" max="24" value={project.layerCount} oninput={(event) => void updateFabrication({ layerCount: Number(event.currentTarget.value) })} /><small><span>2</span><span>24</span></small></label>
+          <Field label="Material" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Material" value={shownLength(project.materialThicknessMm)} min={shownLength(0.5)} max={shownLength(25)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ materialThicknessMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const materialThicknessMm = storedLength(value); if (materialThicknessMm !== project.materialThicknessMm) void updateFabrication({ materialThicknessMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+          <div class="relief-summary"><Mountain size={20} /><span><strong>{Math.round(displayElevation(geometry.maxElevationM - geometry.minElevationM, project.units)).toLocaleString()} {shownElevationUnit} relief</strong><small>≈ {Math.round(displayElevation((geometry.maxElevationM - geometry.minElevationM) / Math.max(1, project.layerCount - 1), project.units))} {shownElevationUnit} per layer</small></span></div>
+        </Section>
+        <Section class="config-section"><div class="section-kicker"><span>03</span> Map details</div><div class="toggle-stack">
+          <Switch checked={project.showRoads} onCheckedChange={(showRoads) => void updateMapDetails({ showRoads })} aria-label="Roads & trails"><span class="toggle-label"><Minus size={16} />Roads & trails</span></Switch>
+          <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
+          <Switch checked={project.showAlignmentGuides} onCheckedChange={(showAlignmentGuides) => void updateMapDetails({ showAlignmentGuides })} aria-label="Assembly guides"><span class="toggle-label"><Layers3 size={16} />Assembly guides</span></Switch>
+          <Switch checked={project.showElevationLabels} onCheckedChange={(showElevationLabels) => void updateMapDetails({ showElevationLabels })} aria-label="Elevation labels"><span class="toggle-label"><Mountain size={16} />Elevation labels</span></Switch>
+          <Switch checked={project.showNorthArrow} onCheckedChange={(showNorthArrow) => void updateMapDetails({ showNorthArrow })} aria-label="North arrow"><span class="toggle-label"><Compass size={16} />North arrow</span></Switch>
+          <Switch checked={project.showScaleBar} onCheckedChange={(showScaleBar) => void updateMapDetails({ showScaleBar })} aria-label="Scale bar"><span class="toggle-label"><Minus size={16} />Scale bar</span></Switch>
+        </div></Section>
+        <Section class="config-section advanced-section">
+          <Button variant="text" class="advanced-trigger" aria-expanded={advancedOpen} onclick={() => advancedOpen = !advancedOpen}>Fabrication settings</Button>
           {#if advancedOpen}
             <div class="advanced-fields">
-              <Toggle checked={project.optimizeMaterialUse} onChange={(optimizeMaterialUse) => updateProject({ optimizeMaterialUse })} icon={Layers3} label="Material-saving nests" />
-              {#if project.optimizeMaterialUse}<NumberField label="Glue margin" value={project.glueMarginMm} min={2} max={25} step={0.5} suffix="mm" onChange={(glueMarginMm) => updateProject({ glueMarginMm })} />{/if}
-              <NumberField label="Laser kerf" value={project.laserKerfMm} min={0} max={1} step={0.01} suffix="mm" onChange={(laserKerfMm) => updateProject({ laserKerfMm })} />
-              <NumberField label="Minimum feature" value={project.minimumFeatureMm} min={0.2} max={5} step={0.1} suffix="mm" onChange={(minimumFeatureMm) => updateProject({ minimumFeatureMm })} />
-              <NumberField label="Contour smoothing" value={project.smoothing} min={0} max={1} step={1} suffix="" onChange={(smoothing) => updateProject({ smoothing })} />
+              <Switch checked={project.optimizeMaterialUse} onCheckedChange={(optimizeMaterialUse) => void updateFabrication({ optimizeMaterialUse })} aria-label="Material-saving nests"><span class="toggle-label"><Layers3 size={16} />Material-saving nests</span></Switch>
+              {#if project.optimizeMaterialUse}<Field label="Glue margin" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Glue margin" value={shownLength(project.glueMarginMm)} min={shownLength(2)} max={shownLength(25)} step={project.units === "imperial" ? 0.01 : 0.5} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ glueMarginMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const glueMarginMm = storedLength(value); if (glueMarginMm !== project.glueMarginMm) void updateFabrication({ glueMarginMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>{/if}
+              <Field label="Laser kerf" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Laser kerf" value={shownLength(project.laserKerfMm)} min={0} max={shownLength(1)} step={project.units === "imperial" ? 0.001 : 0.01} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ laserKerfMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const laserKerfMm = storedLength(value); if (laserKerfMm !== project.laserKerfMm) void updateFabrication({ laserKerfMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+              <Field label="Minimum feature" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Minimum feature" value={shownLength(project.minimumFeatureMm)} min={shownLength(0.2)} max={shownLength(5)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ minimumFeatureMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const minimumFeatureMm = storedLength(value); if (minimumFeatureMm !== project.minimumFeatureMm) void updateFabrication({ minimumFeatureMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+              <Field label="Contour smoothing" class="field-row">{#snippet children({ id })}<NumberField {id} label="Contour smoothing" value={project.smoothing} min={0} max={1} step={1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ smoothing: event.currentTarget.valueAsNumber })} onValueChange={(smoothing) => smoothing !== project.smoothing && void updateFabrication({ smoothing })} />{/snippet}</Field>
               <div class="advanced-subgroup">
                 <p>Elevation label position</p>
                 <div class="advanced-coordinate-fields">
-                  <NumberField label="Label X" value={Math.round(project.elevationLabelPosition.x * 100)} min={-90} max={90} suffix="%" onChange={(x) => updateProject({ elevationLabelPosition: { ...project.elevationLabelPosition, x: x / 100 } })} />
-                  <NumberField label="Label Y" value={Math.round(project.elevationLabelPosition.y * 100)} min={-90} max={90} suffix="%" onChange={(y) => updateProject({ elevationLabelPosition: { ...project.elevationLabelPosition, y: y / 100 } })} />
+                  <Field label="Label X" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Label X" value={Math.round(project.elevationLabelPosition.x * 100)} min={-90} max={90} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, x: event.currentTarget.valueAsNumber / 100 } })} onValueChange={(x) => x !== Math.round(project.elevationLabelPosition.x * 100) && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, x: x / 100 } })} /><em>%</em></span>{/snippet}</Field>
+                  <Field label="Label Y" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Label Y" value={Math.round(project.elevationLabelPosition.y * 100)} min={-90} max={90} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, y: event.currentTarget.valueAsNumber / 100 } })} onValueChange={(y) => y !== Math.round(project.elevationLabelPosition.y * 100) && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, y: y / 100 } })} /><em>%</em></span>{/snippet}</Field>
                 </div>
               </div>
             </div>
           {/if}
-        </section>
+        </Section>
       </div>
-      <div class="generate-dock"><div class={`status-line status-${generationState}`} role="status" aria-live="polite"><span></span>{!exportReady && geometry.sourceKind === "real" ? "Settings changed · regenerate before export" : status}</div><button class="button primary generate-button" onclick={() => generationState === "loading" ? cancelGeneration() : void generate()}>{#if generationState === "loading"}<X size={18} /> Cancel generation{:else}<Sparkles size={18} /> {geometry.sourceKind === "real" ? "Regenerate terrain" : "Generate terrain"}{/if}</button></div>
-    </aside>
+      <div class="generate-dock"><div class={`status-line status-${generationState}`} class:details-updating={detailsUpdating} role="status" aria-live="polite"><span></span>{!detailsUpdating && !exportReady && geometry.sourceKind === "real" ? "Settings changed · regenerate before export" : status}</div><Button variant="primary" class="generate-button" onclick={() => generationState === "loading" ? cancelGeneration() : void generate()}>{#if generationState === "loading"}<X size={18} /> Cancel generation{:else}<Sparkles size={18} /> {geometry.sourceKind === "real" ? "Regenerate terrain" : "Generate terrain"}{/if}</Button></div>
+    </Sidebar>
+    {/snippet}
 
     <section class="preview-panel">
-      <div class="preview-toolbar"><div class="mode-switch" aria-label="Preview mode"><button aria-pressed={mode === "map"} class:active={mode === "map"} onclick={() => mode = "map"}><MapIcon size={15} /> Map</button><button aria-pressed={mode === "2d"} class:active={mode === "2d"} onclick={() => mode = "2d"}><Layers3 size={15} /> Cut layers</button><button aria-pressed={mode === "3d"} class:active={mode === "3d"} onclick={() => mode = "3d"}><Box size={15} /> 3D stack</button></div><div class="preview-readout"><span>{project.widthMm} × {project.heightMm} mm</span><span>{Math.round(geometry.minElevationM).toLocaleString()}–{Math.round(geometry.maxElevationM).toLocaleString()} m</span></div></div>
-      <div class="preview-stage">{#if mode === "map"}<MapCanvas {project} onLocationChange={(lat: number, lon: number, zoom: number, bounds: GeoBounds) => updateLocation({ lat, lon, zoom, bounds, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` })} />{:else if mode === "2d"}<TwoDPreview {geometry} {selectedLayer} />{:else}<ThreePreview {geometry} exploded={project.explodedPreview} />{/if}{#if generationState === "loading"}<div class="generation-overlay"><div class="contour-loader"><span></span><span></span><span></span></div><strong>Building your terrain</strong><small>{status}</small></div>{/if}{#if visibleWarnings.length}<div class="warning-stack">{#each visibleWarnings as warning (`${warning.code}-${warning.message}`)}<div><span>!</span>{warning.message}</div>{/each}</div>{/if}</div>
-      <div class="layer-dock"><div class="layer-heading"><span><Layers3 size={16} /><b>Layer {selectedLayer + 1}</b> of {geometry.layers.length}</span><strong>{layerTicks[selectedLayer]?.toLocaleString()} m</strong></div><input class="layer-range" type="range" min="0" max={Math.max(0, geometry.layers.length - 1)} value={selectedLayer} oninput={(event) => { selectedLayer = Number(event.currentTarget.value); if (mode === "3d") mode = "2d"; }} /><div class="layer-scale"><span>{layerTicks[0]?.toLocaleString()} m</span><span>{layerTicks[Math.floor(layerTicks.length / 2)]?.toLocaleString()} m</span><span>{layerTicks.at(-1)?.toLocaleString()} m</span></div>{#if mode === "3d"}<label class="explode-control"><span>Stack</span><input type="range" min="0" max="1" step="0.05" value={project.explodedPreview} oninput={(event) => updateProject({ explodedPreview: Number(event.currentTarget.value) })} /><span>Exploded</span></label>{/if}</div>
+      <div class="preview-toolbar"><div class="ldt-toggle-group mode-switch" role="radiogroup" aria-label="Preview mode">{#each MODE_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={mode === option.value} data-state={mode === option.value ? "on" : "off"} tabindex={mode === option.value ? 0 : -1} onclick={() => { if (option.value === "2d" && selectedLayer === 0) selectedLayer = featuredLayerIndex(geometry); mode = option.value as PreviewMode; }} onkeydown={navigateChoice}>{#if option.value === "map"}<MapIcon size={15} />{:else if option.value === "2d"}<Layers3 size={15} />{:else}<Box size={15} />{/if}{option.label}</button>{/each}</div><div class="preview-readout"><span>{shownLength(project.widthMm)} × {shownLength(project.heightMm)} {shownLengthUnit}</span><span>{Math.round(displayElevation(geometry.minElevationM, project.units)).toLocaleString()}–{Math.round(displayElevation(geometry.maxElevationM, project.units)).toLocaleString()} {shownElevationUnit}</span></div></div>
+      <div class="preview-stage" data-road-markings={detailCounts.road} data-water-markings={detailCounts.water} data-contour-markings={detailCounts.contour} data-alignment-markings={detailCounts.alignment} data-elevation-markings={detailCounts.elevation} data-north-markings={detailCounts.north} data-scale-markings={detailCounts.scale}>{#if mode === "map"}{#if MapCanvas}<MapCanvas {project} onLocationChange={(lat: number, lon: number, zoom: number, bounds: GeoBounds) => updateLocation({ lat, lon, zoom, bounds, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` })} />{:else}<div class="preview-loading">Loading map…</div>{/if}{:else if mode === "2d"}<TwoDPreview {geometry} {selectedLayer} />{:else if ThreePreview}<ThreePreview {geometry} exploded={project.explodedPreview} />{:else}<div class="preview-loading">Loading 3D preview…</div>{/if}{#if mode !== "map"}<div class="preview-attribution">Map data © <a href={OSM_ATTRIBUTION.url} target="_blank" rel="noreferrer">{OSM_ATTRIBUTION.name}</a></div>{/if}{#if generationState === "loading"}<div class="generation-overlay"><div class="contour-loader"><span></span><span></span><span></span></div><strong>Building your terrain</strong><small>{status}</small></div>{/if}{#if visibleWarnings.length}<div class="warning-stack">{#each visibleWarnings as warning (`${warning.code}-${warning.message}`)}<div><span>!</span>{warning.message}</div>{/each}</div>{/if}</div>
+      <div class="layer-dock"><div class="layer-heading"><span><Layers3 size={16} /><b>Layer {selectedLayer + 1}</b> of {geometry.layers.length}</span><strong>{layerTicks[selectedLayer]?.toLocaleString()} {shownElevationUnit}</strong></div><input class="layer-range" type="range" min="0" max={Math.max(0, geometry.layers.length - 1)} value={selectedLayer} oninput={(event) => { selectedLayer = Number(event.currentTarget.value); if (mode === "3d") mode = "2d"; }} /><div class="layer-scale"><span>{layerTicks[0]?.toLocaleString()} {shownElevationUnit}</span><span>{layerTicks[Math.floor(layerTicks.length / 2)]?.toLocaleString()} {shownElevationUnit}</span><span>{layerTicks.at(-1)?.toLocaleString()} {shownElevationUnit}</span></div>{#if mode === "3d"}<label class="explode-control"><span>Stack</span><input type="range" min="0" max="1" step="0.05" value={project.explodedPreview} oninput={(event) => updateProject({ explodedPreview: Number(event.currentTarget.value) })} /><span>Exploded</span></label>{/if}</div>
     </section>
-  </div>
+  </Workspace>
   {#if searchOpen}<LocationDialog {project} presets={PRESETS} onChoose={choosePlace} onCoordinates={(lat, lon) => updateLocation({ lat, lon, label: "Custom coordinates" })} onClose={() => searchOpen = false} />{/if}
-</main>
+</AppShell>

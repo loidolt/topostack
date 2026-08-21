@@ -1,7 +1,22 @@
 import { contours } from "d3-contour";
 import polygonClipping, { type MultiPolygon, type Pair, type Ring } from "polygon-clipping";
-import { labelDimensions } from "./labels.js";
+import {
+  type Bounds2D,
+  boundsOverlap,
+  clamp,
+  close,
+  distanceToSegment,
+  pointAt,
+  pointInPolygon,
+  pointInRing,
+  ringBounds,
+  ringFitsInsidePolygon,
+  segmentIntersectionT,
+  signedArea,
+} from "./geometry2d.js";
+import { placeElevationLabel, placeLabel } from "./label-placement.js";
 import { offsetClosedRing } from "./offset.js";
+import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
 import type {
   ElevationGrid,
   GeometryIRV1,
@@ -13,8 +28,6 @@ import type {
   ProjectConfigV1,
   SourceBundleV1,
 } from "./types.js";
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 function boundary(config: ProjectConfigV1): Point2D[] {
   const w = config.widthMm / 2;
@@ -30,10 +43,13 @@ function boundary(config: ProjectConfigV1): Point2D[] {
   }
 
   const radius = Math.min(w, h);
-  return Array.from({ length: 97 }, (_, index) => {
+  const points = Array.from({ length: 96 }, (_, index) => {
     const angle = (index / 96) * Math.PI * 2;
     return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
   });
+  // sin/cos of 2π are not exactly 0, so close with a copy of the first point
+  // rather than a 97th sample; consumers require first === last exactly.
+  return [...points, { ...points[0]! }];
 }
 
 function toRing(points: Point2D[]): Ring {
@@ -42,73 +58,6 @@ function toRing(points: Point2D[]): Ring {
 
 function toPoint(ringPoint: Pair): Point2D {
   return { x: ringPoint[0], y: ringPoint[1] };
-}
-
-function close(points: Point2D[]): Point2D[] {
-  if (points.length === 0) return points;
-  const first = points[0];
-  const last = points[points.length - 1];
-  if (!first || !last || (first.x === last.x && first.y === last.y)) return points;
-  return [...points, first];
-}
-
-function signedArea(points: Point2D[]): number {
-  let area = 0;
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const current = points[index];
-    const next = points[index + 1];
-    if (current && next) area += current.x * next.y - next.x * current.y;
-  }
-  return area / 2;
-}
-
-function pointInRing(point: Point2D, ring: Point2D[]): boolean {
-  let inside = false;
-  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
-    const a = ring[index];
-    const b = ring[previous];
-    if (!a || !b) continue;
-    const crosses = (a.y > point.y) !== (b.y > point.y) && point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
-    if (crosses) inside = !inside;
-  }
-  return inside;
-}
-
-function pointInPolygon(point: Point2D, polygon: Polygon2D): boolean {
-  return pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole));
-}
-
-function distanceToSegment(point: Point2D, start: Point2D, end: Point2D): number {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
-  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
-  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
-}
-
-function segmentDistance(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number {
-  if (segmentsIntersect(a, b, c, d)) return 0;
-  return Math.min(distanceToSegment(a, c, d), distanceToSegment(b, c, d), distanceToSegment(c, a, b), distanceToSegment(d, a, b));
-}
-
-function ringFitsInsidePolygon(ring: Point2D[], polygon: Polygon2D, marginMm: number, allowContainedHoles = false): boolean {
-  const points = ring.slice(0, -1);
-  if (!points.length || !points.every((point) => pointInPolygon(point, polygon))) return false;
-  const boundaries = [polygon.outer, ...polygon.holes];
-  for (let index = 0; index < ring.length - 1; index += 1) {
-    const start = ring[index];
-    const end = ring[index + 1];
-    if (!start || !end || !pointInPolygon(pointAt(start, end, 0.5), polygon)) return false;
-    for (const boundary of boundaries) {
-      for (let edge = 0; edge < boundary.length - 1; edge += 1) {
-        const boundaryStart = boundary[edge];
-        const boundaryEnd = boundary[edge + 1];
-        if (boundaryStart && boundaryEnd && segmentDistance(start, end, boundaryStart, boundaryEnd) < marginMm - 1e-7) return false;
-      }
-    }
-  }
-  return allowContainedHoles || !polygon.holes.some((hole) => hole.slice(0, -1).some((point) => pointInRing(point, ring)));
 }
 
 function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[], marginMm: number, allowContainedHoles = false): number[] | undefined {
@@ -121,6 +70,11 @@ function containingPolygonIndexes(children: Polygon2D[], containers: Polygon2D[]
   return indexes;
 }
 
+// Re-validation of an existing nest after a later nest carved cavities into its
+// covering layer. Contained holes are allowed here because by then every hole
+// inside the nested ring is a chained cavity that the creation-time check below
+// already proved is covered one level higher — unlike terrain holes, which the
+// creation-time check rejects.
 function nestHasGlueMargin(nest: FabricationNest, layers: LayerIR[], laserKerfMm: number): boolean {
   const nestedLayer = layers[nest.nestedLayerIndex];
   const coveringLayer = layers[nest.donorLayerIndex + 1];
@@ -140,7 +94,12 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
       const donorLayer = layers[donorLayerIndex];
       const coveringLayer = layers[donorLayerIndex + 1];
       if (!donorLayer || !coveringLayer || coveringLayer.polygons.length === 0) continue;
-      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, requiredClearanceMm, true)) continue;
+      // The covering layer must not have terrain holes inside the nested ring:
+      // nothing above covers a terrain hole, so the cavity carved into the
+      // donor would be visible through it in the assembled model. At creation
+      // time the covering layer has no cavity holes yet (donors ascend), so
+      // every contained hole is terrain — reject them all.
+      if (!containingPolygonIndexes(nestedLayer.polygons, coveringLayer.polygons, requiredClearanceMm)) continue;
       const donorPolygonIndexes = containingPolygonIndexes(nestedLayer.polygons, donorLayer.polygons, requiredClearanceMm);
       if (!donorPolygonIndexes) continue;
       const cavities = nestedLayer.polygons.map((polygon, nestedPolygonIndex) => {
@@ -170,129 +129,6 @@ function addMaterialNests(config: ProjectConfigV1, layers: LayerIR[]): Fabricati
   return nests;
 }
 
-interface Bounds2D {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-function labelBounds(label: string, origin: Point2D, padding = 0): Bounds2D {
-  const dimensions = labelDimensions(label);
-  return {
-    minX: origin.x - padding,
-    minY: origin.y - padding,
-    maxX: origin.x + dimensions.width + padding,
-    maxY: origin.y + dimensions.height + padding,
-  };
-}
-
-function boundsPoints(bounds: Bounds2D): Point2D[] {
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
-  return [
-    { x: bounds.minX, y: bounds.minY }, { x: centerX, y: bounds.minY }, { x: bounds.maxX, y: bounds.minY },
-    { x: bounds.minX, y: centerY }, { x: centerX, y: centerY }, { x: bounds.maxX, y: centerY },
-    { x: bounds.minX, y: bounds.maxY }, { x: centerX, y: bounds.maxY }, { x: bounds.maxX, y: bounds.maxY },
-  ];
-}
-
-function boundsOverlap(a: Bounds2D, b: Bounds2D): boolean {
-  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
-}
-
-function pointInBounds(point: Point2D, bounds: Bounds2D): boolean {
-  return point.x >= bounds.minX && point.x <= bounds.maxX && point.y >= bounds.minY && point.y <= bounds.maxY;
-}
-
-function orientation(a: Point2D, b: Point2D, c: Point2D): number {
-  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-}
-
-function pointOnSegment(point: Point2D, a: Point2D, b: Point2D): boolean {
-  return Math.abs(orientation(a, b, point)) < 1e-8 &&
-    point.x >= Math.min(a.x, b.x) - 1e-8 && point.x <= Math.max(a.x, b.x) + 1e-8 &&
-    point.y >= Math.min(a.y, b.y) - 1e-8 && point.y <= Math.max(a.y, b.y) + 1e-8;
-}
-
-function segmentsIntersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D): boolean {
-  const abC = orientation(a, b, c);
-  const abD = orientation(a, b, d);
-  const cdA = orientation(c, d, a);
-  const cdB = orientation(c, d, b);
-  if (((abC > 0 && abD < 0) || (abC < 0 && abD > 0)) && ((cdA > 0 && cdB < 0) || (cdA < 0 && cdB > 0))) return true;
-  return (Math.abs(abC) < 1e-8 && pointOnSegment(c, a, b)) ||
-    (Math.abs(abD) < 1e-8 && pointOnSegment(d, a, b)) ||
-    (Math.abs(cdA) < 1e-8 && pointOnSegment(a, c, d)) ||
-    (Math.abs(cdB) < 1e-8 && pointOnSegment(b, c, d));
-}
-
-function segmentIntersectsBounds(a: Point2D, b: Point2D, bounds: Bounds2D): boolean {
-  if (pointInBounds(a, bounds) || pointInBounds(b, bounds)) return true;
-  const topLeft = { x: bounds.minX, y: bounds.minY };
-  const topRight = { x: bounds.maxX, y: bounds.minY };
-  const bottomRight = { x: bounds.maxX, y: bounds.maxY };
-  const bottomLeft = { x: bounds.minX, y: bounds.maxY };
-  return segmentsIntersect(a, b, topLeft, topRight) || segmentsIntersect(a, b, topRight, bottomRight) ||
-    segmentsIntersect(a, b, bottomRight, bottomLeft) || segmentsIntersect(a, b, bottomLeft, topLeft);
-}
-
-function boundsInsidePolygon(bounds: Bounds2D, polygon: Polygon2D): boolean {
-  if (!boundsPoints(bounds).every((point) => pointInPolygon(point, polygon))) return false;
-  const rings = [polygon.outer, ...polygon.holes];
-  for (const ring of rings) {
-    if (ring.some((point) => pointInBounds(point, bounds))) return false;
-    for (let index = 0; index < ring.length - 1; index += 1) {
-      const start = ring[index];
-      const end = ring[index + 1];
-      if (start && end && segmentIntersectsBounds(start, end, bounds)) return false;
-    }
-  }
-  return true;
-}
-
-function markingIntersectsBounds(marking: LayerIR["markings"][number], bounds: Bounds2D): boolean {
-  if (marking.label && marking.points[0] && boundsOverlap(labelBounds(marking.label, marking.points[0], 0.8), bounds)) return true;
-  for (let index = 0; index < marking.points.length - 1; index += 1) {
-    const start = marking.points[index];
-    const end = marking.points[index + 1];
-    if (start && end && segmentIntersectsBounds(start, end, bounds)) return true;
-  }
-  return false;
-}
-
-function labelCandidates(preferred: Point2D): Point2D[] {
-  const candidates: Point2D[] = [{ ...preferred }];
-  for (let y = -9; y <= 9; y += 1) {
-    for (let x = -9; x <= 9; x += 1) {
-      const candidate = { x: x / 10, y: y / 10 };
-      if (Math.abs(candidate.x - preferred.x) > 1e-8 || Math.abs(candidate.y - preferred.y) > 1e-8) candidates.push(candidate);
-    }
-  }
-  return candidates.map((candidate, index) => ({ candidate, index })).sort((left, right) => {
-    const leftDistance = (left.candidate.x - preferred.x) ** 2 + (left.candidate.y - preferred.y) ** 2;
-    const rightDistance = (right.candidate.x - preferred.x) ** 2 + (right.candidate.y - preferred.y) ** 2;
-    return leftDistance - rightDistance || left.index - right.index;
-  }).map(({ candidate }) => candidate);
-}
-
-function placeLabel(label: string, config: ProjectConfigV1, polygons: Polygon2D[], markings: LayerIR["markings"], preferred: Point2D, requiredPolygons?: Polygon2D[]): Point2D | undefined {
-  const dimensions = labelDimensions(label);
-  for (const candidate of labelCandidates(preferred)) {
-    const center = { x: candidate.x * config.widthMm / 2, y: candidate.y * config.heightMm / 2 };
-    const origin = { x: center.x - dimensions.width / 2, y: center.y - dimensions.height / 2 };
-    const bounds = labelBounds(label, origin, 0.8);
-    const fitsMaterial = polygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
-    const fitsRequirement = !requiredPolygons || requiredPolygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
-    if (fitsMaterial && fitsRequirement && !markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
-  }
-  return undefined;
-}
-
-function placeElevationLabel(label: string, config: ProjectConfigV1, layer: LayerIR): Point2D | undefined {
-  return placeLabel(label, config, layer.polygons, layer.markings, config.elevationLabelPosition);
-}
-
 function polygonCenter(polygon: Polygon2D, config: ProjectConfigV1): Point2D {
   const points = polygon.outer.slice(0, -1);
   const xs = points.map((point) => point.x);
@@ -303,35 +139,24 @@ function polygonCenter(polygon: Polygon2D, config: ProjectConfigV1): Point2D {
   };
 }
 
-function segmentIntersectionT(a: Point2D, b: Point2D, c: Point2D, d: Point2D): number | undefined {
-  const rx = b.x - a.x;
-  const ry = b.y - a.y;
-  const sx = d.x - c.x;
-  const sy = d.y - c.y;
-  const denominator = rx * sy - ry * sx;
-  if (Math.abs(denominator) < 1e-9) return undefined;
-  const qx = c.x - a.x;
-  const qy = c.y - a.y;
-  const t = (qx * sy - qy * sx) / denominator;
-  const u = (qx * ry - qy * rx) / denominator;
-  return t > 1e-8 && t < 1 - 1e-8 && u >= 0 && u <= 1 ? t : undefined;
-}
-
-function pointAt(a: Point2D, b: Point2D, t: number): Point2D {
-  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-}
-
 function clipPolyline(points: Point2D[], polygons: Polygon2D[]): Point2D[][] {
   if (points.length < 2) return [];
   const result: Point2D[][] = [];
   let active: Point2D[] = [];
-  const rings = polygons.flatMap((polygon) => [polygon.outer, ...polygon.holes]);
+  const rings = polygons.flatMap((polygon) => [polygon.outer, ...polygon.holes]).map((ring) => ({ ring, bounds: ringBounds(ring) }));
   for (let index = 0; index < points.length - 1; index += 1) {
     const a = points[index];
     const b = points[index + 1];
     if (!a || !b) continue;
+    const segmentBounds: Bounds2D = {
+      minX: Math.min(a.x, b.x) - 1e-6,
+      minY: Math.min(a.y, b.y) - 1e-6,
+      maxX: Math.max(a.x, b.x) + 1e-6,
+      maxY: Math.max(a.y, b.y) + 1e-6,
+    };
     const cuts = [0, 1];
-    for (const ring of rings) {
+    for (const { ring, bounds } of rings) {
+      if (!boundsOverlap(segmentBounds, bounds)) continue;
       for (let edge = 0; edge < ring.length - 1; edge += 1) {
         const t = ring[edge] && ring[edge + 1] ? segmentIntersectionT(a, b, ring[edge]!, ring[edge + 1]!) : undefined;
         if (t !== undefined) cuts.push(t);
@@ -399,14 +224,28 @@ function stableProjectValue(config: ProjectConfigV1): unknown {
   };
 }
 
+// Canonical JSON: object keys sorted recursively so value-identical configs
+// hash identically regardless of key insertion order.
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 export function projectFingerprint(config: ProjectConfigV1): string {
-  const input = JSON.stringify(stableProjectValue(config));
+  const input = stableStringify(stableProjectValue(config));
   let hash = 2166136261;
   for (let index = 0; index < input.length; index += 1) {
     hash ^= input.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return `v1-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `v2-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function distanceM(lat: number, lonA: number, lonB: number): number {
@@ -420,6 +259,20 @@ function niceScaleDistance(maximumM: number): number {
   return [5, 2, 1].map((factor) => factor * power).find((value) => value <= maximumM) ?? power;
 }
 
+function scaleMarking(maximumM: number, units: ProjectConfigV1["units"]): { distanceM: number; label: string } {
+  if (units === "metric") {
+    const distanceM = niceScaleDistance(maximumM);
+    return { distanceM, label: distanceM >= 1000 ? `${Number((distanceM / 1000).toFixed(1))} km` : `${Math.round(distanceM)} m` };
+  }
+  const maximumFeet = maximumM * FEET_PER_METER;
+  if (maximumFeet >= 2640) {
+    const miles = niceScaleDistance(maximumFeet / 5280);
+    return { distanceM: miles * 5280 / FEET_PER_METER, label: `${Number(miles.toFixed(1))} mi` };
+  }
+  const feet = niceScaleDistance(maximumFeet);
+  return { distanceM: feet / FEET_PER_METER, label: `${Math.round(feet)} ft` };
+}
+
 function removeTinyRing(points: Point2D[], minimumFeatureMm: number): boolean {
   if (points.length < 4) return true;
   const xs = points.map((point) => point.x);
@@ -427,25 +280,60 @@ function removeTinyRing(points: Point2D[], minimumFeatureMm: number): boolean {
   return Math.max(...xs) - Math.min(...xs) < minimumFeatureMm || Math.max(...ys) - Math.min(...ys) < minimumFeatureMm;
 }
 
+// Douglas–Peucker: keeps every vertex that deviates from the simplified shape
+// by more than tolerance. The previous distance-bucket thinning kept collinear
+// stair-step vertices while dropping genuine curvature, which read as chunky.
 function simplify(points: Point2D[], tolerance: number): Point2D[] {
   if (points.length <= 5 || tolerance <= 0) return points;
-  const result: Point2D[] = [points[0]!];
-  let previous = points[0]!;
-  for (let index = 1; index < points.length - 1; index += 1) {
-    const point = points[index]!;
-    if (Math.hypot(point.x - previous.x, point.y - previous.y) >= tolerance) {
-      result.push(point);
-      previous = point;
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  while (stack.length) {
+    const [start, end] = stack.pop()!;
+    let maxDistance = tolerance;
+    let maxIndex = -1;
+    for (let index = start + 1; index < end; index += 1) {
+      const distance = distanceToSegment(points[index]!, points[start]!, points[end]!);
+      if (distance > maxDistance) {
+        maxDistance = distance;
+        maxIndex = index;
+      }
+    }
+    if (maxIndex > 0) {
+      keep[maxIndex] = 1;
+      stack.push([start, maxIndex], [maxIndex, end]);
     }
   }
-  result.push(points[points.length - 1]!);
-  return close(result);
+  return close(points.filter((_, index) => keep[index] === 1));
 }
 
+// One Chaikin corner-cutting pass per ring, applied before clipping so the
+// crop boundary keeps its sharp corners. Rounds the 90°/45° stair corners
+// marching squares leaves behind without measurably shrinking features.
+function chaikinRing(ring: Pair[]): Pair[] {
+  if (ring.length < 5) return ring;
+  const open = ring.slice(0, -1);
+  const result: Ring = [];
+  for (let index = 0; index < open.length; index += 1) {
+    const current = open[index]!;
+    const next = open[(index + 1) % open.length]!;
+    result.push(
+      [current[0] * 0.75 + next[0] * 0.25, current[1] * 0.75 + next[1] * 0.25],
+      [current[0] * 0.25 + next[0] * 0.75, current[1] * 0.25 + next[1] * 0.75],
+    );
+  }
+  result.push([result[0]![0], result[0]![1]]);
+  return result;
+}
+
+// d3-contour emits ring coordinates in cell space where sample (i, j) sits at
+// (i + 0.5, j + 0.5); map samples 0..n-1 onto the full material span so the
+// forward mapping stays the exact inverse of sampleElevation.
 function contourToMm(point: [number, number], grid: ElevationGrid, config: ProjectConfigV1): Point2D {
   return {
-    x: (point[0] / grid.width - 0.5) * config.widthMm,
-    y: (point[1] / grid.height - 0.5) * config.heightMm,
+    x: ((point[0] - 0.5) / (grid.width - 1) - 0.5) * config.widthMm,
+    y: ((point[1] - 0.5) / (grid.height - 1) - 0.5) * config.heightMm,
   };
 }
 
@@ -475,6 +363,9 @@ function sampleElevation(grid: ElevationGrid, point: Point2D, config: ProjectCon
 
 function splitMarking(feature: MarkingFeature, thresholds: number[], source: SourceBundleV1, config: ProjectConfigV1): Array<{ layer: number; points: Point2D[] }> {
   const result: Array<{ layer: number; points: Point2D[] }> = [];
+  // A single-point feature (e.g. a point label) still belongs to a layer even
+  // though it produces no drawable segment.
+  const minimumRun = feature.points.length === 1 ? 1 : 2;
   let activeLayer = -1;
   let active: Point2D[] = [];
   for (const point of feature.points) {
@@ -484,14 +375,14 @@ function splitMarking(feature: MarkingFeature, thresholds: number[], source: Sou
       if (elevation >= (thresholds[index] ?? Number.POSITIVE_INFINITY)) layer = index;
     }
     if (layer !== activeLayer) {
-      if (active.length > 1) result.push({ layer: activeLayer, points: active });
+      if (active.length >= minimumRun && activeLayer >= 0) result.push({ layer: activeLayer, points: active });
       activeLayer = layer;
       active = active.length ? [active[active.length - 1]!, point] : [point];
     } else {
       active.push(point);
     }
   }
-  if (active.length > 1) result.push({ layer: activeLayer, points: active });
+  if (active.length >= minimumRun && activeLayer >= 0) result.push({ layer: activeLayer, points: active });
   return result;
 }
 
@@ -527,10 +418,13 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   }];
 
   generated.forEach((contour, generatedIndex) => {
-    const raw: MultiPolygon = contour.coordinates.map((polygon) => polygon.map((ring) => ring.map((point) => {
-      const mapped = contourToMm([point[0] ?? 0, point[1] ?? 0], grid, config);
-      return [mapped.x, mapped.y] as Pair;
-    })));
+    const raw: MultiPolygon = contour.coordinates.map((polygon) => polygon.map((ring) => {
+      const mapped: Ring = ring.map((point) => {
+        const point2d = contourToMm([point[0] ?? 0, point[1] ?? 0], grid, config);
+        return [point2d.x, point2d.y] as Pair;
+      });
+      return config.smoothing > 0 ? chaikinRing(mapped) : mapped;
+    }));
     const polygons = clipContours(raw, clip, config.minimumFeatureMm);
     const index = generatedIndex + 1;
     if (polygons.length === 0) warnings.push({ code: "EMPTY_LAYER", message: `Layer ${index + 1} has no printable terrain at its elevation.` });
@@ -549,33 +443,21 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   for (const feature of source.markings) {
     const enabled = (feature.kind === "road" && config.showRoads) ||
       (feature.kind === "water" && config.showWater) ||
-      (feature.kind === "contour" && config.showContours) ||
-      feature.kind === "label" || feature.kind === "guide";
+      feature.kind === "contour" || feature.kind === "label" || feature.kind === "guide";
     if (!enabled) continue;
-    for (const segment of splitMarking(feature, thresholds, source, config)) {
+    for (const [segmentIndex, segment] of splitMarking(feature, thresholds, source, config).entries()) {
       const layer = layers[segment.layer];
       if (!layer) continue;
       if (feature.label && segment.points[0] && layer.polygons.some((polygon) => pointInPolygon(segment.points[0]!, polygon))) {
-        layer.markings.push({ id: `${feature.id}-${layer.index}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label });
+        layer.markings.push({ id: `${feature.id}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label });
       }
       clipPolyline(segment.points, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
-        id: `${feature.id}-${layer.index}-${clipIndex}`,
+        id: `${feature.id}-${layer.index}-${segmentIndex}-${clipIndex}`,
         operation: feature.operation,
         kind: feature.kind,
         points,
       }));
     }
-  }
-
-  if (config.showContours) {
-    layers.slice(1).forEach((layer) => {
-      layer.polygons.forEach((polygon, polygonIndex) => layer.markings.push({
-        id: `contour-${layer.index}-${polygonIndex}`,
-        operation: "engrave",
-        kind: "contour",
-        points: polygon.outer,
-      }));
-    });
   }
 
   const baseLayer = layers[0];
@@ -594,14 +476,17 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     const x = config.cropShape === "circle" ? -radius * 0.58 : -config.widthMm / 2 + 9;
     const y = config.cropShape === "circle" ? radius * 0.58 : -config.heightMm / 2 + 10;
     const groundWidthM = distanceM((source.bounds.north + source.bounds.south) / 2, source.bounds.west, source.bounds.east);
-    const scaleDistanceM = niceScaleDistance(groundWidthM * 0.2);
-    const length = Math.min(config.cropShape === "circle" ? radius * 0.55 : config.widthMm * 0.35, groundWidthM > 0 ? (scaleDistanceM / groundWidthM) * config.widthMm : 0);
-    const scaleLabel = scaleDistanceM >= 1000 ? `${Number((scaleDistanceM / 1000).toFixed(1))} km` : `${Math.round(scaleDistanceM)} m`;
+    // Pick the labeled distance from whatever fits the drawn cap, so the bar
+    // length and its engraved label always agree.
+    const maxLengthMm = config.cropShape === "circle" ? radius * 0.55 : config.widthMm * 0.35;
+    const maxDistanceM = groundWidthM > 0 ? (maxLengthMm / config.widthMm) * groundWidthM : 0;
+    const scale = scaleMarking(Math.min(groundWidthM * 0.2, maxDistanceM), config.units);
+    const length = groundWidthM > 0 ? (scale.distanceM / groundWidthM) * config.widthMm : 0;
     baseLayer.markings.push(
       { id: "scale-main", operation: "engrave", kind: "guide", points: [{ x, y }, { x: x + length, y }] },
       { id: "scale-left", operation: "engrave", kind: "guide", points: [{ x, y: y - 1.7 }, { x, y: y + 1.7 }] },
       { id: "scale-right", operation: "engrave", kind: "guide", points: [{ x: x + length, y: y - 1.7 }, { x: x + length, y: y + 1.7 }] },
-      { id: "scale-label", operation: "engrave", kind: "label", points: [{ x, y: y + 5 }], label: scaleLabel },
+      { id: "scale-label", operation: "engrave", kind: "label", points: [{ x, y: y + 5 }], label: scale.label },
     );
   }
 
@@ -609,10 +494,18 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
   if (config.showElevationLabels) {
     const omittedLayers: string[] = [];
-    layers.forEach((layer) => {
-      const label = `${Math.round(layer.elevationM)} m · L${String(layer.index + 1).padStart(2, "0")}`;
-      const point = placeElevationLabel(label, config, layer);
-      if (!point) {
+    layers.forEach((layer, layerIndex) => {
+      const elevation = Math.round(displayElevation(layer.elevationM, config.units));
+      const unit = elevationUnit(config.units);
+      let placed: { label: string; placement: NonNullable<ReturnType<typeof placeElevationLabel>> } | undefined;
+      for (const label of [`${elevation} ${unit}`, `${elevation}${unit}`, `${elevation}`]) {
+        const placement = placeElevationLabel(label, config, layer, layers[layerIndex + 1]);
+        if (placement) {
+          placed = { label, placement };
+          break;
+        }
+      }
+      if (!placed) {
         omittedLayers.push(String(layer.index + 1));
         return;
       }
@@ -620,13 +513,14 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
         id: `elevation-${layer.index}`,
         operation: "engrave",
         kind: "label",
-        points: [point],
-        label,
+        points: [placed.placement.point],
+        label: placed.label,
+        labelRotationRad: placed.placement.rotationRad,
       });
     });
     if (omittedLayers.length) warnings.push({
       code: "LABEL_OMITTED",
-      message: `Elevation labels were omitted from layer${omittedLayers.length === 1 ? "" : "s"} ${omittedLayers.join(", ")} because no collision-free position fit the material.`,
+      message: `Elevation labels were omitted from layer${omittedLayers.length === 1 ? "" : "s"} ${omittedLayers.join(", ")} because no collision-free position fit the exposed face.`,
     });
   }
 
@@ -634,6 +528,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     schemaVersion: 1,
     projectId: config.id,
     projectName: config.name,
+    units: config.units,
     configFingerprint: projectFingerprint(config),
     sourceKind: source.sourceKind,
     vectorStatus: source.vectorStatus,
@@ -656,10 +551,12 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
 export function validateProject(config: ProjectConfigV1): void {
   if (config.schemaVersion !== 1) throw new Error("Unsupported project schema version.");
+  if (config.units !== "metric" && config.units !== "imperial") throw new Error("Project units must be metric or imperial.");
+  if (config.cropShape !== "rectangle" && config.cropShape !== "circle") throw new Error("Crop shape must be rectangle or circle.");
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
-  if (config.widthMm < 50 || config.widthMm > 600) throw new Error("Project width must be between 50 and 600 mm.");
-  if (config.heightMm < 50 || config.heightMm > 600) throw new Error("Project height must be between 50 and 600 mm.");
-  if (config.layerCount < 2 || config.layerCount > 24) throw new Error("Layer count must be between 2 and 24.");
+  if (config.widthMm <= 0) throw new Error("Project width must be greater than zero.");
+  if (config.heightMm <= 0) throw new Error("Project height must be greater than zero.");
+  if (!Number.isInteger(config.layerCount) || config.layerCount < 2 || config.layerCount > 24) throw new Error("Layer count must be a whole number between 2 and 24.");
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");

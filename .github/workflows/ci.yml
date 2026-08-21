@@ -54,8 +54,11 @@ jobs:
       - name: Enforce web performance budgets
         run: npm run budget:web
 
+      # The validate build intentionally embeds the hermetic https://ci.invalid
+      # sentinel (so tests cannot reach real services), which the endpoint scan
+      # would reject. Packaging and release runs always execute the full scan.
       - name: Verify Atomm static artifact
-        run: node scripts/verify-atomm-dist.mjs
+        run: node scripts/verify-atomm-dist.mjs --skip-endpoint-scan
 
   deploy-worker:
     name: Deploy Worker
