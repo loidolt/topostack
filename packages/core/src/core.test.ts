@@ -206,6 +206,20 @@ describe("TopoStack geometry", () => {
     expect(crossing.flatMap((marking) => marking.points).every((point) => Math.hypot(point.x, point.y) <= 100.001)).toBe(true);
   });
 
+  it("keeps closed shorelines planar while open waterways follow terrain layers", () => {
+    const project = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, layerCount: 5, minimumFeatureMm: 0.8, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const source = gridSource(project, 64, (nx) => 500 + nx * 400);
+    source.markings = [
+      { id: "lake", kind: "water", operation: "score", points: [{ x: -70, y: -40 }, { x: 70, y: -40 }, { x: 70, y: 40 }, { x: -70, y: 40 }, { x: -70, y: -40 }] },
+      { id: "river", kind: "water", operation: "score", points: Array.from({ length: 29 }, (_, index) => ({ x: -70 + index * 5, y: 70 })) },
+    ];
+    const result = generateGeometry(project, source);
+    const shorelineLayers = result.layers.filter((layer) => layer.markings.some((marking) => marking.id.startsWith("lake-"))).map((layer) => layer.index);
+    const riverLayers = result.layers.filter((layer) => layer.markings.some((marking) => marking.id.startsWith("river-"))).map((layer) => layer.index);
+    expect(shorelineLayers).toHaveLength(1);
+    expect(riverLayers.length).toBeGreaterThan(1);
+  });
+
   it("turns transportation classes into durable physical engraving patterns", () => {
     const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
     const source = realSource(project);

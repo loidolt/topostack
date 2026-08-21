@@ -1,7 +1,8 @@
-import { createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass } from "@topostack/core";
+import { createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type Polygon2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass } from "@topostack/core";
 import { PMTiles } from "pmtiles";
-import { VectorTile } from "@mapbox/vector-tile";
+import { classifyRings, VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
+import polygonClipping, { type MultiPolygon, type Pair } from "polygon-clipping";
 import { MAP_DATA_ATTRIBUTION } from "./map-attribution";
 
 export interface PlaceResult { id: string; label: string; lat: number; lon: number; type?: string }
@@ -79,7 +80,7 @@ export function transportationLabel(properties: Record<string, unknown>): string
 
 // Vector tiles deliberately repeat linework in a buffer outside each tile so a
 // map renderer can draw seamless strokes. Fabrication geometry cannot retain
-// that buffer: adjacent tiles would engrave the same road several times.
+// that buffer: adjacent tiles would score or engrave the same path several times.
 export function clipVectorTileLine(points: Point2D[], extent: number): Point2D[][] {
   if (points.length < 2 || !(extent > 0)) return [];
   const result: Point2D[][] = [];
@@ -126,6 +127,128 @@ export function clipVectorTileLine(points: Point2D[], extent: number): Point2D[]
 
 function pointKey(point: Point2D, toleranceMm = 1e-4): string {
   return `${Math.round(point.x / toleranceMm)},${Math.round(point.y / toleranceMm)}`;
+}
+
+function samePoint(left: Point2D, right: Point2D, tolerance = 1e-7): boolean {
+  return Math.hypot(left.x - right.x, left.y - right.y) <= tolerance;
+}
+
+function pathLength(points: Point2D[]): number {
+  let length = 0;
+  for (let index = 0; index < points.length - 1; index += 1) length += Math.hypot(points[index + 1]!.x - points[index]!.x, points[index + 1]!.y - points[index]!.y);
+  return length;
+}
+
+function distanceToSegment(point: Point2D, start: Point2D, end: Point2D): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= 1e-12) return Math.hypot(point.x - start.x, point.y - start.y);
+  const ratio = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  return Math.hypot(point.x - (start.x + dx * ratio), point.y - (start.y + dy * ratio));
+}
+
+function simplifyPath(points: Point2D[], tolerance: number): Point2D[] {
+  if (points.length < 3 || tolerance <= 0) return points;
+  const closed = samePoint(points[0]!, points.at(-1)!);
+  const source = closed ? points.slice(0, -1) : points;
+  if (source.length < 3) return points;
+  const keep = new Uint8Array(source.length);
+  keep[0] = 1;
+  keep[source.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, source.length - 1]];
+  while (stack.length) {
+    const [start, end] = stack.pop()!;
+    let maximum = tolerance;
+    let selected = -1;
+    for (let index = start + 1; index < end; index += 1) {
+      const distance = distanceToSegment(source[index]!, source[start]!, source[end]!);
+      if (distance > maximum) { maximum = distance; selected = index; }
+    }
+    if (selected > 0) {
+      keep[selected] = 1;
+      stack.push([start, selected], [selected, end]);
+    }
+  }
+  const simplified = source.filter((_, index) => keep[index] === 1);
+  if (closed && simplified[0]) simplified.push({ ...simplified[0] });
+  return simplified;
+}
+
+function ringIsLargeEnough(points: Point2D[], minimumFeatureMm: number): boolean {
+  if (points.length < 4) return false;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return Math.max(...xs) - Math.min(...xs) >= minimumFeatureMm && Math.max(...ys) - Math.min(...ys) >= minimumFeatureMm;
+}
+
+/** Dissolve vector-tile polygon fragments before extracting their shorelines. */
+export function dissolveWaterPolygons(polygons: Polygon2D[], minimumFeatureMm: number): MarkingFeature[] {
+  if (!polygons.length) return [];
+  const inputs: MultiPolygon[] = polygons.map((polygon) => [[
+    polygon.outer.map((point) => [point.x, point.y] as Pair),
+    ...polygon.holes.map((ring) => ring.map((point) => [point.x, point.y] as Pair)),
+  ]]);
+  const dissolved = polygonClipping.union(inputs[0]!, ...inputs.slice(1));
+  const tolerance = minimumFeatureMm * 0.18;
+  const markings: MarkingFeature[] = [];
+  dissolved.forEach((polygon, polygonIndex) => polygon.forEach((ring, ringIndex) => {
+    const points = simplifyPath(ring.map(([x, y]) => ({ x, y })), tolerance);
+    if (!samePoint(points[0]!, points.at(-1)!)) points.push({ ...points[0]! });
+    if (!ringIsLargeEnough(points, minimumFeatureMm)) return;
+    markings.push({ id: `water-area-${polygonIndex}-shore-${ringIndex}`, kind: "water", operation: "score", points });
+  }));
+  return markings;
+}
+
+/** Remove buffered duplicates and join continuous river/stream tile pieces. */
+export function cleanWaterwayMarkings(markings: MarkingFeature[], minimumFeatureMm: number): MarkingFeature[] {
+  const unique: MarkingFeature[] = [];
+  const paths = new Set<string>();
+  for (const marking of markings) {
+    if (marking.points.length < 2) continue;
+    const forward = marking.points.map((point) => pointKey(point)).join(";");
+    const reverse = [...marking.points].reverse().map((point) => pointKey(point)).join(";");
+    const key = forward < reverse ? forward : reverse;
+    if (!paths.has(key)) { paths.add(key); unique.push(marking); }
+  }
+  const endpoints = new Map<string, Set<number>>();
+  unique.forEach((marking, index) => {
+    for (const point of [marking.points[0]!, marking.points.at(-1)!]) {
+      const key = pointKey(point);
+      const owners = endpoints.get(key) ?? new Set<number>();
+      owners.add(index);
+      endpoints.set(key, owners);
+    }
+  });
+  const used = new Set<number>();
+  const result: MarkingFeature[] = [];
+  unique.forEach((marking, markingIndex) => {
+    if (used.has(markingIndex)) return;
+    used.add(markingIndex);
+    const points = [...marking.points];
+    let extended = true;
+    while (extended) {
+      extended = false;
+      for (const atStart of [false, true]) {
+        const shared = atStart ? points[0]! : points.at(-1)!;
+        const owners = endpoints.get(pointKey(shared));
+        if (owners?.size !== 2) continue;
+        const nextIndex = [...owners].find((index) => !used.has(index));
+        if (nextIndex === undefined) continue;
+        const next = unique[nextIndex]!;
+        const oriented = pointKey(next.points[0]!) === pointKey(shared) ? [...next.points] : [...next.points].reverse();
+        if (atStart) points.unshift(...oriented.reverse().slice(0, -1));
+        else points.push(...oriented.slice(1));
+        used.add(nextIndex);
+        extended = true;
+        break;
+      }
+    }
+    const simplified = simplifyPath(points, minimumFeatureMm * 0.18);
+    if (pathLength(simplified) >= minimumFeatureMm) result.push({ ...marking, id: `waterway-${result.length}`, points: simplified });
+  });
+  return result;
 }
 
 // Once tile buffers are removed, join matching road pieces at unambiguous
@@ -272,10 +395,15 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
       vectorZoom -= 1;
     }
   }
-  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<MarkingFeature[]> => {
+  const projectPoint = (tile: { x: number; y: number }, extent: number, point: Point2D): Point2D => ({
+    x: (((tile.x + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
+    y: (((tile.y + point.y / extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
+  });
+  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<{ markings: MarkingFeature[]; waterPolygons: Polygon2D[] }> => {
     const markings: MarkingFeature[] = [];
+    const waterPolygons: Polygon2D[] = [];
     const response = await vectorArchive.getZxy(tile.z, tile.x, tile.y, signal);
-    if (!response) return markings;
+    if (!response) return { markings, waterPolygons };
     const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
     for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
       const lowered = layerName.toLowerCase();
@@ -288,21 +416,33 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
         const transportationClass = isRoad ? classifyTransportation(feature.properties as Record<string, unknown>) : undefined;
         if (isRoad && !transportationClass) continue;
         const label = isRoad ? transportationLabel(feature.properties as Record<string, unknown>) : undefined;
-        feature.loadGeometry().forEach((line, lineIndex) => {
-          const lines = isRoad ? clipVectorTileLine(line, feature.extent) : [line];
+        const geometry = feature.loadGeometry();
+        if (isWater && feature.type === 3) {
+          classifyRings(geometry).forEach((polygon) => {
+            const [outer, ...holes] = polygon;
+            if (!outer) return;
+            waterPolygons.push({ outer: outer.map((point) => projectPoint(tile, feature.extent, point)), holes: holes.map((ring) => ring.map((point) => projectPoint(tile, feature.extent, point))) });
+          });
+          continue;
+        }
+        geometry.forEach((line, lineIndex) => {
+          const lines = clipVectorTileLine(line, feature.extent);
           lines.forEach((clippedLine, clippedIndex) => {
             if (clippedLine.length < 2 || markings.length >= 1800) return;
             markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}-${clippedIndex}`, kind: transportationClass === "trail" ? "trail" : isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", ...(transportationClass ? { transportationClass } : {}), ...(label ? { label } : {}), points: clippedLine.map((point) => ({
-              x: (((tile.x + point.x / feature.extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
-              y: (((tile.y + point.y / feature.extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
+              ...projectPoint(tile, feature.extent, point),
             })) });
           });
         });
       }
     }
-    return markings;
+    return { markings, waterPolygons };
   }));
-  return stitchTransportationMarkings(perTile.flat().slice(0, 1800));
+  const rawMarkings = perTile.flatMap((tile) => tile.markings);
+  const transportation = stitchTransportationMarkings(rawMarkings.filter((marking) => marking.kind !== "water"));
+  const waterways = cleanWaterwayMarkings(rawMarkings.filter((marking) => marking.kind === "water"), config.minimumFeatureMm);
+  const shorelines = dissolveWaterPolygons(perTile.flatMap((tile) => tile.waterPolygons), config.minimumFeatureMm);
+  return [...transportation, ...shorelines, ...waterways].slice(0, 1800);
 }
 
 function groundWidthM(bounds: GeoBounds): number {

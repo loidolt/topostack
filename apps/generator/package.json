@@ -20,6 +20,7 @@
     "maplibre-gl": "^5.7.1",
     "pbf": "^5.1.2",
     "pmtiles": "^4.5.0",
+    "polygon-clipping": "^0.15.7",
     "three": "^0.180.0"
   },
   "devDependencies": {

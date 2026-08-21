@@ -1,8 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import { chromium } from "playwright";
-import { VectorTile } from "@mapbox/vector-tile";
+import { classifyRings, VectorTile } from "@mapbox/vector-tile";
 import { PMTiles } from "pmtiles";
 import Pbf from "pbf";
+import polygonClipping from "polygon-clipping";
 
 const API_BASE = "https://topostack.loidolt.space";
 const VECTOR_ARCHIVE_URL = "https://build.protomaps.com/20260819.pmtiles";
@@ -13,7 +14,7 @@ const LOCAL_ROAD_DETAILS = new Set(["tertiary", "tertiary_link", "residential", 
 const TRAIL_DETAILS = new Set(["pedestrian", "track", "path", "cycleway", "bridleway", "steps", "corridor", "sidewalk", "crossing"]);
 const EXCLUDED_TRANSPORT_KINDS = new Set(["rail", "aerialway", "ferry", "pier", "aeroway"]);
 const zoom = 11;
-const config = { widthMm: 300, heightMm: 200, lat: 42.9446, lon: -122.109 };
+const config = { widthMm: 300, heightMm: 200, minimumFeatureMm: 0.8, lat: 42.9446, lon: -122.109 };
 
 const worldSize = TILE_SIZE * 2 ** zoom;
 const lonToWorldX = (lon) => ((lon + 180) / 360) * worldSize;
@@ -122,6 +123,11 @@ const vectorEastX = ((bounds.east + 180) / 360) * vectorScale;
 const vectorNorthY = ((1 - Math.asinh(Math.tan(bounds.north * Math.PI / 180)) / Math.PI) / 2) * vectorScale;
 const vectorSouthY = ((1 - Math.asinh(Math.tan(bounds.south * Math.PI / 180)) / Math.PI) / 2) * vectorScale;
 const markings = [];
+const waterPolygons = [];
+const projectPoint = (tileX, tileY, extent, point) => ({
+  x: Number(((((tileX + point.x / extent) * TILE_SIZE - vectorWestX) / (vectorEastX - vectorWestX) - 0.5) * config.widthMm).toFixed(3)),
+  y: Number(((((tileY + point.y / extent) * TILE_SIZE - vectorNorthY) / (vectorSouthY - vectorNorthY) - 0.5) * config.heightMm).toFixed(3)),
+});
 for (let y = Math.floor(vectorNorthY / TILE_SIZE); y <= Math.floor((vectorSouthY - 1e-6) / TILE_SIZE); y += 1) {
   for (let x = Math.floor(vectorWestX / TILE_SIZE); x <= Math.floor((vectorEastX - 1e-6) / TILE_SIZE); x += 1) {
     const response = await archive.getZxy(vectorZoom, x, y);
@@ -138,12 +144,17 @@ for (let y = Math.floor(vectorNorthY / TILE_SIZE); y <= Math.floor((vectorSouthY
         const transportationClass = isRoad ? classifyTransportation(feature.properties) : undefined;
         if (isRoad && !transportationClass) continue;
         const label = isRoad ? [feature.properties.name, feature.properties.ref, feature.properties.shield_text].find((value) => typeof value === "string" && value.trim())?.trim() : undefined;
-        feature.loadGeometry().forEach((line, lineIndex) => {
+        const geometry = feature.loadGeometry();
+        if (isWater && feature.type === 3) {
+          classifyRings(geometry).forEach((polygon) => waterPolygons.push([polygon.map((ring) => ring.map((point) => {
+            const projected = projectPoint(x, y, feature.extent, point);
+            return [projected.x, projected.y];
+          }))]));
+          continue;
+        }
+        geometry.forEach((line, lineIndex) => {
           if (line.length < 2) return;
-          const points = simplify(line.map((point) => ({
-            x: Number(((((x + point.x / feature.extent) * TILE_SIZE - vectorWestX) / (vectorEastX - vectorWestX) - 0.5) * config.widthMm).toFixed(3)),
-            y: Number(((((y + point.y / feature.extent) * TILE_SIZE - vectorNorthY) / (vectorSouthY - vectorNorthY) - 0.5) * config.heightMm).toFixed(3)),
-          })));
+          const points = simplify(line.map((point) => projectPoint(x, y, feature.extent, point)));
           const xs = points.map((point) => point.x);
           const ys = points.map((point) => point.y);
           if (Math.max(...xs) < -config.widthMm / 2 || Math.min(...xs) > config.widthMm / 2 || Math.max(...ys) < -config.heightMm / 2 || Math.min(...ys) > config.heightMm / 2) return;
@@ -152,6 +163,18 @@ for (let y = Math.floor(vectorNorthY / TILE_SIZE); y <= Math.floor((vectorSouthY
       }
     }
   }
+}
+
+if (waterPolygons.length) {
+  const dissolved = polygonClipping.union(waterPolygons[0], ...waterPolygons.slice(1));
+  dissolved.forEach((polygon, polygonIndex) => polygon.forEach((ring, ringIndex) => {
+    const points = simplify(ring.map(([x, y]) => ({ x: Number(x.toFixed(3)), y: Number(y.toFixed(3)) })), config.minimumFeatureMm * 0.18);
+    if (points[0] && (points[0].x !== points.at(-1)?.x || points[0].y !== points.at(-1)?.y)) points.push({ ...points[0] });
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    if (points.length < 4 || Math.max(...xs) - Math.min(...xs) < config.minimumFeatureMm || Math.max(...ys) - Math.min(...ys) < config.minimumFeatureMm) return;
+    markings.push({ id: `preview-water-area-${polygonIndex}-shore-${ringIndex}`, kind: "water", operation: "score", points });
+  }));
 }
 
 const selectedMarkings = ["major-road", "local-road", "trail", "water"].flatMap((category) => markings

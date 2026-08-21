@@ -470,7 +470,22 @@ function sampleElevation(grid: ElevationGrid, point: Point2D, config: ProjectCon
   return grid.values[gridY * grid.width + gridX] ?? grid.min;
 }
 
+function layerForElevation(elevation: number, thresholds: number[]): number {
+  let layer = 0;
+  for (let index = 1; index < thresholds.length; index += 1) {
+    if (elevation >= (thresholds[index] ?? Number.POSITIVE_INFINITY)) layer = index;
+  }
+  return layer;
+}
+
 function splitMarking(feature: MarkingFeature, thresholds: number[], source: SourceBundleV1, config: ProjectConfigV1): Array<{ layer: number; points: Point2D[] }> {
+  const closedWater = feature.kind === "water" && feature.points.length > 3 && Math.hypot(feature.points[0]!.x - feature.points.at(-1)!.x, feature.points[0]!.y - feature.points.at(-1)!.y) <= 1e-6;
+  if (closedWater) {
+    const elevations = feature.points.slice(0, -1).map((point) => feature.elevationM ?? sampleElevation(source.elevation, point, config)).sort((left, right) => left - right);
+    const middle = Math.floor(elevations.length / 2);
+    const elevation = elevations.length % 2 === 0 ? ((elevations[middle - 1] ?? source.elevation.min) + (elevations[middle] ?? source.elevation.min)) / 2 : (elevations[middle] ?? source.elevation.min);
+    return [{ layer: layerForElevation(elevation, thresholds), points: feature.points }];
+  }
   const result: Array<{ layer: number; points: Point2D[] }> = [];
   // A single-point feature (e.g. a point label) still belongs to a layer even
   // though it produces no drawable segment.
@@ -479,10 +494,7 @@ function splitMarking(feature: MarkingFeature, thresholds: number[], source: Sou
   let active: Point2D[] = [];
   for (const point of feature.points) {
     const elevation = feature.elevationM ?? sampleElevation(source.elevation, point, config);
-    let layer = 0;
-    for (let index = 1; index < thresholds.length; index += 1) {
-      if (elevation >= (thresholds[index] ?? Number.POSITIVE_INFINITY)) layer = index;
-    }
+    const layer = layerForElevation(elevation, thresholds);
     if (layer !== activeLayer) {
       if (active.length >= minimumRun && activeLayer >= 0) result.push({ layer: activeLayer, points: active });
       activeLayer = layer;
@@ -580,7 +592,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       if (feature.label && segment.points[0] && layer.polygons.some((polygon) => pointInPolygon(segment.points[0]!, polygon))) {
         layer.markings.push({ id: `${feature.id}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label, textStyle: config.textStyle });
       }
-      clipped.forEach((points, clipIndex) => layer.markings.push({
+      clipped.filter((points) => feature.kind !== "water" || polylineLength(points) >= config.minimumFeatureMm).forEach((points, clipIndex) => layer.markings.push({
         id: `${feature.id}-${layer.index}-${segmentIndex}-${clipIndex}`,
         operation: feature.operation,
         kind: feature.kind,

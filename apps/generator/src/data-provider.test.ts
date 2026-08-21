@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROJECT } from "@topostack/core";
-import { boundsForProject, classifyTransportation, clipVectorTileLine, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
+import { boundsForProject, classifyTransportation, cleanWaterwayMarkings, clipVectorTileLine, dissolveWaterPolygons, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
 
 describe("transportation metadata", () => {
   it("classifies supported roads and trails while excluding other transport", () => {
@@ -43,6 +43,54 @@ describe("transportation metadata", () => {
       road("east", [{ x: 0, y: 0 }, { x: 10, y: 0 }]),
       road("north", [{ x: 0, y: 0 }, { x: 0, y: 10 }]),
     ]);
+    expect(fork).toHaveLength(3);
+  });
+});
+
+describe("water geometry cleanup", () => {
+  const ring = (left: number, top: number, right: number, bottom: number) => [
+    { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }, { x: left, y: top },
+  ];
+
+  it("dissolves adjacent tile polygons without retaining their shared seam", () => {
+    const markings = dissolveWaterPolygons([
+      { outer: ring(0, 0, 10, 10), holes: [] },
+      { outer: ring(10, 0, 20, 10), holes: [] },
+    ], 0.8);
+    expect(markings).toHaveLength(1);
+    const points = markings[0]!.points;
+    expect(points[0]).toEqual(points.at(-1));
+    expect(points.some((point, index) => point.x === 10 && points[index + 1]?.x === 10)).toBe(false);
+    expect(Math.min(...points.map((point) => point.x))).toBe(0);
+    expect(Math.max(...points.map((point) => point.x))).toBe(20);
+  });
+
+  it("preserves island shorelines and filters undersized water rings", () => {
+    const markings = dissolveWaterPolygons([
+      { outer: ring(0, 0, 20, 20), holes: [ring(5, 5, 15, 15)] },
+      { outer: ring(30, 30, 30.4, 30.4), holes: [] },
+    ], 0.8);
+    expect(markings).toHaveLength(2);
+    expect(markings.every((marking) => marking.points[0]?.x === marking.points.at(-1)?.x && marking.points[0]?.y === marking.points.at(-1)?.y)).toBe(true);
+  });
+
+  it("deduplicates and stitches waterways while preserving forks", () => {
+    const water = (id: string, points: Array<{ x: number; y: number }>) => ({ id, kind: "water" as const, operation: "score" as const, points });
+    const continuous = cleanWaterwayMarkings([
+      water("left", [{ x: -10, y: 0 }, { x: 0, y: 0 }]),
+      water("duplicate", [{ x: 0, y: 0 }, { x: -10, y: 0 }]),
+      water("right", [{ x: 0, y: 0 }, { x: 10, y: 2 }]),
+      water("tiny", [{ x: 30, y: 0 }, { x: 30.2, y: 0 }]),
+    ], 0.8);
+    expect(continuous).toHaveLength(1);
+    expect(continuous[0]?.points[0]).toEqual({ x: -10, y: 0 });
+    expect(continuous[0]?.points.at(-1)).toEqual({ x: 10, y: 2 });
+
+    const fork = cleanWaterwayMarkings([
+      water("west", [{ x: -10, y: 0 }, { x: 0, y: 0 }]),
+      water("east", [{ x: 0, y: 0 }, { x: 10, y: 0 }]),
+      water("north", [{ x: 0, y: 0 }, { x: 0, y: 10 }]),
+    ], 0.8);
     expect(fork).toHaveLength(3);
   });
 });

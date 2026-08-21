@@ -32,6 +32,17 @@ describe("Crater Lake bundled preview", () => {
     expect(markings.some((marking) => marking.id.startsWith("scale-"))).toBe(true);
   });
 
+  it("contains a closed shoreline without vector-tile closure edges", () => {
+    const shoreline = createSamplePreviewSource().markings.find((marking) => marking.kind === "water")!;
+    expect(shoreline.id).toContain("water-area");
+    expect(shoreline.points[0]).toEqual(shoreline.points.at(-1));
+    const suspiciousClosures = shoreline.points.slice(0, -1).filter((point, index) => {
+      const next = shoreline.points[index + 1]!;
+      return (point.x === next.x || point.y === next.y) && Math.hypot(next.x - point.x, next.y - point.y) > 10;
+    });
+    expect(suspiciousClosures).toEqual([]);
+  });
+
   it("shows named roads when transportation labels are enabled", () => {
     const geometry = generateGeometry({ ...DEFAULT_PROJECT, showTransportationLabels: true }, createSamplePreviewSource());
     const labels = geometry.layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("transport-label-"));
