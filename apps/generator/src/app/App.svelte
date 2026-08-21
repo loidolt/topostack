@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Box, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, Topbar, Workspace, type ThemePreference } from "@loidolt/theme-svelte";
-  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, lengthUnit, millimetersFromDisplay, validateProject, type GeoBounds, type GeometryIRV1, type ProjectConfigV1, type SourceBundleV1 } from "@topostack/core";
+  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, millimetersFromDisplay, validateProject, type GeoBounds, type GeometryIRV1, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
   import { boundsForProject, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
@@ -26,6 +26,7 @@
   const SHAPE_OPTIONS = [{ value: "rectangle", label: "Rectangle" }, { value: "circle", label: "Circle" }];
   const MODE_OPTIONS = [{ value: "map", label: "Map" }, { value: "2d", label: "Cut layers" }, { value: "3d", label: "3D stack" }];
   const THEME_OPTIONS = [{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }];
+  const FONT_OPTIONS: Array<{ value: TextFont; label: string }> = [{ value: "technical", label: "Technical" }, { value: "rounded", label: "Rounded" }, { value: "stencil", label: "Stencil" }];
 
   function previewFor(config: ProjectConfigV1, source: SourceBundleV1): GeometryIRV1 {
     const result = generateGeometry(config, source);
@@ -126,6 +127,10 @@
 
   function storedLength(value: number): number {
     return millimetersFromDisplay(value, project.units);
+  }
+
+  function shownTextSize(valueMm: number): number {
+    return Number(displayLength(valueMm, project.units).toFixed(project.units === "imperial" ? 4 : 1));
   }
 
   function navigateChoice(event: KeyboardEvent & { currentTarget: HTMLButtonElement }): void {
@@ -426,6 +431,19 @@
               <Field label="Laser kerf" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Laser kerf" value={shownLength(project.laserKerfMm)} min={0} max={shownLength(1)} step={project.units === "imperial" ? 0.001 : 0.01} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ laserKerfMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const laserKerfMm = storedLength(value); if (laserKerfMm !== project.laserKerfMm) void updateFabrication({ laserKerfMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
               <Field label="Minimum feature" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Minimum feature" value={shownLength(project.minimumFeatureMm)} min={shownLength(0.2)} max={shownLength(5)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ minimumFeatureMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const minimumFeatureMm = storedLength(value); if (minimumFeatureMm !== project.minimumFeatureMm) void updateFabrication({ minimumFeatureMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
               <Field label="Contour smoothing" class="field-row">{#snippet children({ id })}<NumberField {id} label="Contour smoothing" value={project.smoothing} min={0} max={1} step={1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ smoothing: event.currentTarget.valueAsNumber })} onValueChange={(smoothing) => smoothing !== project.smoothing && void updateFabrication({ smoothing })} />{/snippet}</Field>
+              <div class="advanced-subgroup text-style-group">
+                <p>Text engraving</p>
+                <div class="font-options" role="radiogroup" aria-label="Engraving font">
+                  {#each FONT_OPTIONS as option}
+                    <button type="button" role="radio" aria-checked={project.textStyle.font === option.value} data-state={project.textStyle.font === option.value ? "on" : "off"} tabindex={project.textStyle.font === option.value ? 0 : -1} onclick={() => void updateFabrication({ textStyle: { ...project.textStyle, font: option.value } })} onkeydown={navigateChoice}>
+                      <svg viewBox="0 -0.4 17 4.2" aria-hidden="true"><path stroke-linecap={option.value === "rounded" ? "round" : "butt"} stroke-linejoin={option.value === "rounded" ? "round" : "miter"} d={labelPathData("123m", { x: 0, y: 0 }, 0, 0, 0, { font: option.value, sizeMm: 3.1 })} /></svg>
+                      <span>{option.label}</span>
+                    </button>
+                  {/each}
+                </div>
+                <label class="range-field text-size-range"><span><b>Text size</b><output>{shownTextSize(project.textStyle.sizeMm)} {shownLengthUnit}</output></span><input aria-label="Text size slider" type="range" min={displayLength(2, project.units)} max={displayLength(10, project.units)} step={project.units === "imperial" ? 0.005 : 0.1} value={displayLength(project.textStyle.sizeMm, project.units)} oninput={(event) => void updateFabrication({ textStyle: { ...project.textStyle, sizeMm: storedLength(event.currentTarget.valueAsNumber) } })} /><small><span>{shownTextSize(2)} {shownLengthUnit}</span><span>{shownTextSize(10)} {shownLengthUnit}</span></small></label>
+                <Field label="Exact size" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Exact text size" value={shownTextSize(project.textStyle.sizeMm)} min={displayLength(2, project.units)} max={displayLength(10, project.units)} step={project.units === "imperial" ? 0.005 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ textStyle: { ...project.textStyle, sizeMm: storedLength(event.currentTarget.valueAsNumber) } })} onValueChange={(value) => { const sizeMm = storedLength(value); if (sizeMm !== project.textStyle.sizeMm) void updateFabrication({ textStyle: { ...project.textStyle, sizeMm } }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+              </div>
               <div class="advanced-subgroup">
                 <p>Elevation label position</p>
                 <div class="advanced-coordinate-fields">

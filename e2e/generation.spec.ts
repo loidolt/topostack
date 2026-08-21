@@ -54,6 +54,10 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
   await page.getByRole("button", { name: /Fabrication settings/ }).click();
   await expect(page.getByRole("switch", { name: "Material-saving nests" })).toBeChecked();
   await expect(page.getByRole("spinbutton", { name: "Glue margin", exact: true })).toHaveValue("8");
+  await page.getByRole("radio", { name: /Stencil/ }).click();
+  await expect(page.getByRole("radio", { name: /Stencil/ })).toBeChecked();
+  await page.getByRole("spinbutton", { name: "Exact text size" }).fill("4.5");
+  await expect(page.getByLabel("Text size slider")).toHaveValue("4.5");
   await page.getByRole("spinbutton", { name: "Label X", exact: true }).fill("0");
   await page.getByRole("spinbutton", { name: "Label Y", exact: true }).fill("0");
   await page.getByRole("button", { name: /Generate terrain/ }).click();

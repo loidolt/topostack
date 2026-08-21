@@ -1,6 +1,16 @@
 export type CropShape = "rectangle" | "circle";
 export type Operation = "cut" | "score" | "engrave";
 export type UnitSystem = "metric" | "imperial";
+export type TextFont = "technical" | "rounded" | "stencil";
+
+export interface TextStyleV1 {
+  font: TextFont;
+  /** Physical cap height of fabrication text in millimeters. */
+  sizeMm: number;
+}
+
+export const TEXT_FONTS: readonly TextFont[] = ["technical", "rounded", "stencil"];
+export const DEFAULT_TEXT_STYLE: TextStyleV1 = { font: "technical", sizeMm: 3.1 };
 
 export interface GeoPoint {
   lat: number;
@@ -35,6 +45,7 @@ export interface ProjectConfigV1 {
   laserKerfMm: number;
   showElevationLabels: boolean;
   elevationLabelPosition: Point2D;
+  textStyle: TextStyleV1;
   showNorthArrow: boolean;
   showScaleBar: boolean;
   explodedPreview: number;
@@ -100,6 +111,7 @@ export interface OperationPath {
   points: Point2D[];
   label?: string;
   labelRotationRad?: number;
+  textStyle?: TextStyleV1;
 }
 
 export interface LayerIR {
@@ -191,6 +203,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   laserKerfMm: 0.15,
   showElevationLabels: true,
   elevationLabelPosition: { x: -0.55, y: 0.55 },
+  textStyle: { ...DEFAULT_TEXT_STYLE },
   showNorthArrow: true,
   showScaleBar: true,
   explodedPreview: 0.35,

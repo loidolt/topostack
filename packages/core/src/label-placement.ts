@@ -12,10 +12,10 @@ import {
   rotatedPoint,
   segmentsIntersect,
 } from "./geometry2d.js";
-import type { LayerIR, Point2D, Polygon2D, ProjectConfigV1 } from "./types.js";
+import { DEFAULT_TEXT_STYLE, type LayerIR, type Point2D, type Polygon2D, type ProjectConfigV1, type TextStyleV1 } from "./types.js";
 
-function labelBounds(label: string, origin: Point2D, padding = 0): Bounds2D {
-  const dimensions = labelDimensions(label);
+function labelBounds(label: string, origin: Point2D, style: TextStyleV1, padding = 0): Bounds2D {
+  const dimensions = labelDimensions(label, style);
   return {
     minX: origin.x - padding,
     minY: origin.y - padding,
@@ -62,8 +62,8 @@ function boundsInsidePolygon(bounds: Bounds2D, polygon: Polygon2D): boolean {
   return true;
 }
 
-function labelFootprint(label: string, origin: Point2D, rotationRad: number, padding = 0.8): Point2D[] {
-  const dimensions = labelDimensions(label);
+function labelFootprint(label: string, origin: Point2D, rotationRad: number, style: TextStyleV1, padding = 0.8): Point2D[] {
+  const dimensions = labelDimensions(label, style);
   return close([
     { x: origin.x - padding, y: origin.y - padding },
     { x: origin.x + dimensions.width + padding, y: origin.y - padding },
@@ -98,7 +98,7 @@ function footprintIntersectsPolygons(footprint: Point2D[], polygons: Polygon2D[]
 }
 
 export function markingIntersectsBounds(marking: LayerIR["markings"][number], bounds: Bounds2D): boolean {
-  if (marking.label && marking.points[0] && boundsOverlap(labelBounds(marking.label, marking.points[0], 0.8), bounds)) return true;
+  if (marking.label && marking.points[0] && boundsOverlap(footprintBounds(labelFootprint(marking.label, marking.points[0], marking.labelRotationRad ?? 0, marking.textStyle ?? DEFAULT_TEXT_STYLE)), bounds)) return true;
   for (let index = 0; index < marking.points.length - 1; index += 1) {
     const start = marking.points[index];
     const end = marking.points[index + 1];
@@ -130,11 +130,11 @@ function labelCandidates(preferred: Point2D): Point2D[] {
 }
 
 export function placeLabel(label: string, config: ProjectConfigV1, polygons: Polygon2D[], markings: LayerIR["markings"], preferred: Point2D, requiredPolygons?: Polygon2D[]): Point2D | undefined {
-  const dimensions = labelDimensions(label);
+  const dimensions = labelDimensions(label, config.textStyle);
   for (const candidate of labelCandidates(preferred)) {
     const center = { x: candidate.x * config.widthMm / 2, y: candidate.y * config.heightMm / 2 };
     const origin = { x: center.x - dimensions.width / 2, y: center.y - dimensions.height / 2 };
-    const bounds = labelBounds(label, origin, 0.8);
+    const bounds = labelBounds(label, origin, config.textStyle, 0.8);
     const fitsMaterial = polygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
     const fitsRequirement = !requiredPolygons || requiredPolygons.some((polygon) => boundsInsidePolygon(bounds, polygon));
     if (fitsMaterial && fitsRequirement && !markings.some((marking) => markingIntersectsBounds(marking, bounds))) return origin;
@@ -147,15 +147,23 @@ export interface ElevationLabelPlacement {
   rotationRad: number;
 }
 
-function readableContourAngle(start: Point2D, end: Point2D): number {
-  let angle = Math.atan2(end.y - start.y, end.x - start.x);
-  if (angle > Math.PI / 2) angle -= Math.PI;
-  if (angle < -Math.PI / 2) angle += Math.PI;
-  return angle;
+interface ElevationLabelCandidate extends ElevationLabelPlacement {
+  center: Point2D;
+  preferenceScore: number;
 }
 
-function labelOriginAtCenter(label: string, center: Point2D, rotationRad: number): Point2D {
-  const dimensions = labelDimensions(label);
+function contourAngleWithBottomDownslope(start: Point2D, end: Point2D, downslope: Point2D): number {
+  let angle = Math.atan2(end.y - start.y, end.x - start.x);
+  // In label-local coordinates +Y is the bottom of the glyphs. A contour can
+  // be followed in either direction, so choose the 180° orientation whose
+  // local +Y axis points toward lower terrain.
+  const textDown = { x: -Math.sin(angle), y: Math.cos(angle) };
+  if (textDown.x * downslope.x + textDown.y * downslope.y < 0) angle += Math.PI;
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function labelOriginAtCenter(label: string, center: Point2D, rotationRad: number, style: TextStyleV1): Point2D {
+  const dimensions = labelDimensions(label, style);
   const localCenter = { x: dimensions.width / 2, y: dimensions.height / 2 };
   const cosine = Math.cos(rotationRad);
   const sine = Math.sin(rotationRad);
@@ -165,16 +173,19 @@ function labelOriginAtCenter(label: string, center: Point2D, rotationRad: number
   };
 }
 
-export function placeElevationLabel(label: string, config: ProjectConfigV1, layer: LayerIR, coveringLayer?: LayerIR): ElevationLabelPlacement | undefined {
-  const contourPolygons = coveringLayer?.polygons.length ? coveringLayer.polygons : layer.polygons;
+function elevationLabelCandidates(label: string, config: ProjectConfigV1, layer: LayerIR, coveringLayer?: LayerIR): ElevationLabelCandidate[] {
+  // The label describes this layer's elevation, so it belongs beside this
+  // layer's own contour. Using the covering layer's contour makes the label
+  // appear to annotate the next elevation line instead.
+  const contourPolygons = layer.polygons;
   const coveredPolygons = coveringLayer?.polygons ?? [];
   const preferred = {
     x: config.elevationLabelPosition.x * config.widthMm / 2,
     y: config.elevationLabelPosition.y * config.heightMm / 2,
   };
-  const dimensions = labelDimensions(label);
+  const dimensions = labelDimensions(label, config.textStyle);
   const normalOffset = dimensions.height / 2 + 1.6;
-  const candidates: Array<ElevationLabelPlacement & { score: number }> = [];
+  const candidates: ElevationLabelCandidate[] = [];
 
   contourPolygons.forEach((polygon) => [polygon.outer, ...polygon.holes].forEach((ring) => {
     for (let index = 0; index < ring.length - 1; index += 1) {
@@ -183,34 +194,106 @@ export function placeElevationLabel(label: string, config: ProjectConfigV1, laye
       if (!start || !end) continue;
       const length = Math.hypot(end.x - start.x, end.y - start.y);
       if (length < 1e-6) continue;
-      const rotationRad = readableContourAngle(start, end);
       const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
       const samples = length > dimensions.width * 1.4 ? [0.25, 0.5, 0.75] : [0.5];
       samples.forEach((sample) => [-1, 1].forEach((side) => {
         const contourPoint = pointAt(start, end, sample);
+        // Valid candidates lie just inside this layer's material; downslope is
+        // therefore back across its boundary, opposite the center offset.
+        const downslope = { x: -normal.x * side, y: -normal.y * side };
+        const rotationRad = contourAngleWithBottomDownslope(start, end, downslope);
         const center = {
           x: contourPoint.x + normal.x * normalOffset * side,
           y: contourPoint.y + normal.y * normalOffset * side,
         };
-        const point = labelOriginAtCenter(label, center, rotationRad);
-        const score = ((center.x - preferred.x) / config.widthMm) ** 2 + ((center.y - preferred.y) / config.heightMm) ** 2;
-        candidates.push({ point, rotationRad, score });
+        const point = labelOriginAtCenter(label, center, rotationRad, config.textStyle);
+        const preferenceScore = ((center.x - preferred.x) / config.widthMm) ** 2 + ((center.y - preferred.y) / config.heightMm) ** 2;
+        candidates.push({ point, center, rotationRad, preferenceScore });
       }));
     }
   }));
 
-  // Candidate generation above is cheap; the fit checks are not. Validate in
-  // score order and stop at the first fit instead of validating everything.
-  candidates.sort((left, right) => left.score - right.score || left.point.y - right.point.y || left.point.x - right.point.x);
+  // Candidate generation above is cheap; the fit checks are not. Keep a
+  // deterministic shortlist near the preferred point for stack optimization.
+  candidates.sort((left, right) => left.preferenceScore - right.preferenceScore || left.point.y - right.point.y || left.point.x - right.point.x);
   const materialBounds = layer.polygons.map((polygon) => ringBounds(polygon.outer));
+  const valid: ElevationLabelCandidate[] = [];
   for (const candidate of candidates) {
-    const footprint = labelFootprint(label, candidate.point, candidate.rotationRad);
+    const footprint = labelFootprint(label, candidate.point, candidate.rotationRad, config.textStyle);
     const bounds = footprintBounds(footprint);
     const fitsMaterial = layer.polygons.some((polygon, polygonIndex) =>
       boundsContainBounds(materialBounds[polygonIndex]!, bounds) && ringFitsInsidePolygon(footprint, polygon, 0));
     if (!fitsMaterial || footprintIntersectsPolygons(footprint, coveredPolygons)) continue;
     if (layer.markings.some((marking) => markingIntersectsBounds(marking, bounds))) continue;
-    return { point: candidate.point, rotationRad: candidate.rotationRad };
+    valid.push(candidate);
+    if (valid.length >= 48) break;
   }
-  return undefined;
+  return valid;
+}
+
+export function placeElevationLabel(label: string, config: ProjectConfigV1, layer: LayerIR, coveringLayer?: LayerIR): ElevationLabelPlacement | undefined {
+  const candidate = elevationLabelCandidates(label, config, layer, coveringLayer)[0];
+  return candidate && { point: candidate.point, rotationRad: candidate.rotationRad };
+}
+
+export interface CoordinatedElevationLabel {
+  label: string;
+  placement: ElevationLabelPlacement;
+}
+
+function angleDifference(left: number, right: number): number {
+  return Math.abs(Math.atan2(Math.sin(left - right), Math.cos(left - right)));
+}
+
+/**
+ * Selects elevation labels as a stack instead of independently. Visibility is
+ * still a hard constraint; among valid candidates, adjacent center drift is
+ * weighted most heavily, followed by preferred-position and rotation drift.
+ */
+export function placeElevationLabelStack(labelsByLayer: string[][], config: ProjectConfigV1, layers: LayerIR[]): Array<CoordinatedElevationLabel | undefined> {
+  const options = layers.map((layer, layerIndex) => {
+    for (const label of labelsByLayer[layerIndex] ?? []) {
+      const candidates = elevationLabelCandidates(label, config, layer, layers[layerIndex + 1]);
+      if (candidates.length) return candidates.map((candidate) => ({ label, candidate }));
+    }
+    return [];
+  });
+  const result: Array<CoordinatedElevationLabel | undefined> = new Array(layers.length).fill(undefined);
+  const diagonalSquared = config.widthMm ** 2 + config.heightMm ** 2;
+  let segmentStart = 0;
+  while (segmentStart < options.length) {
+    while (segmentStart < options.length && !options[segmentStart]?.length) segmentStart += 1;
+    if (segmentStart >= options.length) break;
+    let segmentEnd = segmentStart;
+    while (segmentEnd + 1 < options.length && options[segmentEnd + 1]?.length) segmentEnd += 1;
+    let costs = options[segmentStart]!.map(({ candidate }) => candidate.preferenceScore);
+    const backPointers: number[][] = [];
+    for (let layerIndex = segmentStart + 1; layerIndex <= segmentEnd; layerIndex += 1) {
+      const previous = options[layerIndex - 1]!;
+      const current = options[layerIndex]!;
+      const pointers: number[] = [];
+      const nextCosts = current.map(({ candidate }) => {
+        let best = Number.POSITIVE_INFINITY;
+        let bestIndex = 0;
+        previous.forEach(({ candidate: prior }, priorIndex) => {
+          const drift = ((candidate.center.x - prior.center.x) ** 2 + (candidate.center.y - prior.center.y) ** 2) / diagonalSquared;
+          const rotation = angleDifference(candidate.rotationRad, prior.rotationRad) / Math.PI;
+          const score = costs[priorIndex]! + candidate.preferenceScore + 4 * drift + 0.25 * rotation ** 2;
+          if (score < best) { best = score; bestIndex = priorIndex; }
+        });
+        pointers.push(bestIndex);
+        return best;
+      });
+      backPointers.push(pointers);
+      costs = nextCosts;
+    }
+    let selected = costs.reduce((best, cost, index) => cost < costs[best]! ? index : best, 0);
+    for (let layerIndex = segmentEnd; layerIndex >= segmentStart; layerIndex -= 1) {
+      const option = options[layerIndex]![selected]!;
+      result[layerIndex] = { label: option.label, placement: { point: option.candidate.point, rotationRad: option.candidate.rotationRad } };
+      if (layerIndex > segmentStart) selected = backPointers[layerIndex - segmentStart - 1]![selected]!;
+    }
+    segmentStart = segmentEnd + 1;
+  }
+  return result;
 }

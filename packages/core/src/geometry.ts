@@ -14,7 +14,7 @@ import {
   segmentIntersectionT,
   signedArea,
 } from "./geometry2d.js";
-import { placeElevationLabel, placeLabel } from "./label-placement.js";
+import { placeElevationLabelStack, placeLabel } from "./label-placement.js";
 import { offsetClosedRing } from "./offset.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
 import type {
@@ -211,6 +211,7 @@ function addAlignmentGuides(config: ProjectConfigV1, layers: LayerIR[]): void {
         kind: "guide",
         points: [point],
         label,
+        textStyle: config.textStyle,
       });
     });
   }
@@ -449,7 +450,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       const layer = layers[segment.layer];
       if (!layer) continue;
       if (feature.label && segment.points[0] && layer.polygons.some((polygon) => pointInPolygon(segment.points[0]!, polygon))) {
-        layer.markings.push({ id: `${feature.id}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label });
+        layer.markings.push({ id: `${feature.id}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label, textStyle: config.textStyle });
       }
       clipPolyline(segment.points, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
         id: `${feature.id}-${layer.index}-${segmentIndex}-${clipIndex}`,
@@ -486,7 +487,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       { id: "scale-main", operation: "engrave", kind: "guide", points: [{ x, y }, { x: x + length, y }] },
       { id: "scale-left", operation: "engrave", kind: "guide", points: [{ x, y: y - 1.7 }, { x, y: y + 1.7 }] },
       { id: "scale-right", operation: "engrave", kind: "guide", points: [{ x: x + length, y: y - 1.7 }, { x: x + length, y: y + 1.7 }] },
-      { id: "scale-label", operation: "engrave", kind: "label", points: [{ x, y: y + 5 }], label: scale.label },
+      { id: "scale-label", operation: "engrave", kind: "label", points: [{ x, y: y + 5 }], label: scale.label, textStyle: config.textStyle },
     );
   }
 
@@ -494,17 +495,14 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
   if (config.showElevationLabels) {
     const omittedLayers: string[] = [];
-    layers.forEach((layer, layerIndex) => {
+    const labelsByLayer = layers.map((layer) => {
       const elevation = Math.round(displayElevation(layer.elevationM, config.units));
       const unit = elevationUnit(config.units);
-      let placed: { label: string; placement: NonNullable<ReturnType<typeof placeElevationLabel>> } | undefined;
-      for (const label of [`${elevation} ${unit}`, `${elevation}${unit}`, `${elevation}`]) {
-        const placement = placeElevationLabel(label, config, layer, layers[layerIndex + 1]);
-        if (placement) {
-          placed = { label, placement };
-          break;
-        }
-      }
+      return [`${elevation} ${unit}`, `${elevation}${unit}`, `${elevation}`];
+    });
+    const placements = placeElevationLabelStack(labelsByLayer, config, layers);
+    layers.forEach((layer, layerIndex) => {
+      const placed = placements[layerIndex];
       if (!placed) {
         omittedLayers.push(String(layer.index + 1));
         return;
@@ -516,6 +514,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
         points: [placed.placement.point],
         label: placed.label,
         labelRotationRad: placed.placement.rotationRad,
+        textStyle: config.textStyle,
       });
     });
     if (omittedLayers.length) warnings.push({
@@ -554,18 +553,21 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.units !== "metric" && config.units !== "imperial") throw new Error("Project units must be metric or imperial.");
   if (config.cropShape !== "rectangle" && config.cropShape !== "circle") throw new Error("Crop shape must be rectangle or circle.");
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
+  if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");
   if (config.widthMm <= 0) throw new Error("Project width must be greater than zero.");
   if (config.heightMm <= 0) throw new Error("Project height must be greater than zero.");
   if (!Number.isInteger(config.layerCount) || config.layerCount < 2 || config.layerCount > 24) throw new Error("Layer count must be a whole number between 2 and 24.");
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
   if (config.glueMarginMm < 2 || config.glueMarginMm > 25) throw new Error("Glue margin must be between 2 and 25 mm.");
   if (config.laserKerfMm < 0 || config.laserKerfMm > 1) throw new Error("Laser kerf must be between 0 and 1 mm.");
   if (config.smoothing !== 0 && config.smoothing !== 1) throw new Error("Contour smoothing must be 0 or 1.");
   if (Math.abs(config.elevationLabelPosition.x) > 0.9 || Math.abs(config.elevationLabelPosition.y) > 0.9) throw new Error("Elevation label position must be between -90% and 90%.");
+  if (config.textStyle.font !== "technical" && config.textStyle.font !== "rounded" && config.textStyle.font !== "stencil") throw new Error("Text font must be technical, rounded, or stencil.");
+  if (config.textStyle.sizeMm < 2 || config.textStyle.sizeMm > 10) throw new Error("Text size must be between 2 and 10 mm.");
   const bounds = config.location.bounds;
   if (bounds && (![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite) || bounds.west >= bounds.east || bounds.south >= bounds.north || bounds.south < -85.0511 || bounds.north > 85.0511)) throw new Error("Project geographic bounds are invalid.");
 }

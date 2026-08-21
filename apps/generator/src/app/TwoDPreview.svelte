@@ -23,7 +23,7 @@
         {/each}
       </g>
       {#each layer.markings as marking (marking.id)}
-        <g data-marking-id={marking.id} data-marking-kind={marking.kind}><path d={pathData(marking.points)} fill="none" stroke={marking.operation === "score" ? "#365c79" : "#2b2119"} stroke-width="0.55" vector-effect="non-scaling-stroke" />{#if marking.label && marking.points[0]}<path d={labelPathData(marking.label, marking.points[0], 0, 0, marking.labelRotationRad)} fill="none" stroke="#2b2119" stroke-width="0.2" />{/if}</g>
+        <g data-marking-id={marking.id} data-marking-kind={marking.kind}><path d={pathData(marking.points)} fill="none" stroke={marking.operation === "score" ? "#365c79" : "#2b2119"} stroke-width="0.55" vector-effect="non-scaling-stroke" />{#if marking.label && marking.points[0]}<path d={labelPathData(marking.label, marking.points[0], 0, 0, marking.labelRotationRad, marking.textStyle)} fill="none" stroke="#2b2119" stroke-width="0.2" stroke-linecap={marking.textStyle?.font === "rounded" ? "round" : "butt"} stroke-linejoin={marking.textStyle?.font === "rounded" ? "round" : "miter"} />{/if}</g>
       {/each}
     </svg>
     {#if hasNorthArrow}<div class="axis north-axis"><Compass size={13} /> N</div>{/if}

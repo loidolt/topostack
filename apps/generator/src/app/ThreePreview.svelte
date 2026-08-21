@@ -9,7 +9,7 @@
   import * as THREE from "three";
   import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
   import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-  import { labelLineSegments, type GeometryIRV1, type Point2D, type Polygon2D } from "@topostack/core";
+  import { labelLineSegments, type GeometryIRV1, type Point2D, type Polygon2D, type TextStyleV1 } from "@topostack/core";
 
   let { geometry, exploded }: { geometry: GeometryIRV1; exploded: number } = $props();
   let container: HTMLButtonElement;
@@ -79,7 +79,7 @@
     return grain;
   }
   function linePoints(points: Point2D[], z: number): THREE.Vector3[] { return points.map((point) => new THREE.Vector3(point.x, point.y, z)); }
-  function labelPoints(label: string, origin: Point2D, rotationRad = 0): THREE.Vector3[] { return labelLineSegments(label, origin, 0, 0, rotationRad).flatMap((segment) => [new THREE.Vector3(segment.start.x, segment.start.y, 0), new THREE.Vector3(segment.end.x, segment.end.y, 0)]); }
+  function labelPoints(label: string, origin: Point2D, rotationRad = 0, textStyle?: TextStyleV1): THREE.Vector3[] { return labelLineSegments(label, origin, 0, 0, rotationRad, textStyle).flatMap((segment) => [new THREE.Vector3(segment.start.x, segment.start.y, 0), new THREE.Vector3(segment.end.x, segment.end.y, 0)]); }
 
   // Fast path for the exploded slider: only mesh z-positions move, so a drag
   // never tears down or re-extrudes the scene.
@@ -158,7 +158,7 @@
             addStacked(runtime!.content, new THREE.Line(lineGeometry, marking.operation === "score" ? scoreMaterial : engraveMaterial), layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
           }
           if (marking.label && marking.points[0]) {
-            const labelGeometry = new THREE.BufferGeometry().setFromPoints(labelPoints(marking.label, marking.points[0], marking.labelRotationRad));
+            const labelGeometry = new THREE.BufferGeometry().setFromPoints(labelPoints(marking.label, marking.points[0], marking.labelRotationRad, marking.textStyle));
             addStacked(runtime!.content, new THREE.LineSegments(labelGeometry, labelMaterial), layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm) * 1.5);
           }
         });

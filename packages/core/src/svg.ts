@@ -36,7 +36,7 @@ function layerGroups(layer: LayerIR, laserKerfMm: number, offsetX = 0, offsetY =
     ];
   }).join("");
   const strokePaths = (operation: "score" | "engrave") => layer.markings.filter((mark) => mark.operation === operation && mark.points.length > 1).map((mark) => `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>`).join("");
-  const labelPaths = (operation: "score" | "engrave") => layer.markings.filter((mark) => mark.operation === operation && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY, mark.labelRotationRad)}"/>`).join("");
+  const labelPaths = (operation: "score" | "engrave") => layer.markings.filter((mark) => mark.operation === operation && mark.label && mark.points[0]).map((mark) => `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label ?? "", mark.points[0]!, offsetX, offsetY, mark.labelRotationRad, mark.textStyle)}"${mark.textStyle?.font === "rounded" ? ' stroke-linecap="round" stroke-linejoin="round"' : ""}/>`).join("");
   return `<g id="${layer.id}"><g id="${layer.id}-CUT" data-operation="CUT" fill="none" stroke="${CUT}" stroke-width="0.1" fill-rule="evenodd">${cutPaths}</g><g id="${layer.id}-SCORE" data-operation="SCORE" fill="none" stroke="${SCORE}" stroke-width="0.15">${strokePaths("score")}${labelPaths("score")}</g><g id="${layer.id}-ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-width="0.2">${strokePaths("engrave")}${labelPaths("engrave")}</g></g>`;
 }
 

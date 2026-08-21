@@ -61,6 +61,23 @@ describe("TopoStack Svelte shell", () => {
     expect(fields.firstElementChild?.getAttribute("role")).toBe("switch");
     expect(fields.querySelectorAll(":scope > .field-row")).toHaveLength(4);
     expect(fields.querySelectorAll(".advanced-coordinate-fields > .field-row")).toHaveLength(2);
+    expect(fields.querySelectorAll('.font-options button[role="radio"]')).toHaveLength(3);
+  });
+
+  it("changes engraving font and exact physical text size without refetching terrain", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Fabrication settings"))!.click();
+    await tick();
+    const stencil = [...target.querySelectorAll<HTMLButtonElement>('.font-options button[role="radio"]')].find((button) => button.textContent?.includes("Stencil"))!;
+    stencil.click();
+    await vi.waitFor(() => expect(stencil.getAttribute("aria-checked")).toBe("true"));
+    const size = target.querySelector<HTMLInputElement>('input[aria-label="Exact text size"]')!;
+    size.value = "5";
+    size.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(target.querySelector<HTMLInputElement>('input[aria-label="Text size slider"]')?.value).toBe("5"));
+    expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 
   it("applies and persists an explicit color scheme", async () => {

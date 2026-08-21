@@ -381,6 +381,59 @@ body {
   margin-top: 12px;
 }
 
+.text-style-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.font-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.font-options button {
+  min-width: 0;
+  padding: 7px 4px 6px;
+  border: 1px solid var(--loidolt-border);
+  background: var(--loidolt-surface);
+  color: var(--loidolt-text-muted);
+  cursor: pointer;
+}
+
+.font-options button[data-state="on"] {
+  border-color: var(--loidolt-accent);
+  background: var(--loidolt-surface-alt);
+  color: var(--loidolt-text);
+}
+
+.font-options button:focus-visible {
+  outline: 2px solid var(--loidolt-accent);
+  outline-offset: 2px;
+}
+
+.font-options svg {
+  display: block;
+  width: 100%;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 0.18;
+}
+
+.font-options span {
+  display: block;
+  margin-top: 3px;
+  font: 8px var(--loidolt-font-utility);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.text-size-range {
+  margin: 0;
+}
+
 .advanced-fields > .ldt-switch {
   min-height: 39px;
   padding: 0 0 8px;

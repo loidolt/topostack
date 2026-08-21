@@ -13,6 +13,10 @@ function unitValue(value: unknown): ProjectConfigV1["units"] {
   if (value === "metric" || value === "imperial") return value;
   throw new Error("Project units must be metric or imperial.");
 }
+function textFontValue(value: unknown): ProjectConfigV1["textStyle"]["font"] {
+  if (value === "technical" || value === "rounded" || value === "stencil") return value;
+  throw new Error("Text font must be technical, rounded, or stencil.");
+}
 
 export async function loadProject(): Promise<ProjectConfigV1 | undefined> {
   try {
@@ -35,6 +39,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
   const boundsRecord = locationRecord.bounds && typeof locationRecord.bounds === "object" ? locationRecord.bounds as Record<string, unknown> : undefined;
   if (record.elevationLabelPosition !== undefined && (!record.elevationLabelPosition || typeof record.elevationLabelPosition !== "object")) throw new Error("Elevation label position is invalid.");
   const labelPositionRecord = record.elevationLabelPosition as Record<string, unknown> | undefined;
+  if (record.textStyle !== undefined && (!record.textStyle || typeof record.textStyle !== "object")) throw new Error("Text style is invalid.");
+  const textStyleRecord = record.textStyle as Record<string, unknown> | undefined;
   const project: ProjectConfigV1 = {
     ...DEFAULT_PROJECT,
     schemaVersion: 1,
@@ -58,6 +64,10 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     laserKerfMm: record.laserKerfMm === undefined ? DEFAULT_PROJECT.laserKerfMm : numberValue(record.laserKerfMm),
     showElevationLabels: booleanValue(record.showElevationLabels, "showElevationLabels"), showNorthArrow: booleanValue(record.showNorthArrow, "showNorthArrow"), showScaleBar: booleanValue(record.showScaleBar, "showScaleBar"),
     elevationLabelPosition: labelPositionRecord ? { x: numberValue(labelPositionRecord.x), y: numberValue(labelPositionRecord.y) } : { ...DEFAULT_PROJECT.elevationLabelPosition },
+    textStyle: textStyleRecord ? {
+      font: textFontValue(textStyleRecord.font),
+      sizeMm: numberValue(textStyleRecord.sizeMm),
+    } : { ...DEFAULT_PROJECT.textStyle },
     explodedPreview: record.explodedPreview === undefined ? DEFAULT_PROJECT.explodedPreview : numberValue(record.explodedPreview),
   };
   validateProject(project);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayLength, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, millimetersFromDisplay, MM_PER_INCH, projectFingerprint, validateProject, type ProjectConfigV1, type SourceBundleV1 } from "./index.js";
+import { placeElevationLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
   return { ...createSyntheticSource(project, 48), sourceKind: "real" as const, imagerySources: ["srtm/N46W122.tif"] };
@@ -91,6 +92,61 @@ describe("TopoStack geometry", () => {
     const fabrication = buildFabricationPackage(imperial, imperialProject);
     expect(await fabrication.files.find((file) => file.filename === "README.txt")?.blob.text()).toContain(" in each");
     expect(await fabrication.files.find((file) => file.filename.endsWith("assembly-guide.svg"))?.blob.text()).toContain(" ft</text>");
+  });
+
+  it("renders distinct scalable fabrication fonts and propagates the selected style", () => {
+    const technical = { font: "technical" as const, sizeMm: 3.1 };
+    const rounded = { font: "rounded" as const, sizeMm: 3.1 };
+    const stencil = { font: "stencil" as const, sizeMm: 3.1 };
+    const technicalSegments = labelLineSegments("123m", { x: 0, y: 0 }, 0, 0, 0, technical);
+    const roundedSegments = labelLineSegments("123m", { x: 0, y: 0 }, 0, 0, 0, rounded);
+    const stencilSegments = labelLineSegments("123m", { x: 0, y: 0 }, 0, 0, 0, stencil);
+    expect(roundedSegments).not.toEqual(technicalSegments);
+    expect(stencilSegments).not.toEqual(technicalSegments);
+    expect(technicalSegments.every(({ start, end }) => start.y === end.y)).toBe(true);
+    expect(roundedSegments.some(({ start, end }) => start.y !== end.y)).toBe(true);
+    expect(stencilSegments.length).toBeGreaterThan(roundedSegments.length);
+    expect(labelDimensions("123m", { ...technical, sizeMm: 6.2 }).width).toBeCloseTo(labelDimensions("123m", technical).width * 2);
+    expect(labelDimensions("123m", { ...technical, sizeMm: 6.2 }).height).toBe(6.2);
+
+    const project = { ...DEFAULT_PROJECT, textStyle: { font: "rounded" as const, sizeMm: 4.2 } };
+    const source = realSource(project);
+    source.markings = [{ id: "summit", kind: "label", operation: "engrave", points: [{ x: 10, y: 10 }], label: "Summit 1", elevationM: source.elevation.min }];
+    const result = generateGeometry(project, source);
+    const labels = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.label);
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.every((marking) => marking.textStyle?.font === "rounded" && marking.textStyle.sizeMm === 4.2)).toBe(true);
+    expect(layerToSvg(result, result.layers[0]!)).not.toContain("<text");
+  });
+
+  it("coordinates elevation labels across the stack without sacrificing valid exposed faces", () => {
+    const project = { ...DEFAULT_PROJECT, showRoads: false, showWater: false, showScaleBar: false, showNorthArrow: false };
+    const bare = generateGeometry({ ...project, showElevationLabels: false }, realSource(project));
+    const independent = bare.layers.map((layer, index) => {
+      const elevation = Math.round(layer.elevationM);
+      for (const label of [`${elevation} m`, `${elevation}m`, `${elevation}`]) {
+        const placement = placeElevationLabel(label, project, layer, bare.layers[index + 1]);
+        if (placement) return { label, ...placement };
+      }
+      return undefined;
+    });
+    const coordinated = generateGeometry(project, realSource(project)).layers.map((layer) => {
+      const marking = layer.markings.find((item) => item.id.startsWith("elevation-"));
+      return marking?.label && marking.points[0] ? { label: marking.label, point: marking.points[0], rotationRad: marking.labelRotationRad ?? 0 } : undefined;
+    });
+    const center = (item: NonNullable<(typeof coordinated)[number]>) => {
+      const dimensions = labelDimensions(item.label, project.textStyle);
+      const cosine = Math.cos(item.rotationRad); const sine = Math.sin(item.rotationRad);
+      return { x: item.point.x + dimensions.width / 2 * cosine - dimensions.height / 2 * sine, y: item.point.y + dimensions.width / 2 * sine + dimensions.height / 2 * cosine };
+    };
+    const drift = (items: typeof coordinated) => items.slice(1).reduce((total, item, index) => {
+      const prior = items[index];
+      if (!item || !prior) return total;
+      const a = center(prior); const b = center(item);
+      return total + Math.hypot(a.x - b.x, a.y - b.y);
+    }, 0);
+    expect(coordinated.filter(Boolean)).toHaveLength(independent.filter(Boolean).length);
+    expect(drift(coordinated)).toBeLessThanOrEqual(drift(independent) + 1e-6);
   });
 
   it("exports 1:1 millimeter SVGs with machine operation groups", async () => {
@@ -194,7 +250,7 @@ describe("TopoStack geometry", () => {
     }
   });
 
-  it("keeps elevation labels on exposed faces and follows contour tangents", () => {
+  it("keeps elevation labels on exposed faces with their bottom edge downslope", () => {
     const result = generateGeometry(DEFAULT_PROJECT, realSource());
     const labels = result.layers.flatMap((layer, index) => layer.markings
       .filter((marking) => marking.id.startsWith("elevation-"))
@@ -203,12 +259,28 @@ describe("TopoStack geometry", () => {
     expect(labels.some(({ marking }) => Math.abs(marking.labelRotationRad ?? 0) > 0.05)).toBe(true);
     for (const { marking, layer, coveringLayer } of labels) {
       expect(marking.label).not.toMatch(/L\d/);
-      expect(marking.labelRotationRad).toBeGreaterThanOrEqual(-Math.PI / 2);
-      expect(marking.labelRotationRad).toBeLessThanOrEqual(Math.PI / 2);
-      const strokes = labelLineSegments(marking.label ?? "", marking.points[0]!, 0, 0, marking.labelRotationRad);
+      const rotation = marking.labelRotationRad ?? 0;
+      const strokes = labelLineSegments(marking.label ?? "", marking.points[0]!, 0, 0, rotation, marking.textStyle);
       const points = strokes.flatMap(({ start, end }) => [start, end]);
       expect(points.every((point) => layer.polygons.some((polygon) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole))))).toBe(true);
       expect(points.every((point) => !coveringLayer?.polygons.some((polygon) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole))))).toBe(true);
+      const dimensions = labelDimensions(marking.label ?? "", marking.textStyle);
+      const origin = marking.points[0]!;
+      const center = {
+        x: origin.x + dimensions.width / 2 * Math.cos(rotation) - dimensions.height / 2 * Math.sin(rotation),
+        y: origin.y + dimensions.width / 2 * Math.sin(rotation) + dimensions.height / 2 * Math.cos(rotation),
+      };
+      const down = { x: -Math.sin(rotation), y: Math.cos(rotation) };
+      const probeDistance = dimensions.height / 2 + 1.7;
+      const bottomProbe = { x: center.x + down.x * probeDistance, y: center.y + down.y * probeDistance };
+      const topProbe = { x: center.x - down.x * probeDistance, y: center.y - down.y * probeDistance };
+      const inside = (point: { x: number; y: number }, polygons = layer.polygons) => polygons.some((polygon) => pointInRing(point, polygon.outer) && !polygon.holes.some((hole) => pointInRing(point, hole)));
+      // The text sits just inside the contour of the layer it describes: its
+      // top points into that layer and its bottom crosses that same boundary
+      // toward lower terrain. It must also remain clear of the next layer.
+      expect(inside(topProbe)).toBe(true);
+      expect(inside(bottomProbe)).toBe(false);
+      expect(inside(center, coveringLayer?.polygons ?? [])).toBe(false);
     }
   });
 
@@ -363,6 +435,8 @@ describe("TopoStack geometry", () => {
   it("rejects fractional layer counts and unknown crop shapes", () => {
     expect(() => validateProject({ ...DEFAULT_PROJECT, layerCount: 2.5 })).toThrow(/whole number/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, cropShape: "hexagon" as ProjectConfigV1["cropShape"] })).toThrow(/rectangle or circle/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, textStyle: { font: "serif" as ProjectConfigV1["textStyle"]["font"], sizeMm: 3 } })).toThrow(/text font/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, textStyle: { font: "technical", sizeMm: 10.1 } })).toThrow(/text size/i);
   });
 
   it("warns about empty layers and blocks their fabrication export", () => {

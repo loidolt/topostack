@@ -22,6 +22,7 @@ describe("project import validation", () => {
       glueMarginMm: _legacyGlueMarginMm,
       laserKerfMm: _legacyLaserKerfMm,
       units: _legacyUnits,
+      textStyle: _legacyTextStyle,
       ...legacyProject
     } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
@@ -31,7 +32,13 @@ describe("project import validation", () => {
       glueMarginMm: 8,
       laserKerfMm: 0.15,
       units: "metric",
+      textStyle: DEFAULT_PROJECT.textStyle,
     });
+  });
+  it("validates and restores fabrication typography", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "stencil", sizeMm: 5 } }).textStyle).toEqual({ font: "stencil", sizeMm: 5 });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "serif", sizeMm: 5 } })).toThrow(/text font/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "technical", sizeMm: 1 } })).toThrow(/text size/i);
   });
   it("defaults smoothing, minimum feature, and exploded preview for legacy projects", () => {
     const {
