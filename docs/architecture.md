@@ -13,6 +13,8 @@ The core package has no Svelte, Atomm, Cloudflare, DOM, or storage imports. The 
 
 The UI follows the same Svelte 5 runes, immutable domain-state, and static-adapter patterns as Label Studio. Atomm integration stays behind a small bridge that registers the platform lifecycle once and reads current project state through a getter, avoiding stale component closures.
 
+Layer count is derived, never configured. `planTerrainStack` turns the mapped ground width, the physical cut width, the terrain relief, and the requested vertical exaggeration into a stack height, then divides that by the material thickness. The count is clamped to 2–24 sheets and the reported exaggeration is refitted to whatever the clamp allows, so adding material thickness makes a model coarser rather than shorter and widening the cut makes it taller.
+
 Every generated result records a deterministic project fingerprint and source quality. Before markings are clipped and labels are placed, the geometry flow plans same-coordinate material nests and adds their glue-safe cavities to donor layers. Vector-tile buffers are removed and unambiguous degree-two road pieces are stitched before transportation paths are styled as complete routes. The styled routes are then clipped to the highest exposed material across the stack so bends and contour transitions stay continuous; major-road forks add compact junction joins. Fabrication export groups each nest family onto one panel and emits shared donor/child cut lines once. Export is rejected when settings changed after generation, the source is synthetic, or any layer is empty.
 
 ## Coordinate conventions
@@ -28,4 +30,4 @@ The first release supports land terrain between ±85.0511° latitude. Mapzen Ter
 
 ## Versioning
 
-`ProjectConfigV1`, `SourceBundleV1`, `GeometryIRV1`, and the exported manifest are explicitly versioned. Any incompatible change must introduce a migration rather than silently reinterpret an IndexedDB or exported project.
+`ProjectConfigV1`, `SourceBundleV1`, `GeometryIRV1`, and the exported manifest are explicitly versioned. Any incompatible change must introduce a migration rather than silently reinterpret an IndexedDB or exported project. Replacing the stored `layerCount` with `verticalExaggeration` moved the fingerprint prefix to `v3-`; projects saved before that load at the default exaggeration and must be regenerated once before export.

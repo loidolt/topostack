@@ -27,6 +27,29 @@ export interface TextStyleV1 {
 export const TEXT_FONTS: readonly TextFont[] = ["technical", "rounded", "stencil"];
 export const DEFAULT_TEXT_STYLE: TextStyleV1 = { font: "technical", sizeMm: 3.1 };
 
+export const MIN_LAYER_COUNT = 2;
+export const MAX_LAYER_COUNT = 24;
+export const MIN_VERTICAL_EXAGGERATION = 1;
+export const MAX_VERTICAL_EXAGGERATION = 20;
+
+/**
+ * Physical consequences of a config plus its terrain relief. Layer count is a
+ * result of the model's own scale, never an input: the stack is as tall as the
+ * exaggerated relief demands, and the material thickness decides how many
+ * sheets that takes.
+ */
+export interface TerrainStackPlan {
+  /** Layers the relief resolves to at this scale and thickness, clamped to 2-24. */
+  layerCount: number;
+  /** Exaggeration actually applied; differs from the requested value when the clamp bites. */
+  verticalExaggeration: number;
+  stackHeightMm: number;
+  /** Elevation covered by one sheet of material. */
+  metersPerLayer: number;
+  /** Horizontal scale as a fraction - 1/78247 for the bundled preview. */
+  horizontalScale: number;
+}
+
 export interface GeoPoint {
   lat: number;
   lon: number;
@@ -49,7 +72,7 @@ export interface ProjectConfigV1 {
   widthMm: number;
   heightMm: number;
   materialThicknessMm: number;
-  layerCount: number;
+  verticalExaggeration: number;
   minimumFeatureMm: number;
   smoothing: number;
   showRoads: boolean;
@@ -179,6 +202,7 @@ export interface GeometryIRV1 {
   widthMm: number;
   heightMm: number;
   laserKerfMm: number;
+  verticalExaggeration: number;
   minElevationM: number;
   maxElevationM: number;
   layers: LayerIR[];
@@ -214,7 +238,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   widthMm: 300,
   heightMm: 200,
   materialThicknessMm: 3,
-  layerCount: 10,
+  verticalExaggeration: 2,
   minimumFeatureMm: 0.8,
   smoothing: 1,
   showRoads: true,

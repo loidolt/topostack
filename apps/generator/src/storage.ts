@@ -65,7 +65,7 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     cropShape: record.cropShape === "circle" ? "circle" : record.cropShape === "rectangle" ? "rectangle" : DEFAULT_PROJECT.cropShape,
     units: unitValue(record.units),
     widthMm: numberValue(record.widthMm), heightMm: numberValue(record.heightMm), materialThicknessMm: numberValue(record.materialThicknessMm),
-    layerCount: numberValue(record.layerCount),
+    verticalExaggeration: record.verticalExaggeration === undefined ? DEFAULT_PROJECT.verticalExaggeration : numberValue(record.verticalExaggeration),
     minimumFeatureMm: record.minimumFeatureMm === undefined ? DEFAULT_PROJECT.minimumFeatureMm : numberValue(record.minimumFeatureMm),
     smoothing: record.smoothing === undefined ? DEFAULT_PROJECT.smoothing : numberValue(record.smoothing),
     showRoads: booleanValue(record.showRoads, "showRoads"),

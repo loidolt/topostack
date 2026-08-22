@@ -18,9 +18,10 @@ import { placeElevationLabelStack, placeLabel, placeLinearLabel } from "./label-
 import { offsetClosedRing } from "./offset.js";
 import { northArrowFootprint, northArrowMarkings } from "./north-arrow.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
-import { NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES } from "./types.js";
+import { MAX_LAYER_COUNT, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES } from "./types.js";
 import type {
   ElevationGrid,
+  GeoBounds,
   GeometryIRV1,
   FabricationNest,
   LayerIR,
@@ -29,6 +30,7 @@ import type {
   Polygon2D,
   ProjectConfigV1,
   SourceBundleV1,
+  TerrainStackPlan,
   TransportationClass,
 } from "./types.js";
 
@@ -374,12 +376,53 @@ export function projectFingerprint(config: ProjectConfigV1): string {
     hash ^= input.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return `v2-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `v3-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function distanceM(lat: number, lonA: number, lonB: number): number {
   const radians = Math.PI / 180;
   return Math.abs((lonB - lonA) * radians) * 6_371_008.8 * Math.cos(lat * radians);
+}
+
+/**
+ * Resolve a config and its terrain relief into physical stack dimensions.
+ *
+ * The model's horizontal scale already exists — `widthMm` over the ground width
+ * of the mapped bounds — so the true-scale height of the relief is a fact, not
+ * a preference. Exaggeration multiplies that height, and the material thickness
+ * divides it into sheets. Layer count is therefore always the last term.
+ *
+ * When the sheet count lands outside the fabricable range the count is clamped
+ * and the exaggeration is refitted to whatever that clamp implies, so the
+ * reported figure always describes the model that will actually be cut. The
+ * refitted value can fall below `MIN_VERTICAL_EXAGGERATION` or rise above
+ * `MAX_VERTICAL_EXAGGERATION`; those bounds constrain the request, not the fit.
+ */
+export function planTerrainStack(config: ProjectConfigV1, reliefM: number, bounds: GeoBounds): TerrainStackPlan {
+  const requested = config.verticalExaggeration;
+  const groundWidthM = distanceM((bounds.north + bounds.south) / 2, bounds.west, bounds.east);
+  const flat = {
+    layerCount: MIN_LAYER_COUNT,
+    verticalExaggeration: requested,
+    stackHeightMm: MIN_LAYER_COUNT * config.materialThicknessMm,
+    metersPerLayer: Math.max(0, reliefM) / MIN_LAYER_COUNT,
+    horizontalScale: 0,
+  };
+  if (!Number.isFinite(groundWidthM) || groundWidthM <= 0 || !Number.isFinite(reliefM) || reliefM <= 0) return flat;
+
+  const horizontalScale = config.widthMm / (groundWidthM * 1000);
+  const trueReliefMm = reliefM * (config.widthMm / groundWidthM);
+  if (!(trueReliefMm > 0)) return { ...flat, horizontalScale };
+
+  const layerCount = clamp(Math.round((trueReliefMm * requested) / config.materialThicknessMm), MIN_LAYER_COUNT, MAX_LAYER_COUNT);
+  const stackHeightMm = layerCount * config.materialThicknessMm;
+  return {
+    layerCount,
+    verticalExaggeration: stackHeightMm / trueReliefMm,
+    stackHeightMm,
+    metersPerLayer: reliefM / layerCount,
+    horizontalScale,
+  };
 }
 
 function niceScaleDistance(maximumM: number): number {
@@ -545,7 +588,8 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   if (relief < 20) warnings.push({ code: "LOW_RELIEF", message: "This area has very little elevation change; the layers may look nearly identical." });
 
   const clip = boundary(config);
-  const thresholds = Array.from({ length: config.layerCount }, (_, index) => grid.min + (relief * index) / config.layerCount);
+  const stack = planTerrainStack(config, relief, source.bounds);
+  const thresholds = Array.from({ length: stack.layerCount }, (_, index) => grid.min + (relief * index) / stack.layerCount);
   const contourGenerator = contours().size([grid.width, grid.height]).smooth(config.smoothing > 0).thresholds(thresholds.slice(1));
   const generated = contourGenerator(Array.from(grid.values));
 
@@ -730,6 +774,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     widthMm: config.widthMm,
     heightMm: config.heightMm,
     laserKerfMm: config.laserKerfMm,
+    verticalExaggeration: stack.verticalExaggeration,
     minElevationM: grid.min,
     maxElevationM: grid.max,
     layers,
@@ -752,11 +797,11 @@ export function validateProject(config: ProjectConfigV1): void {
   }
   if (config.widthMm <= 0) throw new Error("Project width must be greater than zero.");
   if (config.heightMm <= 0) throw new Error("Project height must be greater than zero.");
-  if (!Number.isInteger(config.layerCount) || config.layerCount < 2 || config.layerCount > 24) throw new Error("Layer count must be a whole number between 2 and 24.");
+  if (config.verticalExaggeration < MIN_VERTICAL_EXAGGERATION || config.verticalExaggeration > MAX_VERTICAL_EXAGGERATION) throw new Error(`Vertical exaggeration must be between ${MIN_VERTICAL_EXAGGERATION} and ${MAX_VERTICAL_EXAGGERATION}.`);
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.layerCount, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (![config.widthMm, config.heightMm, config.verticalExaggeration, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
   if (config.glueMarginMm < 2 || config.glueMarginMm > 25) throw new Error("Glue margin must be between 2 and 25 mm.");
   if (config.laserKerfMm < 0 || config.laserKerfMm > 1) throw new Error("Laser kerf must be between 0 and 1 mm.");
@@ -786,7 +831,9 @@ export function createSyntheticSource(config: ProjectConfigV1, size = 96): Sourc
       const peak = Math.exp(-((nx - seedX * 0.22) ** 2 * 2.6 + (ny - seedY * 0.22) ** 2 * 3.2));
       const ridge = Math.exp(-Math.abs(ny + Math.sin(nx * 4.2 + seedX) * 0.22) * 5.5) * 0.36;
       const detail = Math.sin(nx * 10 + seedY * 3) * Math.cos(ny * 8 - seedX * 4) * 0.055;
-      const elevation = 850 + (peak + ridge + detail) * 2450;
+      // ~1.2 km of relief. The amplitude has to stay believable for the window
+      // below, because layer count is derived from the two together.
+      const elevation = 850 + (peak + ridge + detail) * 860;
       values[y * size + x] = elevation;
       min = Math.min(min, elevation);
       max = Math.max(max, elevation);
@@ -799,7 +846,9 @@ export function createSyntheticSource(config: ProjectConfigV1, size = 96): Sourc
     vectorStatus: "available",
     datasetVersion: "synthetic-v1",
     sourceKind: "synthetic",
-    bounds: config.location.bounds ?? { west: config.location.lon - 0.05, south: config.location.lat - 0.035, east: config.location.lon + 0.05, north: config.location.lat + 0.035 },
+    // Roughly the ground window the app requests at its default zoom, so the
+    // fallback's map scale — and the layer count derived from it — stay sane.
+    bounds: config.location.bounds ?? { west: config.location.lon - 0.1445, south: config.location.lat - 0.101, east: config.location.lon + 0.1445, north: config.location.lat + 0.101 },
     imagerySources: [],
     attribution: [{ name: "TopoStack deterministic terrain preview", url: "https://github.com/", license: "Development fixture" }],
   };

@@ -27,7 +27,7 @@ describe("Crater Lake bundled preview", () => {
     expect(markings.some((marking) => marking.kind === "trail")).toBe(true);
     expect(markings.some((marking) => marking.kind === "water")).toBe(true);
     expect(markings.some((marking) => marking.id.startsWith("alignment-"))).toBe(true);
-    expect(markings.filter((marking) => marking.id.startsWith("elevation-")).length).toBeGreaterThanOrEqual(Math.ceil(DEFAULT_PROJECT.layerCount / 2));
+    expect(markings.filter((marking) => marking.id.startsWith("elevation-")).length).toBeGreaterThanOrEqual(Math.ceil(geometry.layers.length / 2));
     expect(markings.some((marking) => marking.id.startsWith("north-"))).toBe(true);
     expect(markings.some((marking) => marking.id.startsWith("scale-"))).toBe(true);
   });

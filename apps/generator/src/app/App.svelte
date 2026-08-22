@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Box, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
+  import { Box, ChevronDown, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, Topbar, Workspace, type ThemePreference } from "@loidolt/theme-svelte";
-  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, millimetersFromDisplay, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, validateProject, type GeoBounds, type GeometryIRV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
+  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, MAX_VERTICAL_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type GeoBounds, type GeometryIRV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
   import { boundsForProject, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
@@ -110,6 +110,9 @@
   });
 
   const totalHeight = $derived(geometry.layers.length * project.materialThicknessMm);
+  // Layer count follows from map scale, relief, and material thickness, so the
+  // panel previews the stack the current settings will actually produce.
+  const stackPlan = $derived(planTerrainStack(project, geometry.maxElevationM - geometry.minElevationM, geometry.bounds));
   const fabricationPanelCount = $derived(geometry.layers.length - geometry.fabricationNests.length);
   const exportReady = $derived(!exportBlockReason(geometry, project));
   const visibleWarnings = $derived(geometry.warnings.slice(0, 2));
@@ -424,92 +427,187 @@
     {#snippet sidebar()}
     <Sidebar class="config-panel">
       <div class="panel-scroll">
-        <Section class="config-section"><p class="ldt-eyebrow">Terrain source</p><h1>Build the landscape.</h1><button class="location-card" onclick={() => searchOpen = true}><span class="location-icon"><MapIcon size={18} /></span><span><strong>{project.location.label.split(",")[0]}</strong><small>{project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}</small></span><Search size={17} /></button><div class="preset-row">{#each PRESETS.slice(0, 3) as preset}<button onclick={() => choosePlace(preset)}>{preset.label.split(",")[0].replace("Mount ", "Mt. ")}</button>{/each}</div></Section>
         <Section class="config-section">
-          <div class="section-kicker"><span>01</span> Cut size</div>
-          <div class="ldt-toggle-group unit-switch" role="radiogroup" aria-label="Display units">{#each UNIT_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.units === option.value} data-state={project.units === option.value ? "on" : "off"} tabindex={project.units === option.value ? 0 : -1} onclick={() => void updateFabrication({ units: option.value as ProjectConfigV1["units"] })} onkeydown={navigateChoice}>{option.label}</button>{/each}</div>
-          <div class="ldt-toggle-group shape-switch" role="radiogroup" aria-label="Crop shape">{#each SHAPE_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.cropShape === option.value} data-state={project.cropShape === option.value ? "on" : "off"} tabindex={project.cropShape === option.value ? 0 : -1} onclick={() => void updateFabrication({ cropShape: option.value as ProjectConfigV1["cropShape"], ...(option.value === "circle" ? { heightMm: project.widthMm } : {}) })} onkeydown={navigateChoice}>{#if option.value === "rectangle"}<Square size={15} />{:else}<Circle size={15} />{/if}{option.label}</button>{/each}</div>
-          <div class="field-grid">
+          <h1>Build the landscape.</h1>
+          <div class="section-kicker"><span>01</span> Location</div>
+          <button class="location-card" onclick={() => searchOpen = true}>
+            <span class="location-icon"><MapIcon size={18} /></span>
+            <span>
+              <strong>{project.location.label.split(",")[0]}</strong>
+              <small>{project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}</small>
+            </span>
+            <Search size={17} />
+          </button>
+          <div class="preset-row">
+            {#each PRESETS as preset}
+              <button onclick={() => choosePlace(preset)}>{preset.label.split(",")[0].replace("Mount ", "Mt. ")}</button>
+            {/each}
+          </div>
+        </Section>
+
+        <Section class="config-section">
+          <div class="section-kicker"><span>02</span> Cut size</div>
+          <div class="ldt-toggle-group unit-switch" role="radiogroup" aria-label="Display units">
+            {#each UNIT_OPTIONS as option}
+              <button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.units === option.value} data-state={project.units === option.value ? "on" : "off"} tabindex={project.units === option.value ? 0 : -1} onclick={() => void updateFabrication({ units: option.value as ProjectConfigV1["units"] })} onkeydown={navigateChoice}>{option.label}</button>
+            {/each}
+          </div>
+          <div class="ldt-toggle-group shape-switch" role="radiogroup" aria-label="Crop shape">
+            {#each SHAPE_OPTIONS as option}
+              <button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.cropShape === option.value} data-state={project.cropShape === option.value ? "on" : "off"} tabindex={project.cropShape === option.value ? 0 : -1} onclick={() => void updateFabrication({ cropShape: option.value as ProjectConfigV1["cropShape"], ...(option.value === "circle" ? { heightMm: project.widthMm } : {}) })} onkeydown={navigateChoice}>{#if option.value === "rectangle"}<Square size={15} />{:else}<Circle size={15} />{/if}{option.label}</button>
+            {/each}
+          </div>
+          <div class="field-stack">
             <Field label="Width" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Width" value={shownLength(project.widthMm)} min={project.units === "imperial" ? 0.001 : 0.01} step={project.units === "imperial" ? 0.01 : 1} oninput={(event) => { if (event.currentTarget.value !== "") { const widthMm = storedLength(event.currentTarget.valueAsNumber); void updateFabrication({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) }); } }} onValueChange={(width) => { const widthMm = storedLength(width); if (widthMm !== project.widthMm) void updateFabrication({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
             <Field label="Height" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Height" value={shownLength(project.heightMm)} min={project.units === "imperial" ? 0.001 : 0.01} step={project.units === "imperial" ? 0.01 : 1} disabled={project.cropShape === "circle"} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ heightMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(height) => { const heightMm = storedLength(height); if (heightMm !== project.heightMm) void updateFabrication({ heightMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
           </div>
         </Section>
+
         <Section class="config-section">
-          <div class="section-kicker"><span>02</span> Terrain layers</div><label class="range-field"><span><b>Layer count</b><output>{project.layerCount}</output></span><input type="range" min="2" max="24" value={project.layerCount} oninput={(event) => void updateFabrication({ layerCount: Number(event.currentTarget.value) })} /><small><span>2</span><span>24</span></small></label>
-          <Field label="Material" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Material" value={shownLength(project.materialThicknessMm)} min={shownLength(0.5)} max={shownLength(25)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ materialThicknessMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const materialThicknessMm = storedLength(value); if (materialThicknessMm !== project.materialThicknessMm) void updateFabrication({ materialThicknessMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
-          <div class="relief-summary"><Mountain size={20} /><span><strong>{Math.round(displayElevation(geometry.maxElevationM - geometry.minElevationM, project.units)).toLocaleString()} {shownElevationUnit} relief</strong><small>≈ {Math.round(displayElevation((geometry.maxElevationM - geometry.minElevationM) / Math.max(1, project.layerCount - 1), project.units))} {shownElevationUnit} per layer</small></span></div>
-        </Section>
-        <Section class="config-section"><div class="section-kicker"><span>03</span> Map details</div><div class="toggle-stack">
-          <Switch checked={project.showRoads} onCheckedChange={(showRoads) => void updateMapDetails({ showRoads })} aria-label="Roads"><span class="toggle-label"><Minus size={16} />Roads</span></Switch>
-          <Switch checked={project.showTrails} onCheckedChange={(showTrails) => void updateMapDetails({ showTrails })} aria-label="Trails"><span class="toggle-label"><Minus size={16} />Trails</span></Switch>
-          <Switch checked={project.showTransportationLabels} onCheckedChange={(showTransportationLabels) => void updateMapDetails({ showTransportationLabels })} aria-label="Transportation labels"><span class="toggle-label"><Minus size={16} />Transportation labels</span></Switch>
-          <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
-          <Switch checked={project.showAlignmentGuides} onCheckedChange={(showAlignmentGuides) => void updateMapDetails({ showAlignmentGuides })} aria-label="Assembly guides"><span class="toggle-label"><Layers3 size={16} />Assembly guides</span></Switch>
-          <Switch checked={project.showElevationLabels} onCheckedChange={(showElevationLabels) => void updateMapDetails({ showElevationLabels })} aria-label="Elevation labels"><span class="toggle-label"><Mountain size={16} />Elevation labels</span></Switch>
-          <div class="north-arrow-control">
-            <Switch checked={project.showNorthArrow} onCheckedChange={(showNorthArrow) => void updateMapDetails({ showNorthArrow })} aria-label="North arrow"><span class="toggle-label"><Compass size={16} />North arrow</span></Switch>
-            {#if project.showNorthArrow}
-              <div class="north-arrow-settings">
-                <p>Compass design</p>
-                <div class="north-arrow-options" role="radiogroup" aria-label="North arrow design">
-                  {#each NORTH_ARROW_OPTIONS as option}
-                    <button type="button" role="radio" aria-checked={project.northArrowStyle === option.value} data-state={project.northArrowStyle === option.value ? "on" : "off"} tabindex={project.northArrowStyle === option.value ? 0 : -1} onclick={() => void updateFabrication({ northArrowStyle: option.value })} onkeydown={navigateChoice}>
-                      <svg viewBox="-52 -52 104 104" aria-hidden="true">{#each option.markings as marking}<path d={previewMarkingPath(marking)} />{/each}</svg>
-                      <span>{option.label}</span>
-                    </button>
-                  {/each}
-                </div>
-                <label class="range-field north-arrow-size-range"><span><b>Diameter</b><output>{shownTextSize(project.northArrowSizeMm)} {shownLengthUnit}</output></span><input aria-label="North arrow size slider" type="range" min={displayLength(NORTH_ARROW_MIN_SIZE_MM, project.units)} max={displayLength(northArrowMaximumMm, project.units)} step={project.units === "imperial" ? 0.01 : 1} value={displayLength(project.northArrowSizeMm, project.units)} oninput={(event) => void updateFabrication({ northArrowSizeMm: storedLength(event.currentTarget.valueAsNumber) })} /><small><span>{shownTextSize(NORTH_ARROW_MIN_SIZE_MM)} {shownLengthUnit}</span><span>{shownTextSize(northArrowMaximumMm)} {shownLengthUnit}</span></small></label>
-                <Field label="Exact diameter" class="field-row north-arrow-size-field">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Exact north arrow size" value={shownTextSize(project.northArrowSizeMm)} min={displayLength(NORTH_ARROW_MIN_SIZE_MM, project.units)} max={displayLength(northArrowMaximumMm, project.units)} step={project.units === "imperial" ? 0.01 : 1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowSizeMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const sizeMm = storedLength(value); if (sizeMm !== project.northArrowSizeMm) void updateFabrication({ northArrowSizeMm: sizeMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
-                <div class="north-arrow-placement-heading"><p>Placement</p><button type="button" onclick={() => void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { x: 0, y: 0 } } })}>Reset offset</button></div>
-                <div class="north-arrow-anchor-grid" role="radiogroup" aria-label="North arrow anchor">
-                  {#each NORTH_ARROW_ANCHOR_OPTIONS as option}
-                    <button type="button" role="radio" aria-label={option.label} title={option.label} aria-checked={project.northArrowPlacement.anchor === option.value} data-state={project.northArrowPlacement.anchor === option.value ? "on" : "off"} tabindex={project.northArrowPlacement.anchor === option.value ? 0 : -1} onclick={() => void updateFabrication({ northArrowPlacement: { anchor: option.value, offset: { x: 0, y: 0 } } })} onkeydown={navigateChoice}><span></span></button>
-                  {/each}
-                </div>
-                <div class="north-arrow-coordinate-fields">
-                  <Field label="Offset X" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="North arrow offset X" value={Math.round(project.northArrowPlacement.offset.x * 100)} min={-100} max={100} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, x: event.currentTarget.valueAsNumber / 100 } } })} onValueChange={(x) => x !== Math.round(project.northArrowPlacement.offset.x * 100) && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, x: x / 100 } } })} /><em>%</em></span>{/snippet}</Field>
-                  <Field label="Offset Y" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="North arrow offset Y" value={Math.round(project.northArrowPlacement.offset.y * 100)} min={-100} max={100} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, y: event.currentTarget.valueAsNumber / 100 } } })} onValueChange={(y) => y !== Math.round(project.northArrowPlacement.offset.y * 100) && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, y: y / 100 } } })} /><em>%</em></span>{/snippet}</Field>
-                </div>
-              </div>
-            {/if}
+          <div class="section-kicker"><span>03</span> Terrain layers</div>
+          <div class="range-field">
+            <span class="range-field__label"><b>Vertical exaggeration</b></span>
+            <div class="range-field__row">
+              <input type="range" aria-label="Vertical exaggeration slider" min={MIN_VERTICAL_EXAGGERATION} max={MAX_VERTICAL_EXAGGERATION} step="0.5" value={project.verticalExaggeration} oninput={(event) => void updateFabrication({ verticalExaggeration: Number(event.currentTarget.value) })} />
+              <span class="number-input number-input--compact"><NumberField label="Vertical exaggeration" value={project.verticalExaggeration} min={MIN_VERTICAL_EXAGGERATION} max={MAX_VERTICAL_EXAGGERATION} step={0.5} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ verticalExaggeration: event.currentTarget.valueAsNumber })} onValueChange={(value) => value !== project.verticalExaggeration && void updateFabrication({ verticalExaggeration: value })} /><em>×</em></span>
+            </div>
+            <small><span>{MIN_VERTICAL_EXAGGERATION}×</span><span>{MAX_VERTICAL_EXAGGERATION}×</span></small>
           </div>
-          <Switch checked={project.showScaleBar} onCheckedChange={(showScaleBar) => void updateMapDetails({ showScaleBar })} aria-label="Scale bar"><span class="toggle-label"><Minus size={16} />Scale bar</span></Switch>
-        </div></Section>
+          <div class="field-stack">
+            <Field label="Material thickness" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Material" value={shownLength(project.materialThicknessMm)} min={shownLength(0.5)} max={shownLength(25)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ materialThicknessMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const materialThicknessMm = storedLength(value); if (materialThicknessMm !== project.materialThicknessMm) void updateFabrication({ materialThicknessMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+          </div>
+          <div class="relief-summary">
+            <Mountain size={20} />
+            <span>
+              <strong>{Math.round(displayElevation(geometry.maxElevationM - geometry.minElevationM, project.units)).toLocaleString()} {shownElevationUnit} relief → {stackPlan.layerCount} layers, {shownLength(stackPlan.stackHeightMm)} {shownLengthUnit} tall</strong>
+              <small>{stackPlan.verticalExaggeration.toFixed(1)}× applied{stackPlan.horizontalScale > 0 ? ` · scale 1:${Math.round(1 / stackPlan.horizontalScale).toLocaleString()}` : ""} · ≈ {Math.round(displayElevation(stackPlan.metersPerLayer, project.units)).toLocaleString()} {shownElevationUnit} per layer</small>
+            </span>
+          </div>
+        </Section>
+
+        <Section class="config-section">
+          <div class="section-kicker"><span>04</span> Map details</div>
+
+          <div class="detail-group">
+            <p class="subgroup-heading">Terrain features</p>
+            <div class="toggle-stack">
+              <Switch checked={project.showRoads} onCheckedChange={(showRoads) => void updateMapDetails({ showRoads })} aria-label="Roads"><span class="toggle-label"><Minus size={16} />Roads</span></Switch>
+              <Switch checked={project.showTrails} onCheckedChange={(showTrails) => void updateMapDetails({ showTrails })} aria-label="Trails"><span class="toggle-label"><Minus size={16} />Trails</span></Switch>
+              <Switch checked={project.showTransportationLabels} onCheckedChange={(showTransportationLabels) => void updateMapDetails({ showTransportationLabels })} aria-label="Transportation labels"><span class="toggle-label"><Minus size={16} />Transportation labels</span></Switch>
+              <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
+            </div>
+          </div>
+
+          <div class="detail-group">
+            <p class="subgroup-heading">Annotations</p>
+            <div class="toggle-stack">
+              <div class="toggle-control">
+                <Switch checked={project.showElevationLabels} onCheckedChange={(showElevationLabels) => void updateMapDetails({ showElevationLabels })} aria-label="Elevation labels"><span class="toggle-label"><Mountain size={16} />Elevation labels</span></Switch>
+                {#if project.showElevationLabels}
+                  <div class="toggle-settings">
+                    <p class="subgroup-heading">Preferred position</p>
+                    <div class="field-stack">
+                      <Field label="Label X" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Label X" value={Math.round(project.elevationLabelPosition.x * 100)} min={-90} max={90} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, x: event.currentTarget.valueAsNumber / 100 } })} onValueChange={(x) => x !== Math.round(project.elevationLabelPosition.x * 100) && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, x: x / 100 } })} /><em>%</em></span>{/snippet}</Field>
+                      <Field label="Label Y" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Label Y" value={Math.round(project.elevationLabelPosition.y * 100)} min={-90} max={90} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, y: event.currentTarget.valueAsNumber / 100 } })} onValueChange={(y) => y !== Math.round(project.elevationLabelPosition.y * 100) && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, y: y / 100 } })} /><em>%</em></span>{/snippet}</Field>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              <div class="toggle-control">
+                <Switch checked={project.showNorthArrow} onCheckedChange={(showNorthArrow) => void updateMapDetails({ showNorthArrow })} aria-label="North arrow"><span class="toggle-label"><Compass size={16} />North arrow</span></Switch>
+                {#if project.showNorthArrow}
+                  <div class="toggle-settings">
+                    <p class="subgroup-heading">Compass design</p>
+                    <div class="swatch-options" role="radiogroup" aria-label="North arrow design">
+                      {#each NORTH_ARROW_OPTIONS as option}
+                        <button type="button" role="radio" aria-checked={project.northArrowStyle === option.value} data-state={project.northArrowStyle === option.value ? "on" : "off"} tabindex={project.northArrowStyle === option.value ? 0 : -1} onclick={() => void updateFabrication({ northArrowStyle: option.value })} onkeydown={navigateChoice}>
+                          <svg viewBox="-52 -52 104 104" aria-hidden="true">{#each option.markings as marking}<path d={previewMarkingPath(marking)} />{/each}</svg>
+                          <span>{option.label}</span>
+                        </button>
+                      {/each}
+                    </div>
+                    <div class="range-field">
+                      <span class="range-field__label"><b>Diameter</b></span>
+                      <div class="range-field__row">
+                        <input aria-label="North arrow size slider" type="range" min={displayLength(NORTH_ARROW_MIN_SIZE_MM, project.units)} max={displayLength(northArrowMaximumMm, project.units)} step={project.units === "imperial" ? 0.01 : 1} value={displayLength(project.northArrowSizeMm, project.units)} oninput={(event) => void updateFabrication({ northArrowSizeMm: storedLength(event.currentTarget.valueAsNumber) })} />
+                        <span class="number-input number-input--compact"><NumberField label="North arrow size" value={shownTextSize(project.northArrowSizeMm)} min={displayLength(NORTH_ARROW_MIN_SIZE_MM, project.units)} max={displayLength(northArrowMaximumMm, project.units)} step={project.units === "imperial" ? 0.01 : 1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowSizeMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const sizeMm = storedLength(value); if (sizeMm !== project.northArrowSizeMm) void updateFabrication({ northArrowSizeMm: sizeMm }); }} /><em>{shownLengthUnit}</em></span>
+                      </div>
+                      <small><span>{shownTextSize(NORTH_ARROW_MIN_SIZE_MM)} {shownLengthUnit}</span><span>{shownTextSize(northArrowMaximumMm)} {shownLengthUnit}</span></small>
+                    </div>
+                    <div class="subgroup-heading subgroup-heading--action">
+                      <p>Placement</p>
+                      <button type="button" onclick={() => void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { x: 0, y: 0 } } })}>Reset offset</button>
+                    </div>
+                    <div class="north-arrow-anchor-grid" role="radiogroup" aria-label="North arrow anchor">
+                      {#each NORTH_ARROW_ANCHOR_OPTIONS as option}
+                        <button type="button" role="radio" aria-label={option.label} title={option.label} aria-checked={project.northArrowPlacement.anchor === option.value} data-state={project.northArrowPlacement.anchor === option.value ? "on" : "off"} tabindex={project.northArrowPlacement.anchor === option.value ? 0 : -1} onclick={() => void updateFabrication({ northArrowPlacement: { anchor: option.value, offset: { x: 0, y: 0 } } })} onkeydown={navigateChoice}><span></span></button>
+                      {/each}
+                    </div>
+                    <div class="field-stack">
+                      <Field label="Offset X" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="North arrow offset X" value={Math.round(project.northArrowPlacement.offset.x * 100)} min={-100} max={100} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, x: event.currentTarget.valueAsNumber / 100 } } })} onValueChange={(x) => x !== Math.round(project.northArrowPlacement.offset.x * 100) && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, x: x / 100 } } })} /><em>%</em></span>{/snippet}</Field>
+                      <Field label="Offset Y" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="North arrow offset Y" value={Math.round(project.northArrowPlacement.offset.y * 100)} min={-100} max={100} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, y: event.currentTarget.valueAsNumber / 100 } } })} onValueChange={(y) => y !== Math.round(project.northArrowPlacement.offset.y * 100) && void updateFabrication({ northArrowPlacement: { ...project.northArrowPlacement, offset: { ...project.northArrowPlacement.offset, y: y / 100 } } })} /><em>%</em></span>{/snippet}</Field>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              <Switch checked={project.showScaleBar} onCheckedChange={(showScaleBar) => void updateMapDetails({ showScaleBar })} aria-label="Scale bar"><span class="toggle-label"><Minus size={16} />Scale bar</span></Switch>
+            </div>
+          </div>
+
+          <div class="detail-group">
+            <p class="subgroup-heading">Assembly</p>
+            <div class="toggle-stack">
+              <Switch checked={project.showAlignmentGuides} onCheckedChange={(showAlignmentGuides) => void updateMapDetails({ showAlignmentGuides })} aria-label="Assembly guides"><span class="toggle-label"><Layers3 size={16} />Assembly guides</span></Switch>
+            </div>
+          </div>
+
+          <div class="detail-group">
+            <p class="subgroup-heading">Text engraving</p>
+            <div class="swatch-options" role="radiogroup" aria-label="Engraving font">
+              {#each FONT_OPTIONS as option}
+                <button type="button" role="radio" aria-checked={project.textStyle.font === option.value} data-state={project.textStyle.font === option.value ? "on" : "off"} tabindex={project.textStyle.font === option.value ? 0 : -1} onclick={() => void updateFabrication({ textStyle: { ...project.textStyle, font: option.value } })} onkeydown={navigateChoice}>
+                  <svg viewBox="0 -0.4 17 4.2" aria-hidden="true"><path stroke-linecap={option.value === "rounded" ? "round" : "butt"} stroke-linejoin={option.value === "rounded" ? "round" : "miter"} d={labelPathData("123m", { x: 0, y: 0 }, 0, 0, 0, { font: option.value, sizeMm: 3.1 })} /></svg>
+                  <span>{option.label}</span>
+                </button>
+              {/each}
+            </div>
+            <div class="range-field">
+              <span class="range-field__label"><b>Text size</b></span>
+              <div class="range-field__row">
+                <input aria-label="Text size slider" type="range" min={displayLength(2, project.units)} max={displayLength(10, project.units)} step={project.units === "imperial" ? 0.005 : 0.1} value={displayLength(project.textStyle.sizeMm, project.units)} oninput={(event) => void updateFabrication({ textStyle: { ...project.textStyle, sizeMm: storedLength(event.currentTarget.valueAsNumber) } })} />
+                <span class="number-input number-input--compact"><NumberField label="Text size" value={shownTextSize(project.textStyle.sizeMm)} min={displayLength(2, project.units)} max={displayLength(10, project.units)} step={project.units === "imperial" ? 0.005 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ textStyle: { ...project.textStyle, sizeMm: storedLength(event.currentTarget.valueAsNumber) } })} onValueChange={(value) => { const sizeMm = storedLength(value); if (sizeMm !== project.textStyle.sizeMm) void updateFabrication({ textStyle: { ...project.textStyle, sizeMm } }); }} /><em>{shownLengthUnit}</em></span>
+              </div>
+              <small><span>{shownTextSize(2)} {shownLengthUnit}</span><span>{shownTextSize(10)} {shownLengthUnit}</span></small>
+            </div>
+          </div>
+        </Section>
+
         <Section class="config-section advanced-section">
-          <Button variant="text" class="advanced-trigger" aria-expanded={advancedOpen} onclick={() => advancedOpen = !advancedOpen}>Fabrication settings</Button>
+          <button type="button" class="section-kicker section-kicker--trigger" aria-expanded={advancedOpen} onclick={() => advancedOpen = !advancedOpen}>
+            <span>05</span> Fabrication settings
+            <ChevronDown size={14} class={advancedOpen ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
           {#if advancedOpen}
             <div class="advanced-fields">
-              <Switch checked={project.optimizeMaterialUse} onCheckedChange={(optimizeMaterialUse) => void updateFabrication({ optimizeMaterialUse })} aria-label="Material-saving nests"><span class="toggle-label"><Layers3 size={16} />Material-saving nests</span></Switch>
-              {#if project.optimizeMaterialUse}<Field label="Glue margin" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Glue margin" value={shownLength(project.glueMarginMm)} min={shownLength(2)} max={shownLength(25)} step={project.units === "imperial" ? 0.01 : 0.5} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ glueMarginMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const glueMarginMm = storedLength(value); if (glueMarginMm !== project.glueMarginMm) void updateFabrication({ glueMarginMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>{/if}
-              <Field label="Laser kerf" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Laser kerf" value={shownLength(project.laserKerfMm)} min={0} max={shownLength(1)} step={project.units === "imperial" ? 0.001 : 0.01} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ laserKerfMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const laserKerfMm = storedLength(value); if (laserKerfMm !== project.laserKerfMm) void updateFabrication({ laserKerfMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
-              <Field label="Minimum feature" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Minimum feature" value={shownLength(project.minimumFeatureMm)} min={shownLength(0.2)} max={shownLength(5)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ minimumFeatureMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const minimumFeatureMm = storedLength(value); if (minimumFeatureMm !== project.minimumFeatureMm) void updateFabrication({ minimumFeatureMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
-              <Field label="Contour smoothing" class="field-row">{#snippet children({ id })}<NumberField {id} label="Contour smoothing" value={project.smoothing} min={0} max={1} step={1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ smoothing: event.currentTarget.valueAsNumber })} onValueChange={(smoothing) => smoothing !== project.smoothing && void updateFabrication({ smoothing })} />{/snippet}</Field>
-              <div class="advanced-subgroup text-style-group">
-                <p>Text engraving</p>
-                <div class="font-options" role="radiogroup" aria-label="Engraving font">
-                  {#each FONT_OPTIONS as option}
-                    <button type="button" role="radio" aria-checked={project.textStyle.font === option.value} data-state={project.textStyle.font === option.value ? "on" : "off"} tabindex={project.textStyle.font === option.value ? 0 : -1} onclick={() => void updateFabrication({ textStyle: { ...project.textStyle, font: option.value } })} onkeydown={navigateChoice}>
-                      <svg viewBox="0 -0.4 17 4.2" aria-hidden="true"><path stroke-linecap={option.value === "rounded" ? "round" : "butt"} stroke-linejoin={option.value === "rounded" ? "round" : "miter"} d={labelPathData("123m", { x: 0, y: 0 }, 0, 0, 0, { font: option.value, sizeMm: 3.1 })} /></svg>
-                      <span>{option.label}</span>
-                    </button>
-                  {/each}
-                </div>
-                <label class="range-field text-size-range"><span><b>Text size</b><output>{shownTextSize(project.textStyle.sizeMm)} {shownLengthUnit}</output></span><input aria-label="Text size slider" type="range" min={displayLength(2, project.units)} max={displayLength(10, project.units)} step={project.units === "imperial" ? 0.005 : 0.1} value={displayLength(project.textStyle.sizeMm, project.units)} oninput={(event) => void updateFabrication({ textStyle: { ...project.textStyle, sizeMm: storedLength(event.currentTarget.valueAsNumber) } })} /><small><span>{shownTextSize(2)} {shownLengthUnit}</span><span>{shownTextSize(10)} {shownLengthUnit}</span></small></label>
-                <Field label="Exact size" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Exact text size" value={shownTextSize(project.textStyle.sizeMm)} min={displayLength(2, project.units)} max={displayLength(10, project.units)} step={project.units === "imperial" ? 0.005 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ textStyle: { ...project.textStyle, sizeMm: storedLength(event.currentTarget.valueAsNumber) } })} onValueChange={(value) => { const sizeMm = storedLength(value); if (sizeMm !== project.textStyle.sizeMm) void updateFabrication({ textStyle: { ...project.textStyle, sizeMm } }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+              <div class="toggle-stack">
+                <Switch checked={project.optimizeMaterialUse} onCheckedChange={(optimizeMaterialUse) => void updateFabrication({ optimizeMaterialUse })} aria-label="Material-saving nests"><span class="toggle-label"><Layers3 size={16} />Material-saving nests</span></Switch>
+                <Switch checked={project.smoothing === 1} onCheckedChange={(smooth) => void updateFabrication({ smoothing: smooth ? 1 : 0 })} aria-label="Smooth contours"><span class="toggle-label"><Waves size={16} />Smooth contours</span></Switch>
               </div>
-              <div class="advanced-subgroup">
-                <p>Elevation label position</p>
-                <div class="advanced-coordinate-fields">
-                  <Field label="Label X" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Label X" value={Math.round(project.elevationLabelPosition.x * 100)} min={-90} max={90} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, x: event.currentTarget.valueAsNumber / 100 } })} onValueChange={(x) => x !== Math.round(project.elevationLabelPosition.x * 100) && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, x: x / 100 } })} /><em>%</em></span>{/snippet}</Field>
-                  <Field label="Label Y" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Label Y" value={Math.round(project.elevationLabelPosition.y * 100)} min={-90} max={90} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, y: event.currentTarget.valueAsNumber / 100 } })} onValueChange={(y) => y !== Math.round(project.elevationLabelPosition.y * 100) && void updateFabrication({ elevationLabelPosition: { ...project.elevationLabelPosition, y: y / 100 } })} /><em>%</em></span>{/snippet}</Field>
-                </div>
+              <div class="field-stack">
+                {#if project.optimizeMaterialUse}<Field label="Glue margin" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Glue margin" value={shownLength(project.glueMarginMm)} min={shownLength(2)} max={shownLength(25)} step={project.units === "imperial" ? 0.01 : 0.5} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ glueMarginMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const glueMarginMm = storedLength(value); if (glueMarginMm !== project.glueMarginMm) void updateFabrication({ glueMarginMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>{/if}
+                <Field label="Laser kerf" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Laser kerf" value={shownLength(project.laserKerfMm)} min={0} max={shownLength(1)} step={project.units === "imperial" ? 0.001 : 0.01} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ laserKerfMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const laserKerfMm = storedLength(value); if (laserKerfMm !== project.laserKerfMm) void updateFabrication({ laserKerfMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+                <Field label="Minimum feature" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Minimum feature" value={shownLength(project.minimumFeatureMm)} min={shownLength(0.2)} max={shownLength(5)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ minimumFeatureMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const minimumFeatureMm = storedLength(value); if (minimumFeatureMm !== project.minimumFeatureMm) void updateFabrication({ minimumFeatureMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
               </div>
             </div>
           {/if}
         </Section>
       </div>
-      <div class="generate-dock"><div class={`status-line status-${generationState}`} class:details-updating={detailsUpdating} role="status" aria-live="polite"><span></span>{!detailsUpdating && !exportReady && geometry.sourceKind === "real" ? "Settings changed · regenerate before export" : status}</div><Button variant="primary" class="generate-button" onclick={() => generationState === "loading" ? cancelGeneration() : void generate()}>{#if generationState === "loading"}<X size={18} /> Cancel generation{:else}<Sparkles size={18} /> {geometry.sourceKind === "real" ? "Regenerate terrain" : "Generate terrain"}{/if}</Button></div>
+      <div class="generate-dock">
+        <div class={`status-line status-${generationState}`} role="status" aria-live="polite"><span></span>{!detailsUpdating && !exportReady && geometry.sourceKind === "real" ? "Settings changed · regenerate before export" : status}</div>
+        <Button variant="primary" class="generate-button" onclick={() => generationState === "loading" ? cancelGeneration() : void generate()}>{#if generationState === "loading"}<X size={18} /> Cancel generation{:else}<Sparkles size={18} /> {geometry.sourceKind === "real" ? "Regenerate terrain" : "Generate terrain"}{/if}</Button>
+      </div>
     </Sidebar>
     {/snippet}
 

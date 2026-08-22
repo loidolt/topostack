@@ -45,6 +45,17 @@ describe("project import validation", () => {
       showTransportationLabels: false,
     });
   });
+  it("loads a project saved with an explicit layer count at the derived default", () => {
+    // Layer count used to be a stored setting; it is now derived from map
+    // scale, so an old save keeps everything else and adopts the default
+    // exaggeration rather than failing to load.
+    const { verticalExaggeration: _derivedNow, ...saved } = DEFAULT_PROJECT;
+    const legacyProject = { ...saved, layerCount: 18 };
+    const parsed = parseProject(legacyProject);
+    expect(parsed.verticalExaggeration).toBe(DEFAULT_PROJECT.verticalExaggeration);
+    expect(parsed).not.toHaveProperty("layerCount");
+    expect(parsed.widthMm).toBe(DEFAULT_PROJECT.widthMm);
+  });
   it("validates and restores transportation controls", () => {
     expect(parseProject({ ...DEFAULT_PROJECT, showRoads: false, showTrails: true, showTransportationLabels: true })).toMatchObject({ showRoads: false, showTrails: true, showTransportationLabels: true });
     expect(() => parseProject({ ...DEFAULT_PROJECT, showTrails: "yes" })).toThrow(/showTrails/i);

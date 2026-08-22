@@ -58,22 +58,23 @@ describe("TopoStack Svelte shell", () => {
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Fabrication settings"))!.click();
     await tick();
     const fields = target.querySelector<HTMLElement>(".advanced-fields")!;
-    expect(fields.firstElementChild?.getAttribute("role")).toBe("switch");
-    expect(fields.querySelectorAll(":scope > .field-row")).toHaveLength(4);
-    expect(fields.querySelectorAll(".advanced-coordinate-fields > .field-row")).toHaveLength(2);
-    expect(fields.querySelectorAll('.font-options button[role="radio"]')).toHaveLength(3);
+    expect(fields.querySelectorAll('.toggle-stack button[role="switch"]')).toHaveLength(2);
+    expect(fields.querySelectorAll(".field-stack > .field-row")).toHaveLength(3);
+    // Text engraving and the elevation label position now sit beside what they
+    // affect in Map details rather than in the fabrication panel.
+    expect(fields.querySelector(".swatch-options")).toBeNull();
+    expect(target.querySelectorAll('.swatch-options[aria-label="Engraving font"] button[role="radio"]')).toHaveLength(3);
+    expect(target.querySelectorAll('input[aria-label="Label X"]')).toHaveLength(1);
   });
 
   it("changes engraving font and exact physical text size without refetching terrain", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Fabrication settings"))!.click();
-    await tick();
-    const stencil = [...target.querySelectorAll<HTMLButtonElement>('.font-options button[role="radio"]')].find((button) => button.textContent?.includes("Stencil"))!;
+    const stencil = [...target.querySelectorAll<HTMLButtonElement>('.swatch-options[aria-label="Engraving font"] button[role="radio"]')].find((button) => button.textContent?.includes("Stencil"))!;
     stencil.click();
     await vi.waitFor(() => expect(stencil.getAttribute("aria-checked")).toBe("true"));
-    const size = target.querySelector<HTMLInputElement>('input[aria-label="Exact text size"]')!;
+    const size = target.querySelector<HTMLInputElement>('input[aria-label="Text size"]')!;
     size.value = "5";
     size.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.waitFor(() => expect(target.querySelector<HTMLInputElement>('input[aria-label="Text size slider"]')?.value).toBe("5"));
@@ -84,12 +85,12 @@ describe("TopoStack Svelte shell", () => {
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    const designs = target.querySelectorAll<HTMLButtonElement>('.north-arrow-options button[role="radio"]');
+    const designs = target.querySelectorAll<HTMLButtonElement>('.swatch-options[aria-label="North arrow design"] button[role="radio"]');
     expect(designs).toHaveLength(3);
     const mariner = [...designs].find((button) => button.textContent?.includes("Mariner"))!;
     mariner.click();
     await vi.waitFor(() => expect(mariner.getAttribute("aria-checked")).toBe("true"));
-    const size = target.querySelector<HTMLInputElement>('input[aria-label="Exact north arrow size"]')!;
+    const size = target.querySelector<HTMLInputElement>('input[aria-label="North arrow size"]')!;
     size.value = "30";
     size.dispatchEvent(new Event("input", { bubbles: true }));
     const topLeft = target.querySelector<HTMLButtonElement>('.north-arrow-anchor-grid button[aria-label="Top left"]')!;

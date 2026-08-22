@@ -136,6 +136,17 @@ body {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+
+  /* One scale for the whole panel. These replace six ad-hoc pixel sizes, with
+     8px alone previously covering eight unrelated roles. */
+  --panel-font-title: 20px;
+  --panel-font-body: 13px;
+  --panel-font-label: 11px;
+  --panel-font-caption: 10px;
+  --panel-font-micro: 8px;
+  --panel-space-1: 6px;
+  --panel-space-2: 10px;
+  --panel-space-3: 14px;
 }
 
 .panel-scroll {
@@ -148,7 +159,7 @@ body {
 }
 
 .config-section h1 {
-  font-size: 20px;
+  font-size: var(--panel-font-title);
   font-weight: 500;
   margin: 0 0 17px;
 }
@@ -163,7 +174,79 @@ body {
 
 .section-kicker span {
   color: var(--loidolt-accent);
-  font-size: 8px;
+  font-size: var(--panel-font-micro);
+}
+
+/* The section header doubles as the disclosure, so the panel is not labelled
+   twice with its own name. */
+.section-kicker--trigger {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.section-kicker--trigger:hover {
+  color: var(--loidolt-text);
+}
+
+.section-kicker--trigger:focus-visible {
+  outline: 2px solid var(--loidolt-accent);
+  outline-offset: 3px;
+}
+
+.kicker-chevron {
+  margin-left: auto;
+  transition: transform 120ms ease;
+}
+
+.kicker-chevron--open {
+  transform: rotate(180deg);
+}
+
+/* Shared sub-heading: previously three near-identical rules for the advanced
+   subgroups, the north-arrow panel, and the placement row. */
+.subgroup-heading,
+.subgroup-heading > p {
+  margin: 0;
+  color: var(--loidolt-text-muted);
+  font: var(--panel-font-micro) var(--loidolt-font-utility);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.subgroup-heading--action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.subgroup-heading--action button {
+  border: 0;
+  background: transparent;
+  color: var(--loidolt-accent);
+  padding: 2px;
+  cursor: pointer;
+  font: var(--panel-font-micro) var(--loidolt-font-utility);
+  text-transform: uppercase;
+}
+
+.subgroup-heading--action button:focus-visible {
+  outline: 2px solid var(--loidolt-accent);
+  outline-offset: 2px;
+}
+
+.detail-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-space-1);
+}
+
+.detail-group + .detail-group {
+  margin-top: var(--panel-space-3);
 }
 
 .location-card {
@@ -246,32 +329,66 @@ body {
   flex: 1;
 }
 
-.field-grid {
+.unit-switch {
+  margin-bottom: var(--loidolt-space-2);
+}
+
+/* One column, so each field owns the panel's full content width. Two fields
+   side by side left the input about three characters wide. */
+.field-stack {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 12px;
 }
 
+/* The box lives on the wrapper rather than on .ldt-number-field, so the unit
+   suffix sits inside the control instead of orphaned past its underline. */
 .number-input {
   display: flex;
   align-items: center;
+  border: var(--loidolt-border-width) solid var(--loidolt-border-control);
+  background: var(--loidolt-surface-input);
+  padding-inline: var(--panel-space-1);
+}
+
+.number-input:focus-within {
+  border-color: var(--loidolt-accent);
 }
 
 .number-input > .ldt-number-field {
   flex: 1;
   min-width: 0;
+  border-bottom: 0;
 }
 
 .config-panel .ldt-number-field {
   grid-template-columns: 1.5rem minmax(0, 1fr) 1.5rem;
 }
 
+/* Paired with a slider, so the steppers are redundant and the whole width goes
+   to the value: with them the field was too narrow to show a number at all. */
+.number-input--compact {
+  flex: 0 0 auto;
+  width: 78px;
+}
+
+.number-input--compact > .ldt-number-field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.number-input--compact .ldt-number-field__button {
+  display: none;
+}
+
+.number-input--compact .ldt-number-field__input {
+  text-align: right;
+}
+
 .number-input em {
   font-style: normal;
   padding: 0 2px;
   color: var(--loidolt-text-muted);
-  font-size: 9px;
+  font-size: var(--panel-font-micro);
   text-transform: none;
 }
 
@@ -285,17 +402,22 @@ body {
 .range-field > span {
   display: flex;
   justify-content: space-between;
-  font: 10px var(--loidolt-font-utility);
+  font: var(--panel-font-caption) var(--loidolt-font-utility);
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
 
-.range-field output {
-  min-width: 28px;
-  background: var(--loidolt-surface-inverse);
-  color: var(--loidolt-text-inverse);
-  padding: 3px 5px;
-  text-align: center;
+/* Label on its own line, then slider and an editable number share the row.
+   This replaces the read-only output chip plus a separate "exact" field. */
+.range-field__row {
+  display: flex;
+  align-items: center;
+  gap: var(--panel-space-2);
+}
+
+.range-field__row input[type="range"] {
+  flex: 1;
+  min-width: 0;
 }
 
 .range-field input,
@@ -310,7 +432,12 @@ body {
   display: flex;
   justify-content: space-between;
   color: var(--loidolt-text-muted);
-  font: 8px var(--loidolt-font-utility);
+  font: var(--panel-font-micro) var(--loidolt-font-utility);
+}
+
+/* The ticks label the slider, so they stop where the slider stops. */
+.range-field__row ~ small {
+  padding-right: calc(78px + var(--panel-space-2));
 }
 
 .relief-summary {
@@ -329,12 +456,12 @@ body {
 }
 
 .relief-summary strong {
-  font-size: 11px;
+  font-size: var(--panel-font-label);
   font-weight: 500;
 }
 
 .relief-summary small {
-  font: 8px var(--loidolt-font-utility);
+  font: var(--panel-font-micro) var(--loidolt-font-utility);
   color: var(--loidolt-text-muted);
 }
 
@@ -343,12 +470,21 @@ body {
   flex-direction: column;
 }
 
-.toggle-stack .ldt-switch,
-.advanced-fields > .ldt-switch {
+.toggle-stack .ldt-switch {
   width: 100%;
   min-height: var(--loidolt-size-control);
   flex-direction: row-reverse;
   justify-content: space-between;
+  /* Switch renders a <button>, which centers its text by default. Invisible
+     until a label wraps, and "Transportation labels" sits at the wrap point. */
+  text-align: left;
+}
+
+/* Switch wraps its children in an unclassed span; let it take the free space so
+   the track stays pinned right and a long label wraps instead of shoving it. */
+.toggle-stack .ldt-switch > span:last-child {
+  flex: 1;
+  min-width: 0;
 }
 
 .toggle-label {
@@ -362,36 +498,34 @@ body {
 }
 
 .toggle-label svg {
+  flex: none;
   color: var(--loidolt-text-muted);
 }
 
-.north-arrow-control {
-  border-bottom: var(--loidolt-border-width) solid var(--loidolt-border-soft);
-}
-
-.north-arrow-settings {
+/* A toggle that reveals its own settings when switched on. */
+.toggle-control {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 8px 0 14px;
 }
 
-.north-arrow-settings > p,
-.north-arrow-placement-heading p {
-  margin: 0;
-  color: var(--loidolt-text-muted);
-  font: 8px var(--loidolt-font-utility);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+.toggle-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-space-2);
+  margin: 2px 0 var(--panel-space-2);
+  padding: var(--panel-space-1) 0 var(--panel-space-2) var(--panel-space-2);
+  border-left: 2px solid var(--loidolt-border-soft);
 }
 
-.north-arrow-options {
+/* Shared picker chrome for the compass designs and the engraving fonts; the two
+   blocks were near-identical copies. */
+.swatch-options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
-.north-arrow-options button {
+.swatch-options button {
   min-width: 0;
   padding: 6px 3px;
   border: 1px solid var(--loidolt-border);
@@ -400,66 +534,46 @@ body {
   cursor: pointer;
 }
 
-.north-arrow-options button[data-state="on"] {
+.swatch-options button[data-state="on"] {
   border-color: var(--loidolt-accent);
   background: var(--loidolt-surface-alt);
   color: var(--loidolt-text);
 }
 
-.north-arrow-options button:focus-visible,
-.north-arrow-anchor-grid button:focus-visible,
-.north-arrow-placement-heading button:focus-visible {
+.swatch-options button:focus-visible,
+.north-arrow-anchor-grid button:focus-visible {
   outline: 2px solid var(--loidolt-accent);
   outline-offset: 2px;
 }
 
-.north-arrow-options svg {
+.swatch-options svg {
   display: block;
   width: 100%;
-  height: 45px;
   fill: none;
   stroke: currentColor;
+}
+
+.swatch-options[aria-label="North arrow design"] svg {
+  height: 45px;
   stroke-width: 1.15;
 }
 
-.north-arrow-options button > span {
+.swatch-options[aria-label="Engraving font"] svg {
+  height: 24px;
+  stroke-width: 0.18;
+}
+
+.swatch-options button > span {
   display: block;
   margin-top: 3px;
-  font: 8px var(--loidolt-font-utility);
+  font: var(--panel-font-micro) var(--loidolt-font-utility);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.north-arrow-size-range {
-  margin: 2px 0 0;
-}
-
-.north-arrow-size-field .number-input,
-.north-arrow-coordinate-fields .number-input {
-  background: var(--loidolt-surface-alt);
-  padding-inline: var(--loidolt-space-2);
-}
-
-.north-arrow-placement-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 3px;
-}
-
-.north-arrow-placement-heading button {
-  border: 0;
-  background: transparent;
-  color: var(--loidolt-accent);
-  padding: 2px;
-  cursor: pointer;
-  font: 8px var(--loidolt-font-utility);
-  text-transform: uppercase;
-}
-
 .north-arrow-anchor-grid {
   display: grid;
-  grid-template-columns: repeat(3, 28px);
+  grid-template-columns: repeat(3, 32px);
   gap: 4px;
   align-self: center;
   padding: 6px;
@@ -467,11 +581,13 @@ body {
   background: var(--loidolt-surface-alt);
 }
 
+/* 32x28 keeps the nine anchors above the kit's control minimum; they were the
+   smallest pointer targets in the app at 28x24. */
 .north-arrow-anchor-grid button {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 24px;
+  width: 32px;
+  height: 28px;
   padding: 0;
   border: 1px solid transparent;
   background: transparent;
@@ -494,19 +610,8 @@ body {
   background: var(--loidolt-accent);
 }
 
-.north-arrow-coordinate-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
 .advanced-section {
   border-bottom: 0;
-}
-
-.advanced-trigger {
-  width: 100%;
-  justify-content: flex-start;
 }
 
 .advanced-fields {
@@ -516,90 +621,8 @@ body {
   margin-top: 12px;
 }
 
-.text-style-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.font-options {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.font-options button {
-  min-width: 0;
-  padding: 7px 4px 6px;
-  border: 1px solid var(--loidolt-border);
-  background: var(--loidolt-surface);
-  color: var(--loidolt-text-muted);
-  cursor: pointer;
-}
-
-.font-options button[data-state="on"] {
-  border-color: var(--loidolt-accent);
-  background: var(--loidolt-surface-alt);
-  color: var(--loidolt-text);
-}
-
-.font-options button:focus-visible {
-  outline: 2px solid var(--loidolt-accent);
-  outline-offset: 2px;
-}
-
-.font-options svg {
-  display: block;
-  width: 100%;
-  height: 24px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 0.18;
-}
-
-.font-options span {
-  display: block;
-  margin-top: 3px;
-  font: 8px var(--loidolt-font-utility);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.text-size-range {
-  margin: 0;
-}
-
-.advanced-fields > .ldt-switch {
-  min-height: 39px;
-  padding: 0 0 8px;
-  border-bottom: var(--loidolt-border-width) solid var(--loidolt-border-soft);
-}
-
 .advanced-fields > .field-row {
   min-width: 0;
-}
-
-.advanced-fields > .field-row .number-input {
-  background: var(--loidolt-surface-alt);
-  padding-inline: var(--loidolt-space-2);
-}
-
-.advanced-subgroup {
-  padding-top: 2px;
-}
-
-.advanced-subgroup > p {
-  margin: 0 0 8px;
-  color: var(--loidolt-text-muted);
-  font: 8px var(--loidolt-font-utility);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.advanced-coordinate-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
 }
 
 .generate-dock {
@@ -1136,10 +1159,6 @@ body {
     transform: scale(1.08);
     opacity: 1;
   }
-}
-
-.unit-switch {
-  margin-bottom: var(--loidolt-space-2);
 }
 
 @media (max-width: 900px) {

@@ -10,7 +10,7 @@ describe("Atomm export policy", () => {
   it("blocks synthetic and stale results", () => {
     expect(exportBlockReason(geometry("synthetic"), DEFAULT_PROJECT)).toMatch(/real terrain/i);
     expect(exportBlockReason(geometry("preview"), DEFAULT_PROJECT)).toMatch(/real terrain/i);
-    expect(exportBlockReason(geometry(), { ...DEFAULT_PROJECT, layerCount: 9 })).toMatch(/settings changed/i);
+    expect(exportBlockReason(geometry(), { ...DEFAULT_PROJECT, verticalExaggeration: 9 })).toMatch(/settings changed/i);
   });
 
   it("blocks incomplete requested vector data", () => {
@@ -29,6 +29,6 @@ describe("Atomm export policy", () => {
     expect(Array.isArray(studio)).toBe(false);
     expect("filename" in studio && studio.filename.endsWith("-master.svg")).toBe(true);
     expect(Array.isArray(download)).toBe(true);
-    expect(Array.isArray(download) && download.length).toBe((DEFAULT_PROJECT.layerCount - result.fabricationNests.length) * 2 + 5);
+    expect(Array.isArray(download) && download.length).toBe((result.layers.length - result.fabricationNests.length) * 2 + 5);
   });
 });

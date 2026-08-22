@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayLength, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, millimetersFromDisplay, MM_PER_INCH, projectFingerprint, validateProject, type ProjectConfigV1, type SourceBundleV1 } from "./index.js";
+import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayLength, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, validateProject, type ProjectConfigV1, type SourceBundleV1 } from "./index.js";
 import { placeElevationLabel, placeLinearLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
@@ -39,6 +39,37 @@ function gridSource(project: ProjectConfigV1, size: number, elevationAt: (nx: nu
   return { ...createSyntheticSource(project, 2), sourceKind: "real", elevation: { width: size, height: size, values, min, max } };
 }
 
+const EARTH_RADIUS_M = 6_371_008.8;
+
+/**
+ * Layer count is derived from map scale, so a test that needs an exact count
+ * states it by widening the mapped window until the relief resolves into that
+ * many sheets of material. Returns the project and source sharing those bounds.
+ */
+function scaledForLayers(project: ProjectConfigV1, source: SourceBundleV1, layerCount: number): [ProjectConfigV1, SourceBundleV1] {
+  const relief = source.elevation.max - source.elevation.min;
+  const groundWidthM = (relief * project.widthMm * project.verticalExaggeration) / (layerCount * project.materialThicknessMm);
+  const halfSpan = groundWidthM / (2 * (Math.PI / 180) * EARTH_RADIUS_M * Math.cos(project.location.lat * (Math.PI / 180)));
+  const bounds = {
+    west: project.location.lon - halfSpan,
+    south: project.location.lat - halfSpan * 0.7,
+    east: project.location.lon + halfSpan,
+    north: project.location.lat + halfSpan * 0.7,
+  };
+  return [{ ...project, location: { ...project.location, bounds } }, { ...source, bounds }];
+}
+
+/** Bounds spanning an exact ground width, so scale-driven expectations stay readable. */
+function groundBounds(project: ProjectConfigV1, groundWidthM: number) {
+  const halfSpan = groundWidthM / (2 * (Math.PI / 180) * EARTH_RADIUS_M * Math.cos(project.location.lat * (Math.PI / 180)));
+  return {
+    west: project.location.lon - halfSpan,
+    south: project.location.lat - halfSpan * 0.7,
+    east: project.location.lon + halfSpan,
+    north: project.location.lat + halfSpan * 0.7,
+  };
+}
+
 function parsePathPoints(pathData: string): Array<{ x: number; y: number }> {
   return [...pathData.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((match) => ({ x: Number(match[1]), y: Number(match[2]) }));
 }
@@ -51,15 +82,18 @@ describe("TopoStack geometry", () => {
   it("generates nested physical layers from a deterministic elevation grid", () => {
     const source = createSyntheticSource(DEFAULT_PROJECT, 48);
     const result = generateGeometry(DEFAULT_PROJECT, source);
-    expect(result.layers).toHaveLength(DEFAULT_PROJECT.layerCount);
+    const plan = planTerrainStack(DEFAULT_PROJECT, source.elevation.max - source.elevation.min, source.bounds);
+    expect(result.layers).toHaveLength(plan.layerCount);
+    expect(result.verticalExaggeration).toBeCloseTo(plan.verticalExaggeration, 9);
     expect(result.layers[0]?.polygons).toHaveLength(1);
     expect(result.maxElevationM).toBeGreaterThan(result.minElevationM);
   });
 
   it("traces smooth, accurate iso-lines instead of grid stair-steps", () => {
-    const project = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, layerCount: 4, smoothing: 1 };
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, smoothing: 1 };
     const cone = (nx: number, ny: number) => 1000 - 500 * Math.hypot(nx, ny);
-    const smoothed = generateGeometry(project, gridSource(project, 96, cone));
+    const [project, source] = scaledForLayers(base, gridSource(base, 96, cone), 4);
+    const smoothed = generateGeometry(project, source);
     // Layer 2's threshold sits at min + relief/2, so the cone's iso-line is a
     // circle of radius sqrt(2)/2 in normalized space = 70.71 mm.
     const ring = smoothed.layers[2]?.polygons[0]?.outer ?? [];
@@ -67,7 +101,7 @@ describe("TopoStack geometry", () => {
     const radius = Math.SQRT1_2 * 100;
     const deviation = (points: Array<{ x: number; y: number }>) => Math.max(...points.map((point) => Math.abs(Math.hypot(point.x, point.y) - radius)));
     expect(deviation(ring)).toBeLessThan(2.5);
-    const stepped = generateGeometry({ ...project, smoothing: 0 }, gridSource(project, 96, cone));
+    const stepped = generateGeometry({ ...project, smoothing: 0 }, source);
     expect(deviation(ring)).toBeLessThanOrEqual(deviation(stepped.layers[2]?.polygons[0]?.outer ?? []));
   });
 
@@ -166,7 +200,7 @@ describe("TopoStack geometry", () => {
     expect(cutPathData.length).toBeGreaterThan(1);
     expect(cutPathData.every((data) => (data.match(/M/g) ?? []).length === 1)).toBe(true);
     const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
-    expect(fabrication.files).toHaveLength((DEFAULT_PROJECT.layerCount - result.fabricationNests.length) * 2 + 5);
+    expect(fabrication.files).toHaveLength((result.layers.length - result.fabricationNests.length) * 2 + 5);
     expect(await fabrication.master.blob.text()).toContain("master layout");
   });
 
@@ -187,12 +221,13 @@ describe("TopoStack geometry", () => {
   });
 
   it("uses unique SVG ids in a multi-layer master", () => {
-    const svg = masterToSvg(generateGeometry(DEFAULT_PROJECT, realSource()));
+    const result = generateGeometry(DEFAULT_PROJECT, realSource());
+    const svg = masterToSvg(result);
     const ids = [...svg.matchAll(/ id="([^"]+)"/g)].map((match) => match[1]);
     expect(new Set(ids).size).toBe(ids.length);
     const cutGroup = svg.slice(svg.indexOf('data-operation="CUT"'));
     const cutPaths = [...cutGroup.matchAll(/<path[^>]* d="([^"]+)"/g)].map((path) => path[1] ?? "");
-    expect(cutPaths.length).toBeGreaterThanOrEqual(DEFAULT_PROJECT.layerCount);
+    expect(cutPaths.length).toBeGreaterThanOrEqual(result.layers.length);
     expect(cutPaths.every((data) => (data.match(/M/g) ?? []).length === 1)).toBe(true);
   });
 
@@ -207,8 +242,8 @@ describe("TopoStack geometry", () => {
   });
 
   it("keeps closed shorelines planar while open waterways follow terrain layers", () => {
-    const project = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, layerCount: 5, minimumFeatureMm: 0.8, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
-    const source = gridSource(project, 64, (nx) => 500 + nx * 400);
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, minimumFeatureMm: 0.8, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const [project, source] = scaledForLayers(base, gridSource(base, 64, (nx) => 500 + nx * 400), 5);
     source.markings = [
       { id: "lake", kind: "water", operation: "score", points: [{ x: -70, y: -40 }, { x: 70, y: -40 }, { x: 70, y: 40 }, { x: -70, y: 40 }, { x: -70, y: -40 }] },
       { id: "river", kind: "water", operation: "score", points: Array.from({ length: 29 }, (_, index) => ({ x: -70 + index * 5, y: 70 })) },
@@ -239,8 +274,8 @@ describe("TopoStack geometry", () => {
   });
 
   it("keeps roads continuous at exact terrain-layer transitions", () => {
-    const project = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, layerCount: 5, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
-    const source = gridSource(project, 64, (nx, ny) => 1000 - 500 * Math.hypot(nx, ny));
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const [project, source] = scaledForLayers(base, gridSource(base, 64, (nx, ny) => 1000 - 500 * Math.hypot(nx, ny)), 5);
     source.markings = [{ id: "ridge-road", kind: "road", transportationClass: "local-road", operation: "engrave", points: [{ x: -90, y: 0 }, { x: 0, y: 0 }, { x: 90, y: 0 }] }];
     const markings = generateGeometry(project, source).layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("ridge-road-") && marking.points.length > 1);
     for (let x = -89; x <= 89; x += 1) {
@@ -430,7 +465,7 @@ describe("TopoStack geometry", () => {
     const fabrication = buildFabricationPackage(result, DEFAULT_PROJECT);
     const panelFiles = fabrication.files.filter((file) => file.filename.endsWith(".svg") && !file.filename.endsWith("-engrave.svg") && !file.filename.endsWith("master.svg") && !file.filename.endsWith("assembly-guide.svg"));
     const engravingFiles = fabrication.files.filter((file) => file.filename.endsWith("-engrave.svg"));
-    expect(panelFiles).toHaveLength(DEFAULT_PROJECT.layerCount - result.fabricationNests.length);
+    expect(panelFiles).toHaveLength(result.layers.length - result.fabricationNests.length);
     expect(engravingFiles).toHaveLength(panelFiles.length);
     expect(panelFiles.some((file) => file.filename.includes("-panel-") && file.filename.includes("-layers-"))).toBe(true);
     expect(await fabrication.master.blob.text()).toContain("data-layers=");
@@ -446,7 +481,7 @@ describe("TopoStack geometry", () => {
     const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false };
     const result = generateGeometry(project, realSource(project));
     expect(result.fabricationNests).toEqual([]);
-    expect(buildFabricationPackage(result, project).files).toHaveLength(project.layerCount * 2 + 5);
+    expect(buildFabricationPackage(result, project).files).toHaveLength(result.layers.length * 2 + 5);
   });
 
   it("accepts fewer nests as the requested glue margin grows", () => {
@@ -462,10 +497,11 @@ describe("TopoStack geometry", () => {
     // without kerf; adding 1 mm of kerf pushes the required clearance past the
     // gap and must block the nest.
     const pyramid = (nx: number, ny: number) => 100 * (1 - Math.max(Math.abs(nx), Math.abs(ny)));
-    const fits = { ...DEFAULT_PROJECT, widthMm: 120, heightMm: 120, layerCount: 3, glueMarginMm: 19.5, laserKerfMm: 0 };
-    expect(generateGeometry(fits, gridSource(fits, 41, pyramid)).fabricationNests.length).toBeGreaterThan(0);
+    const fitsBase = { ...DEFAULT_PROJECT, widthMm: 120, heightMm: 120, glueMarginMm: 19.5, laserKerfMm: 0 };
+    const [fits, pyramidSource] = scaledForLayers(fitsBase, gridSource(fitsBase, 41, pyramid), 3);
+    expect(generateGeometry(fits, pyramidSource).fabricationNests.length).toBeGreaterThan(0);
     const blocked = { ...fits, laserKerfMm: 1 };
-    expect(generateGeometry(blocked, gridSource(blocked, 41, pyramid)).fabricationNests).toEqual([]);
+    expect(generateGeometry(blocked, pyramidSource).fabricationNests).toEqual([]);
     const project = { ...DEFAULT_PROJECT, glueMarginMm: 2, laserKerfMm: 1 };
     const result = generateGeometry(project, realSource(project));
     expect(result.fabricationNests.length).toBeGreaterThan(0);
@@ -485,11 +521,11 @@ describe("TopoStack geometry", () => {
     // Caldera: gaussian ring of high terrain around a low crater floor. Every
     // upper layer is an annulus, so any nested ring would sit under the
     // covering layer's crater hole — the cavity would be visible from above.
-    const project = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, layerCount: 4, glueMarginMm: 2 };
-    const source = gridSource(project, 64, (nx, ny) => {
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, glueMarginMm: 2 };
+    const [project, source] = scaledForLayers(base, gridSource(base, 64, (nx, ny) => {
       const r = Math.hypot(nx, ny);
       return 100 * Math.exp(-(((r - 0.45) / 0.25) ** 2));
-    });
+    }), 4);
     const result = generateGeometry(project, source);
     expect(result.layers[1]!.polygons.some((polygon) => polygon.holes.length > 0)).toBe(true);
     expect(result.fabricationNests).toEqual([]);
@@ -530,18 +566,67 @@ describe("TopoStack geometry", () => {
     expect(projectFingerprint({ ...DEFAULT_PROJECT, explodedPreview: 0.9 })).toBe(projectFingerprint(DEFAULT_PROJECT));
   });
 
-  it("rejects fractional layer counts and unknown crop shapes", () => {
-    expect(() => validateProject({ ...DEFAULT_PROJECT, layerCount: 2.5 })).toThrow(/whole number/i);
+  it("derives the layer count from map scale, relief, and material thickness", () => {
+    // 1000 m of relief across 20 km of ground on a 200 mm cut is a 1:100,000
+    // map, so true-scale relief is 10 mm and 2x exaggeration is 20 mm of stack.
+    const project = { ...DEFAULT_PROJECT, widthMm: 200, materialThicknessMm: 4, verticalExaggeration: 2 };
+    const bounds = groundBounds(project, 20_000);
+    const plan = planTerrainStack(project, 1_000, bounds);
+    expect(plan.stackHeightMm).toBeCloseTo(20, 6);
+    expect(plan.layerCount).toBe(5);
+    expect(plan.verticalExaggeration).toBeCloseTo(2, 6);
+    expect(plan.metersPerLayer).toBeCloseTo(200, 6);
+    expect(Math.round(1 / plan.horizontalScale)).toBe(100_000);
+
+    // Thicker sheets divide the same physical stack into fewer of them; the
+    // model does not grow taller.
+    const thick = planTerrainStack({ ...project, materialThicknessMm: 10 }, 1_000, bounds);
+    expect(thick.layerCount).toBe(2);
+    expect(thick.stackHeightMm).toBeCloseTo(20, 6);
+
+    // Doubling the cut doubles the map scale, so the stack doubles with it.
+    const wide = planTerrainStack({ ...project, widthMm: 400 }, 1_000, bounds);
+    expect(wide.stackHeightMm).toBeCloseTo(40, 6);
+    expect(wide.layerCount).toBe(10);
+  });
+
+  it("refits the exaggeration when the derived layer count hits its limits", () => {
+    const project = { ...DEFAULT_PROJECT, widthMm: 200, materialThicknessMm: 3, verticalExaggeration: 20 };
+    const steep = planTerrainStack(project, 4_000, groundBounds(project, 20_000));
+    expect(steep.layerCount).toBe(MAX_LAYER_COUNT);
+    // 4000 m over 20 km at 200 mm is 40 mm of true relief; 24 sheets of 3 mm
+    // is 72 mm, so the requested 20x is reported as the 1.8x actually cut.
+    expect(steep.verticalExaggeration).toBeCloseTo(1.8, 6);
+
+    const flat = planTerrainStack({ ...project, verticalExaggeration: 1 }, 5, groundBounds(project, 20_000));
+    expect(flat.layerCount).toBe(MIN_LAYER_COUNT);
+    expect(flat.verticalExaggeration).toBeGreaterThan(20);
+  });
+
+  it("falls back to the minimum stack for degenerate terrain and bounds", () => {
+    const project = { ...DEFAULT_PROJECT, widthMm: 200, materialThicknessMm: 3 };
+    const flat = planTerrainStack(project, 0, groundBounds(project, 20_000));
+    expect(flat.layerCount).toBe(MIN_LAYER_COUNT);
+    expect(flat.horizontalScale).toBe(0);
+    expect(Number.isFinite(flat.verticalExaggeration)).toBe(true);
+    const pole = planTerrainStack(project, 1_000, { west: 10, south: 84.9, east: 10, north: 85 });
+    expect(pole.layerCount).toBe(MIN_LAYER_COUNT);
+    expect(pole.horizontalScale).toBe(0);
+  });
+
+  it("rejects out-of-range exaggeration and unknown crop shapes", () => {
+    expect(() => validateProject({ ...DEFAULT_PROJECT, verticalExaggeration: 0.5 })).toThrow(/vertical exaggeration/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, verticalExaggeration: 21 })).toThrow(/vertical exaggeration/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, cropShape: "hexagon" as ProjectConfigV1["cropShape"] })).toThrow(/rectangle or circle/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, textStyle: { font: "serif" as ProjectConfigV1["textStyle"]["font"], sizeMm: 3 } })).toThrow(/text font/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, textStyle: { font: "technical", sizeMm: 10.1 } })).toThrow(/text size/i);
   });
 
   it("warns about empty layers and blocks their fabrication export", () => {
-    const project = { ...DEFAULT_PROJECT, layerCount: 4, minimumFeatureMm: 5, optimizeMaterialUse: false };
+    const base = { ...DEFAULT_PROJECT, minimumFeatureMm: 5, optimizeMaterialUse: false };
     // Gradient terrain plus one single-cell spike: the top layer's only region
     // is smaller than the minimum feature size, so it is culled to empty.
-    const source = gridSource(project, 48, (nx, ny) => (nx > 0.01 && nx < 0.04 && ny > 0.01 && ny < 0.04 ? 100 : 30 * (nx + 1)));
+    const [project, source] = scaledForLayers(base, gridSource(base, 48, (nx, ny) => (nx > 0.01 && nx < 0.04 && ny > 0.01 && ny < 0.04 ? 100 : 30 * (nx + 1))), 4);
     const result = generateGeometry(project, source);
     expect(result.warnings.some((warning) => warning.code === "EMPTY_LAYER")).toBe(true);
     expect(result.layers.some((layer) => layer.polygons.length === 0)).toBe(true);
@@ -611,15 +696,14 @@ describe("TopoStack geometry", () => {
   });
 
   it("reserves base-layer material beneath the north arrow when nesting is enabled", () => {
-    const project = {
+    const base = {
       ...DEFAULT_PROJECT,
       widthMm: 200,
       heightMm: 200,
-      layerCount: 6,
       northArrowSizeMm: 40,
       northArrowPlacement: { anchor: "center" as const, offset: { x: 0, y: 0 } },
     };
-    const source = gridSource(project, 64, (nx, ny) => 1_500 - Math.hypot(nx, ny) * 900);
+    const [project, source] = scaledForLayers(base, gridSource(base, 64, (nx, ny) => 1_500 - Math.hypot(nx, ny) * 900), 6);
     const result = generateGeometry(project, source);
     expect(result.layers[0]!.markings.some((marking) => marking.id.startsWith("north-"))).toBe(true);
     expect(result.fabricationNests.some((nest) => nest.donorLayerIndex === 0)).toBe(false);
