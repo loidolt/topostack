@@ -233,3 +233,37 @@ describe("vector archive", () => {
     await malformed.body?.cancel();
   });
 });
+
+describe("lake bathymetry archive", () => {
+  const origin = { origin: "http://localhost:5273" };
+  const archive = new Uint8Array(128).map((_, index) => (index * 7) % 251);
+
+  it("serves the archive and its ranges, which is all the PMTiles client asks of it", async () => {
+    await workerEnv.VECTOR_DATA.put("lakes/current.pmtiles", archive.slice());
+
+    const full = await exports.default.fetch("http://example.com/v1/lakes.pmtiles", { headers: origin });
+    expect(full.status).toBe(200);
+    expect(full.headers.get("accept-ranges")).toBe("bytes");
+    expect(new Uint8Array(await full.arrayBuffer())).toEqual(archive);
+
+    // The browser never downloads the whole archive - it range-reads the header,
+    // then the directory, then the handful of tiles the map window covers.
+    const ranged = await exports.default.fetch("http://example.com/v1/lakes.pmtiles", { headers: { ...origin, range: "bytes=0-16" } });
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-range")).toBe("bytes 0-16/128");
+    expect(new Uint8Array(await ranged.arrayBuffer())).toEqual(archive.slice(0, 17));
+  });
+
+  it("reports a missing archive as 404 so lake depth degrades to flat water", async () => {
+    await workerEnv.VECTOR_DATA.delete("lakes/current.pmtiles");
+    const response = await exports.default.fetch("http://example.com/v1/lakes.pmtiles", { headers: origin });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: "Lake bathymetry archive has not been provisioned." });
+  });
+
+  it("reports lake data in readiness without making it a requirement", async () => {
+    await workerEnv.VECTOR_DATA.delete("lakes/current.pmtiles");
+    const response = await exports.default.fetch("http://example.com/ready", { headers: origin });
+    expect(await response.json()).toMatchObject({ dependencies: { lakeData: { status: "missing", key: "lakes/current.pmtiles" } } });
+  });
+});

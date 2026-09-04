@@ -144,6 +144,15 @@
       const trailMaterial = new THREE.LineBasicMaterial({ color: 0x8a5e35 });
       const scoreMaterial = new THREE.LineBasicMaterial({ color: 0x365c79 });
       const labelMaterial = new THREE.LineBasicMaterial({ color: 0x21170f });
+      // Water reads as a pane resting over the basin rather than as another
+      // sheet of stock, so it is transmissive and never casts a shadow into the
+      // recess it is meant to reveal.
+      const waterMaterial = new THREE.MeshStandardMaterial({
+        // Saturated and a touch darker than it looks in isolation: the room
+        // environment washes a mid blue out to frosted glass over pale stock.
+        color: 0x14536e, transparent: true, opacity: 0.52, roughness: 0.28, metalness: 0,
+        side: THREE.DoubleSide, depthWrite: false,
+      });
       activeGeometry.layers.forEach((layer) => {
         const baseZ = layer.index * layer.materialThicknessMm;
         const grain = layerGrainTexture(runtime!.texture, layer.index);
@@ -167,6 +176,20 @@
           }
         });
       });
+      // The surface floats on the top face of the layer holding its waterline,
+      // and rides that layer when the stack is exploded.
+      (activeGeometry.waterSurfaces ?? []).forEach((surface) => {
+        const layer = activeGeometry.layers[surface.layerIndex] ?? activeGeometry.layers[0];
+        if (!layer) return;
+        surface.polygons.forEach((polygon) => {
+          const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shapeFromPolygon(polygon), 8), waterMaterial);
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+          mesh.renderOrder = 1;
+          addStacked(runtime!.content, mesh, layer.index, layer.index * layer.materialThicknessMm + layer.materialThicknessMm + markingLift(layer.materialThicknessMm) * 0.5);
+        });
+      });
+
       applyExploded(runtime.content, untrack(() => exploded));
       const radius = Math.hypot(activeGeometry.widthMm / 2, activeGeometry.heightMm / 2);
       // Fit the key light and its shadow frustum to the model, including the

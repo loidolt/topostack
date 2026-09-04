@@ -18,7 +18,8 @@ import { placeElevationLabelStack, placeLabel, placeLinearLabel } from "./label-
 import { offsetClosedRing } from "./offset.js";
 import { northArrowFootprint, northArrowMarkings } from "./north-arrow.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
-import { MAX_LAYER_COUNT, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES } from "./types.js";
+import { MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, MAX_WATER_DEPTH_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES, SEA_LEVEL_M } from "./types.js";
+import { carveWaterDepth, clampCarveToLadder } from "./water.js";
 import type {
   ElevationGrid,
   GeoBounds,
@@ -32,6 +33,8 @@ import type {
   SourceBundleV1,
   TerrainStackPlan,
   TransportationClass,
+  WaterAreaV1,
+  WaterSurfaceIR,
 } from "./types.js";
 
 const MAJOR_ROAD_OFFSET_MM = 0.4;
@@ -376,7 +379,7 @@ export function projectFingerprint(config: ProjectConfigV1): string {
     hash ^= input.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return `v3-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `v4-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function distanceM(lat: number, lonA: number, lonB: number): number {
@@ -398,11 +401,12 @@ function distanceM(lat: number, lonA: number, lonB: number): number {
  * refitted value can fall below `MIN_VERTICAL_EXAGGERATION` or rise above
  * `MAX_VERTICAL_EXAGGERATION`; those bounds constrain the request, not the fit.
  */
-export function planTerrainStack(config: ProjectConfigV1, reliefM: number, bounds: GeoBounds): TerrainStackPlan {
+export function planTerrainStack(config: ProjectConfigV1, reliefM: number, bounds: GeoBounds, depthBelowLandM = 0): TerrainStackPlan {
   const requested = config.verticalExaggeration;
   const groundWidthM = distanceM((bounds.north + bounds.south) / 2, bounds.west, bounds.east);
   const flat = {
     layerCount: MIN_LAYER_COUNT,
+    depthLayerCount: 0,
     verticalExaggeration: requested,
     stackHeightMm: MIN_LAYER_COUNT * config.materialThicknessMm,
     metersPerLayer: Math.max(0, reliefM) / MIN_LAYER_COUNT,
@@ -414,13 +418,30 @@ export function planTerrainStack(config: ProjectConfigV1, reliefM: number, bound
   const trueReliefMm = reliefM * (config.widthMm / groundWidthM);
   if (!(trueReliefMm > 0)) return { ...flat, horizontalScale };
 
-  const layerCount = clamp(Math.round((trueReliefMm * requested) / config.materialThicknessMm), MIN_LAYER_COUNT, MAX_LAYER_COUNT);
-  const stackHeightMm = layerCount * config.materialThicknessMm;
+  const landLayerCount = clamp(Math.round((trueReliefMm * requested) / config.materialThicknessMm), MIN_LAYER_COUNT, MAX_LAYER_COUNT);
+  const metersPerLayer = reliefM / landLayerCount;
+  // Depth is spent at the same vertical scale as the land, so the sea floor
+  // steps in step with the hills. The cap is what stops a coastal map from
+  // spending its whole budget below the waterline.
+  // Round up, not to nearest: a ladder half a sheet short of the water it was
+  // sized for would flatten the deepest part and report it as over budget, when
+  // one more sheet covers it exactly.
+  const depthBudget = Math.min(
+    Math.max(MAX_DEPTH_LAYER_COUNT, Math.ceil(MAX_DEPTH_LAYER_COUNT * Math.max(1, config.waterDepthExaggeration))),
+    MAX_LAYER_COUNT - landLayerCount,
+  );
+  const depthLayerCount = Number.isFinite(depthBelowLandM) && depthBelowLandM > 0 && metersPerLayer > 0
+    ? clamp(Math.ceil(depthBelowLandM / metersPerLayer), 0, Math.max(0, depthBudget))
+    : 0;
+  const layerCount = landLayerCount + depthLayerCount;
   return {
     layerCount,
-    verticalExaggeration: stackHeightMm / trueReliefMm,
-    stackHeightMm,
-    metersPerLayer: reliefM / layerCount,
+    depthLayerCount,
+    // The refit describes the land, which is the part a reader judges the
+    // exaggeration by; depth sheets ride along at the same scale.
+    verticalExaggeration: (landLayerCount * config.materialThicknessMm) / trueReliefMm,
+    stackHeightMm: layerCount * config.materialThicknessMm,
+    metersPerLayer,
     horizontalScale,
   };
 }
@@ -541,12 +562,12 @@ function layerForElevation(elevation: number, thresholds: number[]): number {
   return layer;
 }
 
-function splitMarking(feature: MarkingFeature, thresholds: number[], source: SourceBundleV1, config: ProjectConfigV1): Array<{ layer: number; points: Point2D[] }> {
+function splitMarking(feature: MarkingFeature, thresholds: number[], grid: ElevationGrid, config: ProjectConfigV1): Array<{ layer: number; points: Point2D[] }> {
   const closedWater = feature.kind === "water" && feature.points.length > 3 && Math.hypot(feature.points[0]!.x - feature.points.at(-1)!.x, feature.points[0]!.y - feature.points.at(-1)!.y) <= 1e-6;
   if (closedWater) {
-    const elevations = feature.points.slice(0, -1).map((point) => feature.elevationM ?? sampleElevation(source.elevation, point, config)).sort((left, right) => left - right);
+    const elevations = feature.points.slice(0, -1).map((point) => feature.elevationM ?? sampleElevation(grid, point, config)).sort((left, right) => left - right);
     const middle = Math.floor(elevations.length / 2);
-    const elevation = elevations.length % 2 === 0 ? ((elevations[middle - 1] ?? source.elevation.min) + (elevations[middle] ?? source.elevation.min)) / 2 : (elevations[middle] ?? source.elevation.min);
+    const elevation = elevations.length % 2 === 0 ? ((elevations[middle - 1] ?? grid.min) + (elevations[middle] ?? grid.min)) / 2 : (elevations[middle] ?? grid.min);
     return [{ layer: layerForElevation(elevation, thresholds), points: feature.points }];
   }
   const result: Array<{ layer: number; points: Point2D[] }> = [];
@@ -556,7 +577,7 @@ function splitMarking(feature: MarkingFeature, thresholds: number[], source: Sou
   let activeLayer = -1;
   let active: Point2D[] = [];
   for (const point of feature.points) {
-    const elevation = feature.elevationM ?? sampleElevation(source.elevation, point, config);
+    const elevation = feature.elevationM ?? sampleElevation(grid, point, config);
     const layer = layerForElevation(elevation, thresholds);
     if (layer !== activeLayer) {
       if (active.length >= minimumRun && activeLayer >= 0) result.push({ layer: activeLayer, points: active });
@@ -580,23 +601,81 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   if (![source.bounds.west, source.bounds.south, source.bounds.east, source.bounds.north].every(Number.isFinite) || source.bounds.west >= source.bounds.east || source.bounds.south >= source.bounds.north) throw new Error("Source geographic bounds are invalid.");
 
   const warnings: GeometryIRV1["warnings"] = [];
-  if (source.vectorStatus === "unavailable" && (config.showRoads || config.showTrails || config.showWater)) warnings.push({
+  if (source.vectorStatus !== "available" && (config.showRoads || config.showTrails || config.showWater || config.showWaterDepth)) warnings.push({
     code: "VECTOR_DATA_UNAVAILABLE",
     message: "Transportation and water data is unavailable. This project cannot be exported until the map data is restored or those details are disabled.",
   });
-  const relief = grid.max - grid.min;
-  if (relief < 20) warnings.push({ code: "LOW_RELIEF", message: "This area has very little elevation change; the layers may look nearly identical." });
+  // Carve modeled lake beds into the grid before anything reads it. Everything
+  // downstream then produces the recess on its own: the contour rings become
+  // holes, and holes are already honoured by clipping, nesting, and labelling.
+  const waterAreas: WaterAreaV1[] = config.showWaterDepth
+    ? (source.waterAreas ?? []).map((area) => {
+        const override = area.hylakId === undefined ? undefined : config.waterDepthOverrides[String(area.hylakId)];
+        return override && override > 0 ? { ...area, maxDepthM: override, depthSource: "user" as const } : area;
+      })
+    : [];
+  const groundWidthM = distanceM((source.bounds.north + source.bounds.south) / 2, source.bounds.west, source.bounds.east);
+  const carved = carveWaterDepth(grid, config, waterAreas, groundWidthM);
+  warnings.push(...carved.warnings);
+
+  // Size the stack from land alone. A coastal map's grid minimum is the abyssal
+  // plain, and dividing the whole of that across the sheet budget is what used
+  // to squeeze the land into a layer or two.
+  let landMin = Number.POSITIVE_INFINITY;
+  let landMax = Number.NEGATIVE_INFINITY;
+  let waterCells = 0;
+  for (let index = 0; index < carved.grid.values.length; index += 1) {
+    if (carved.waterMask[index]) { waterCells += 1; continue; }
+    const value = carved.grid.values[index]!;
+    if (value < landMin) landMin = value;
+    if (value > landMax) landMax = value;
+  }
+  // With no water in view the land *is* the grid, so defer to its declared
+  // range rather than re-deriving it: the stored samples are Float32 and the
+  // metadata is not, and a map without water must plan exactly as it always has.
+  if (waterCells === 0 || !Number.isFinite(landMin) || !Number.isFinite(landMax)) {
+    landMin = carved.grid.min;
+    landMax = carved.grid.max;
+  }
+  const landRelief = landMax - landMin;
+  const depthBelowLandM = Math.max(0, landMin - carved.grid.min);
+  if (landRelief < 20) warnings.push({ code: "LOW_RELIEF", message: "This area has very little elevation change; the layers may look nearly identical." });
 
   const clip = boundary(config);
-  const stack = planTerrainStack(config, relief, source.bounds);
-  const thresholds = Array.from({ length: stack.layerCount }, (_, index) => grid.min + (relief * index) / stack.layerCount);
-  const contourGenerator = contours().size([grid.width, grid.height]).smooth(config.smoothing > 0).thresholds(thresholds.slice(1));
-  const generated = contourGenerator(Array.from(grid.values));
+  const stack = planTerrainStack(config, landRelief, source.bounds, depthBelowLandM);
+  const hasOcean = waterAreas.some((area) => area.kind === "ocean");
+
+  // The ladder runs at one uniform step, extended below the land minimum by the
+  // depth sheets the budget allowed. When there is an ocean it is shifted so sea
+  // level falls exactly on a step, which is what makes a coastline cut as a
+  // clean sheet edge instead of a ragged one.
+  let ladderBase = landMin - stack.depthLayerCount * stack.metersPerLayer;
+  if (hasOcean && stack.metersPerLayer > 0) {
+    ladderBase = SEA_LEVEL_M - Math.ceil((SEA_LEVEL_M - ladderBase) / stack.metersPerLayer) * stack.metersPerLayer;
+  }
+  // Snapping to sea level slides the whole ladder down by up to a full step, so
+  // the sheet count is taken from the span the ladder actually has to cover.
+  // Keeping the planned count instead would drop the summit off the top.
+  const ladderLayerCount = stack.metersPerLayer > 0
+    ? clamp(Math.round((landMax - ladderBase) / stack.metersPerLayer), MIN_LAYER_COUNT, MAX_LAYER_COUNT)
+    : stack.layerCount;
+  const thresholds = Array.from({ length: ladderLayerCount }, (_, index) => ladderBase + stack.metersPerLayer * index);
+
+  // Water deeper than the ladder reaches is flattened at its floor rather than
+  // silently punching through the base sheet.
+  const { grid: modelGrid, clamped } = clampCarveToLadder(carved.grid, ladderBase);
+  if (clamped) warnings.push({
+    code: "WATER_DEPTH_CLAMPED",
+    message: `Water here is deeper than the ${stack.depthLayerCount} sheet${stack.depthLayerCount === 1 ? "" : "s"} below the shoreline can hold, so its floor is flattened. Lower the water depth exaggeration, or use thinner material to buy more sheets.`,
+  });
+
+  const contourGenerator = contours().size([modelGrid.width, modelGrid.height]).smooth(config.smoothing > 0).thresholds(thresholds.slice(1));
+  const generated = contourGenerator(Array.from(modelGrid.values));
 
   const layers: LayerIR[] = [{
     id: "layer-01",
     index: 0,
-    elevationM: grid.min,
+    elevationM: thresholds[0] ?? modelGrid.min,
     materialThicknessMm: config.materialThicknessMm,
     polygons: [{ outer: clip, holes: [] }],
     markings: [],
@@ -605,7 +684,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   generated.forEach((contour, generatedIndex) => {
     const raw: MultiPolygon = contour.coordinates.map((polygon) => polygon.map((ring) => {
       const mapped: Ring = ring.map((point) => {
-        const point2d = contourToMm([point[0] ?? 0, point[1] ?? 0], grid, config);
+        const point2d = contourToMm([point[0] ?? 0, point[1] ?? 0], modelGrid, config);
         return [point2d.x, point2d.y] as Pair;
       });
       return config.smoothing > 0 ? chaikinRing(mapped) : mapped;
@@ -616,11 +695,23 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     layers.push({
       id: `layer-${String(index + 1).padStart(2, "0")}`,
       index,
-      elevationM: thresholds[index] ?? grid.max,
+      elevationM: thresholds[index] ?? modelGrid.max,
       materialThicknessMm: config.materialThicknessMm,
       polygons,
       markings: [],
     });
+  });
+
+  // Surfaces are virtual - never cut, only drawn - so they are clipped to the
+  // crop here and carried on the IR for the previews to float over the basin.
+  const waterSurfaces: WaterSurfaceIR[] = carved.surfaces.flatMap((surface) => {
+    const polygons = surface.polygons.flatMap((polygon) => clipContours(
+      [[toRing(polygon.outer), ...polygon.holes.map(toRing)]] as MultiPolygon,
+      clip,
+      config.minimumFeatureMm,
+    ));
+    if (!polygons.length) return [];
+    return [{ ...surface, polygons, layerIndex: layerForElevation(surface.surfaceElevationM, thresholds) }];
   });
 
   const fabricationNests = addMaterialNests(config, layers);
@@ -649,7 +740,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       });
       continue;
     }
-    for (const [segmentIndex, segment] of splitMarking(feature, thresholds, source, config).entries()) {
+    for (const [segmentIndex, segment] of splitMarking(feature, thresholds, modelGrid, config).entries()) {
       const layer = layers[segment.layer];
       if (!layer) continue;
       const clipped = clipPolyline(segment.points, layer.polygons);
@@ -775,9 +866,12 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     heightMm: config.heightMm,
     laserKerfMm: config.laserKerfMm,
     verticalExaggeration: stack.verticalExaggeration,
-    minElevationM: grid.min,
-    maxElevationM: grid.max,
+    minElevationM: modelGrid.min,
+    maxElevationM: modelGrid.max,
+    landReliefM: landMax - landMin,
+    waterDepthBelowLandM: depthBelowLandM,
     layers,
+    waterSurfaces,
     fabricationNests,
     warnings,
     attribution: source.attribution,
@@ -792,12 +886,13 @@ export function validateProject(config: ProjectConfigV1): void {
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
   if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");
   if (!config.northArrowPlacement || typeof config.northArrowPlacement !== "object" || !config.northArrowPlacement.offset || typeof config.northArrowPlacement.offset !== "object") throw new Error("North arrow placement is required.");
-  for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar })) {
+  for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showWaterDepth: config.showWaterDepth, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar })) {
     if (typeof value !== "boolean") throw new Error(`${label} must be true or false.`);
   }
   if (config.widthMm <= 0) throw new Error("Project width must be greater than zero.");
   if (config.heightMm <= 0) throw new Error("Project height must be greater than zero.");
   if (config.verticalExaggeration < MIN_VERTICAL_EXAGGERATION || config.verticalExaggeration > MAX_VERTICAL_EXAGGERATION) throw new Error(`Vertical exaggeration must be between ${MIN_VERTICAL_EXAGGERATION} and ${MAX_VERTICAL_EXAGGERATION}.`);
+  if (!Number.isFinite(config.waterDepthExaggeration) || config.waterDepthExaggeration < MIN_WATER_DEPTH_EXAGGERATION || config.waterDepthExaggeration > MAX_WATER_DEPTH_EXAGGERATION) throw new Error(`Water depth exaggeration must be between ${MIN_WATER_DEPTH_EXAGGERATION} and ${MAX_WATER_DEPTH_EXAGGERATION}.`);
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
@@ -814,6 +909,11 @@ export function validateProject(config: ProjectConfigV1): void {
   const northArrowMaximum = Math.min(NORTH_ARROW_MAX_SIZE_MM, Math.max(NORTH_ARROW_MIN_SIZE_MM, Math.min(config.widthMm, config.heightMm) * NORTH_ARROW_MAX_MAP_FRACTION));
   if (config.northArrowSizeMm < NORTH_ARROW_MIN_SIZE_MM || config.northArrowSizeMm > northArrowMaximum) throw new Error(`North arrow size must be between ${NORTH_ARROW_MIN_SIZE_MM} and ${northArrowMaximum} mm.`);
   if (Math.abs(config.northArrowPlacement.offset.x) > 1 || Math.abs(config.northArrowPlacement.offset.y) > 1) throw new Error("North arrow offsets must be between -100% and 100%.");
+  if (!config.waterDepthOverrides || typeof config.waterDepthOverrides !== "object") throw new Error("Water depth overrides are required.");
+  for (const [lake, depth] of Object.entries(config.waterDepthOverrides)) {
+    if (!/^[1-9]\d*$/.test(lake)) throw new Error(`Water depth override key ${lake} must be a HydroLAKES id.`);
+    if (!Number.isFinite(depth) || depth <= 0 || depth > 12000) throw new Error(`Water depth override for lake ${lake} must be between 0 and 12000 m.`);
+  }
   const bounds = config.location.bounds;
   if (bounds && (![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite) || bounds.west >= bounds.east || bounds.south >= bounds.north || bounds.south < -85.0511 || bounds.north > 85.0511)) throw new Error("Project geographic bounds are invalid.");
 }

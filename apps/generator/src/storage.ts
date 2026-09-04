@@ -37,6 +37,16 @@ export async function loadProject(): Promise<ProjectConfigV1 | undefined> {
   }
 }
 
+/** Overrides are keyed by HydroLAKES id, so any non-numeric entry is dropped rather than thrown on. */
+function waterDepthOverridesValue(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object") return {};
+  const result: Record<string, number> = {};
+  for (const [lake, depth] of Object.entries(value as Record<string, unknown>)) {
+    if (/^[1-9]\d*$/.test(lake) && typeof depth === "number" && Number.isFinite(depth) && depth > 0 && depth <= 12000) result[lake] = depth;
+  }
+  return result;
+}
+
 export function parseProject(value: unknown): ProjectConfigV1 {
   if (!value || typeof value !== "object") throw new Error("Project must be a JSON object.");
   const record = value as Record<string, unknown>;
@@ -72,6 +82,9 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     showTrails: record.showTrails === undefined ? booleanValue(record.showRoads, "showRoads") : booleanValue(record.showTrails, "showTrails"),
     showTransportationLabels: record.showTransportationLabels === undefined ? false : booleanValue(record.showTransportationLabels, "showTransportationLabels"),
     showWater: booleanValue(record.showWater, "showWater"),
+    showWaterDepth: record.showWaterDepth === undefined ? DEFAULT_PROJECT.showWaterDepth : booleanValue(record.showWaterDepth, "showWaterDepth"),
+    waterDepthExaggeration: record.waterDepthExaggeration === undefined ? DEFAULT_PROJECT.waterDepthExaggeration : numberValue(record.waterDepthExaggeration),
+    waterDepthOverrides: waterDepthOverridesValue(record.waterDepthOverrides),
     showAlignmentGuides: record.showAlignmentGuides === undefined ? DEFAULT_PROJECT.showAlignmentGuides : booleanValue(record.showAlignmentGuides, "showAlignmentGuides"),
     optimizeMaterialUse: record.optimizeMaterialUse === undefined ? DEFAULT_PROJECT.optimizeMaterialUse : booleanValue(record.optimizeMaterialUse, "optimizeMaterialUse"),
     glueMarginMm: record.glueMarginMm === undefined ? DEFAULT_PROJECT.glueMarginMm : numberValue(record.glueMarginMm),

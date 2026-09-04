@@ -1,4 +1,4 @@
-import { createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type Polygon2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass } from "@topostack/core";
+import { createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type Polygon2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass, type WaterAreaV1 } from "@topostack/core";
 import { PMTiles } from "pmtiles";
 import { classifyRings, VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
@@ -16,6 +16,7 @@ const developmentApiBase = import.meta.env.DEV ? `http://localhost:${development
 // packages still inject an explicit API URL during their build.
 const apiBase = configuredApiBase ?? developmentApiBase ?? "";
 const vectorArchive = new PMTiles(`${apiBase}/v1/osm.pmtiles`);
+const lakeArchive = new PMTiles(`${apiBase}/v1/lakes.pmtiles`);
 const TILE_SIZE = 256;
 const MAX_DATA_TILES = 24;
 const MAJOR_ROAD_DETAILS = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"]);
@@ -182,21 +183,67 @@ function ringIsLargeEnough(points: Point2D[], minimumFeatureMm: number): boolean
   return Math.max(...xs) - Math.min(...xs) >= minimumFeatureMm && Math.max(...ys) - Math.min(...ys) >= minimumFeatureMm;
 }
 
-/** Dissolve vector-tile polygon fragments before extracting their shorelines. */
-export function dissolveWaterPolygons(polygons: Polygon2D[], minimumFeatureMm: number): MarkingFeature[] {
+/**
+ * Dissolve vector-tile polygon fragments into whole water bodies.
+ *
+ * Tiles cut every lake into per-tile pieces, so the union has to happen before
+ * anything measures a shoreline or a distance to one. The result keeps its
+ * outer/hole structure - islands included - because a carve needs the filled
+ * shape, not a bag of rings.
+ */
+export function dissolveWaterAreas(polygons: Polygon2D[], minimumFeatureMm: number): Polygon2D[] {
   if (!polygons.length) return [];
   const inputs: MultiPolygon[] = polygons.map((polygon) => [[
     polygon.outer.map((point) => [point.x, point.y] as Pair),
     ...polygon.holes.map((ring) => ring.map((point) => [point.x, point.y] as Pair)),
   ]]);
   const dissolved = polygonClipping.union(inputs[0]!, ...inputs.slice(1));
+  return multiPolygonToAreas(dissolved, minimumFeatureMm);
+}
+
+/** polygon-clipping emits outer-first rings; restore the winding Polygon2D promises. */
+function multiPolygonToAreas(multi: MultiPolygon, minimumFeatureMm: number): Polygon2D[] {
   const tolerance = minimumFeatureMm * 0.18;
+  const areas: Polygon2D[] = [];
+  for (const polygon of multi) {
+    const [outerRing, ...holeRings] = polygon;
+    if (!outerRing) continue;
+    const outer = closedSimplified(outerRing, tolerance);
+    if (!ringIsLargeEnough(outer, minimumFeatureMm)) continue;
+    areas.push({
+      outer: signedArea(outer) < 0 ? [...outer].reverse() : outer,
+      holes: holeRings
+        .map((ring) => closedSimplified(ring, tolerance))
+        .filter((ring) => ringIsLargeEnough(ring, minimumFeatureMm))
+        .map((ring) => (signedArea(ring) > 0 ? [...ring].reverse() : ring)),
+    });
+  }
+  return areas;
+}
+
+function closedSimplified(ring: readonly Pair[], tolerance: number): Point2D[] {
+  const points = simplifyPath(ring.map(([x, y]) => ({ x, y })), tolerance);
+  if (!samePoint(points[0]!, points.at(-1)!)) points.push({ ...points[0]! });
+  return points;
+}
+
+function signedArea(points: Point2D[]): number {
+  let total = 0;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    total += (points[previous]!.x - points[index]!.x) * (points[previous]!.y + points[index]!.y);
+  }
+  return total / 2;
+}
+
+/** Dissolve vector-tile polygon fragments before extracting their shorelines. */
+export function dissolveWaterPolygons(polygons: Polygon2D[], minimumFeatureMm: number): MarkingFeature[] {
+  return shorelineMarkings(dissolveWaterAreas(polygons, minimumFeatureMm));
+}
+
+export function shorelineMarkings(areas: Polygon2D[]): MarkingFeature[] {
   const markings: MarkingFeature[] = [];
-  dissolved.forEach((polygon, polygonIndex) => polygon.forEach((ring, ringIndex) => {
-    const points = simplifyPath(ring.map(([x, y]) => ({ x, y })), tolerance);
-    if (!samePoint(points[0]!, points.at(-1)!)) points.push({ ...points[0]! });
-    if (!ringIsLargeEnough(points, minimumFeatureMm)) return;
-    markings.push({ id: `water-area-${polygonIndex}-shore-${ringIndex}`, kind: "water", operation: "score", points });
+  areas.forEach((area, areaIndex) => [area.outer, ...area.holes].forEach((points, ringIndex) => {
+    markings.push({ id: `water-area-${areaIndex}-shore-${ringIndex}`, kind: "water", operation: "score", points });
   }));
   return markings;
 }
@@ -383,7 +430,15 @@ async function loadElevation(window: TileWindow, signal?: AbortSignal): Promise<
   return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+protomaps-20260819-z12-v1" };
 }
 
-export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<MarkingFeature[]> {
+export interface VectorData {
+  markings: MarkingFeature[];
+  /** Dissolved inland water, kept so lakes without depth data still read as water. */
+  inland: Polygon2D[];
+  /** Dissolved ocean, whose depth the DEM already carries. */
+  ocean: Polygon2D[];
+}
+
+export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<VectorData> {
   const header = await vectorArchive.getHeader();
   signal?.throwIfAborted();
   let vectorZoom = Math.max(header.minZoom, Math.min(header.maxZoom, Math.round(requestedZoom) + 1));
@@ -399,18 +454,19 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
     x: (((tile.x + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
     y: (((tile.y + point.y / extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
   });
-  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<{ markings: MarkingFeature[]; waterPolygons: Polygon2D[] }> => {
+  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<{ markings: MarkingFeature[]; waterPolygons: Polygon2D[]; oceanPolygons: Polygon2D[] }> => {
     const markings: MarkingFeature[] = [];
     const waterPolygons: Polygon2D[] = [];
+    const oceanPolygons: Polygon2D[] = [];
     const response = await vectorArchive.getZxy(tile.z, tile.x, tile.y, signal);
-    if (!response) return { markings, waterPolygons };
+    if (!response) return { markings, waterPolygons, oceanPolygons };
     const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
     for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
       const lowered = layerName.toLowerCase();
       const isRoad = lowered.includes("road") || lowered.includes("transportation");
       const isWater = lowered === "water" || lowered.includes("waterway");
       if (!isRoad && !isWater) continue;
-      for (let featureIndex = 0; featureIndex < layer.length && markings.length < 1800; featureIndex += 1) {
+      for (let featureIndex = 0; featureIndex < layer.length; featureIndex += 1) {
         const feature = layer.feature(featureIndex);
         if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
         const transportationClass = isRoad ? classifyTransportation(feature.properties as Record<string, unknown>) : undefined;
@@ -418,13 +474,19 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
         const label = isRoad ? transportationLabel(feature.properties as Record<string, unknown>) : undefined;
         const geometry = feature.loadGeometry();
         if (isWater && feature.type === 3) {
+          const isOcean = (feature.properties as Record<string, unknown>).kind === "ocean";
           classifyRings(geometry).forEach((polygon) => {
             const [outer, ...holes] = polygon;
             if (!outer) return;
-            waterPolygons.push({ outer: outer.map((point) => projectPoint(tile, feature.extent, point)), holes: holes.map((ring) => ring.map((point) => projectPoint(tile, feature.extent, point))) });
+            const projected = { outer: outer.map((point) => projectPoint(tile, feature.extent, point)), holes: holes.map((ring) => ring.map((point) => projectPoint(tile, feature.extent, point))) };
+            (isOcean ? oceanPolygons : waterPolygons).push(projected);
           });
           continue;
         }
+        // Keep scanning after the marking budget is full: polygon layers may
+        // follow transportation in the archive, and their ocean mask is still
+        // required to plan coastal stacks correctly.
+        if (markings.length >= 1800) continue;
         geometry.forEach((line, lineIndex) => {
           const lines = clipVectorTileLine(line, feature.extent);
           lines.forEach((clippedLine, clippedIndex) => {
@@ -436,17 +498,141 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
         });
       }
     }
-    return { markings, waterPolygons };
+    return { markings, waterPolygons, oceanPolygons };
   }));
   const rawMarkings = perTile.flatMap((tile) => tile.markings);
   const transportation = stitchTransportationMarkings(rawMarkings.filter((marking) => marking.kind !== "water"));
   const waterways = cleanWaterwayMarkings(rawMarkings.filter((marking) => marking.kind === "water"), config.minimumFeatureMm);
-  const shorelines = dissolveWaterPolygons(perTile.flatMap((tile) => tile.waterPolygons), config.minimumFeatureMm);
-  return [...transportation, ...shorelines, ...waterways].slice(0, 1800);
+  const inland = dissolveWaterAreas(perTile.flatMap((tile) => tile.waterPolygons), config.minimumFeatureMm);
+  const ocean = dissolveWaterAreas(perTile.flatMap((tile) => tile.oceanPolygons), config.minimumFeatureMm);
+  const shorelines = shorelineMarkings([...ocean, ...inland]);
+  return {
+    markings: [...transportation, ...shorelines, ...waterways].slice(0, 1800),
+    inland,
+    ocean,
+  };
+}
+
+/**
+ * Lake outlines carrying the depth metadata a basin is modeled from.
+ *
+ * Tiles snap outward to whole-tile boundaries, so this returns lake geometry
+ * from beyond the crop as well. That margin matters: the carve measures
+ * distance to shore, and a lake truncated at the crop edge would otherwise be
+ * handed a false shoreline running straight down the margin.
+ */
+export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<WaterAreaV1[]> {
+  const header = await lakeArchive.getHeader();
+  signal?.throwIfAborted();
+  let zoom = Math.max(header.minZoom, Math.min(header.maxZoom, Math.round(requestedZoom)));
+  let window: TileWindow;
+  while (true) {
+    try { window = tileWindow(bounds, zoom); break; }
+    catch (error) {
+      if (zoom <= header.minZoom || !(error instanceof Error) || !error.message.includes("too large")) throw error;
+      zoom -= 1;
+    }
+  }
+  const projectPoint = (tile: { x: number; y: number }, extent: number, point: Point2D): Point2D => ({
+    x: (((tile.x + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
+    y: (((tile.y + point.y / extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
+  });
+  const numberProperty = (properties: Record<string, unknown>, key: string): number | undefined => {
+    const value = Number(properties[key]);
+    return Number.isFinite(value) ? value : undefined;
+  };
+
+  // A lake has to be wider than the smallest cuttable feature before a stepped
+  // basin can mean anything, and a tile over Finland or northern Canada holds
+  // thousands that are not. Filtering on the published area first keeps the
+  // dissolve off geometry the model could never show.
+  const mmPerMeter = config.widthMm / Math.max(1, groundWidthM(bounds));
+  const minimumAreaKm2 = ((config.minimumFeatureMm * 2 / mmPerMeter) / 1000) ** 2;
+
+  // One lake spans many tiles, so its pieces are gathered by id and unioned.
+  const byLake = new Map<number, { properties: Record<string, unknown>; polygons: Polygon2D[] }>();
+  await Promise.all(window.tiles.map(async (tile) => {
+    const response = await lakeArchive.getZxy(tile.z, tile.x, tile.y, signal);
+    if (!response) return;
+    const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
+    for (const layer of Object.values(vectorTile.layers)) {
+      for (let featureIndex = 0; featureIndex < layer.length; featureIndex += 1) {
+        const feature = layer.feature(featureIndex);
+        if (feature.type !== 3) continue;
+        const properties = feature.properties as Record<string, unknown>;
+        const hylakId = numberProperty(properties, "hylak_id");
+        if (hylakId === undefined) continue;
+        const areaKm2 = numberProperty(properties, "area_km2");
+        if (areaKm2 !== undefined && areaKm2 < minimumAreaKm2) continue;
+        const entry = byLake.get(hylakId) ?? { properties, polygons: [] };
+        classifyRings(feature.loadGeometry()).forEach((polygon) => {
+          const [outer, ...holes] = polygon;
+          if (!outer) return;
+          entry.polygons.push({
+            outer: outer.map((point) => projectPoint(tile, feature.extent, point)),
+            holes: holes.map((ring) => ring.map((point) => projectPoint(tile, feature.extent, point))),
+          });
+        });
+        byLake.set(hylakId, entry);
+      }
+    }
+  }));
+
+  const halfWidth = config.widthMm / 2;
+  const halfHeight = config.heightMm / 2;
+  const areas: WaterAreaV1[] = [];
+  for (const [hylakId, entry] of byLake) {
+    for (const [index, polygon] of dissolveWaterAreas(entry.polygons, config.minimumFeatureMm).entries()) {
+      const name = typeof entry.properties.name === "string" && entry.properties.name.trim() ? entry.properties.name.trim() : undefined;
+      areas.push({
+        id: `lake-${hylakId}-${index}`,
+        kind: "lake",
+        polygon,
+        hylakId,
+        ...(name ? { name } : {}),
+        maxDepthM: numberProperty(entry.properties, "dmax_m"),
+        meanDepthM: numberProperty(entry.properties, "davg_m"),
+        lmaxM: numberProperty(entry.properties, "lmax_m"),
+        surfaceElevationM: numberProperty(entry.properties, "elev_m"),
+        // A lake reaching past the crop is only partly in view, so the cells
+        // the carve can see are not a fair sample of the basin and the shape
+        // exponent must not be fitted to them.
+        clipped: polygon.outer.some((point) => Math.abs(point.x) > halfWidth || Math.abs(point.y) > halfHeight),
+      });
+    }
+  }
+  return areas;
 }
 
 function groundWidthM(bounds: GeoBounds): number {
   return Math.abs(bounds.east - bounds.west) * Math.PI / 180 * 6_371_008.8 * Math.cos(((bounds.north + bounds.south) / 2) * Math.PI / 180);
+}
+
+/**
+ * Merge the depth-bearing lakes with the OSM ocean.
+ *
+ * Where a HydroLAKES lake covers OSM water, the lake wins and the OSM shape is
+ * cut away. Both would otherwise describe the same shoreline a few tens of
+ * meters apart, and the scored outline would visibly miss the cut recess.
+ */
+export function combineWaterAreas(lakes: WaterAreaV1[], ocean: Polygon2D[], minimumFeatureMm: number): WaterAreaV1[] {
+  const oceanAreas: WaterAreaV1[] = ocean.map((polygon, index) => ({ id: `ocean-${index}`, kind: "ocean", polygon }));
+  if (!lakes.length || !ocean.length) return [...oceanAreas, ...lakes];
+  const lakeInput: MultiPolygon = lakes.map((lake) => [
+    lake.polygon.outer.map((point) => [point.x, point.y] as Pair),
+    ...lake.polygon.holes.map((ring) => ring.map((point) => [point.x, point.y] as Pair)),
+  ]);
+  const trimmed: WaterAreaV1[] = [];
+  oceanAreas.forEach((area, areaIndex) => {
+    const difference = polygonClipping.difference(
+      [[area.polygon.outer.map((point) => [point.x, point.y] as Pair), ...area.polygon.holes.map((ring) => ring.map((point) => [point.x, point.y] as Pair))]],
+      lakeInput,
+    );
+    multiPolygonToAreas(difference, minimumFeatureMm).forEach((polygon, index) => {
+      trimmed.push({ id: `ocean-${areaIndex}-${index}`, kind: "ocean", polygon });
+    });
+  });
+  return [...trimmed, ...lakes];
 }
 
 export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal): Promise<{ source: SourceBundleV1; fallback: boolean }> {
@@ -463,23 +649,34 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
   const zoom = Math.max(0, Math.min(15, Math.round(config.location.zoom)));
   try {
     const window = tileWindow(bounds, zoom);
-    const vectorRequested = config.showRoads || config.showTrails || config.showWater;
-    const [{ elevation, imagerySources, datasetVersion }, vector] = await Promise.all([
+    // Ocean polygons are how geometry separates bathymetry from land relief,
+    // so depth modeling needs vectors even when shoreline scoring is hidden.
+    const vectorRequested = config.showRoads || config.showTrails || config.showWater || config.showWaterDepth;
+    const [{ elevation, imagerySources, datasetVersion }, vector, lakes] = await Promise.all([
       loadElevation(window, signal),
       vectorRequested
         ? loadVectorMarkings(bounds, zoom, config, signal)
-          .then((markings) => ({ markings, status: "available" as const }))
+          .then((vectorData) => ({ ...vectorData, status: "available" as const }))
           .catch((error) => {
             if (signal?.aborted) throw error;
-            return { markings: [], status: "unavailable" as const };
+            return { markings: [], inland: [], ocean: [], status: "unavailable" as const };
           })
-        : Promise.resolve({ markings: [], status: "not-requested" as const }),
+        : Promise.resolve({ markings: [], inland: [], ocean: [], status: "not-requested" as const }),
+      // Depth data is an enhancement: a missing or unprovisioned archive leaves
+      // the water flat rather than failing the whole generation.
+      config.showWaterDepth
+        ? loadLakeAreas(bounds, zoom, config, signal).catch((error) => {
+            if (signal?.aborted) throw error;
+            return [] as WaterAreaV1[];
+          })
+        : Promise.resolve([] as WaterAreaV1[]),
     ]);
-    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, vectorStatus: vector.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: MAP_DATA_ATTRIBUTION } };
+    const waterAreas = combineWaterAreas(lakes, vector.ocean, config.minimumFeatureMm);
+    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, waterAreas, vectorStatus: vector.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: MAP_DATA_ATTRIBUTION } };
   } catch (error) {
     if (signal?.aborted) throw error;
     const source = createSyntheticSource({ ...config, location: { ...config.location, bounds } });
-    return { source: { ...source, vectorStatus: config.showRoads || config.showTrails || config.showWater ? "unavailable" : "not-requested" }, fallback: true };
+    return { source: { ...source, vectorStatus: config.showRoads || config.showTrails || config.showWater || config.showWaterDepth ? "unavailable" : "not-requested" }, fallback: true };
   }
 }
 

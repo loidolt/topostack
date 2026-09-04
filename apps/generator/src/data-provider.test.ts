@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROJECT } from "@topostack/core";
-import { boundsForProject, classifyTransportation, cleanWaterwayMarkings, clipVectorTileLine, dissolveWaterPolygons, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
+import { boundsForProject, classifyTransportation, cleanWaterwayMarkings, clipVectorTileLine, combineWaterAreas, dissolveWaterAreas, dissolveWaterPolygons, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
 
 describe("transportation metadata", () => {
   it("classifies supported roads and trails while excluding other transport", () => {
@@ -47,6 +47,14 @@ describe("transportation metadata", () => {
   });
 });
 
+function signedArea(points: Array<{ x: number; y: number }>): number {
+  let total = 0;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    total += (points[previous]!.x - points[index]!.x) * (points[previous]!.y + points[index]!.y);
+  }
+  return total / 2;
+}
+
 describe("water geometry cleanup", () => {
   const ring = (left: number, top: number, right: number, bottom: number) => [
     { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }, { x: left, y: top },
@@ -72,6 +80,34 @@ describe("water geometry cleanup", () => {
     ], 0.8);
     expect(markings).toHaveLength(2);
     expect(markings.every((marking) => marking.points[0]?.x === marking.points.at(-1)?.x && marking.points[0]?.y === marking.points.at(-1)?.y)).toBe(true);
+  });
+
+  it("keeps the filled shape, wound as the geometry engine expects", () => {
+    const areas = dissolveWaterAreas([
+      { outer: ring(0, 0, 20, 20), holes: [ring(5, 5, 15, 15)] },
+    ], 0.8);
+    expect(areas).toHaveLength(1);
+    const area = areas[0]!;
+    // Outer rings wind positively and holes negatively, per the Polygon2D contract.
+    expect(signedArea(area.outer)).toBeGreaterThan(0);
+    expect(area.holes).toHaveLength(1);
+    expect(signedArea(area.holes[0]!)).toBeLessThan(0);
+  });
+
+  it("lets a lake win over the ocean polygon covering it", () => {
+    const lake = {
+      id: "lake-7",
+      kind: "lake" as const,
+      hylakId: 7,
+      polygon: { outer: ring(4, 4, 8, 8), holes: [] },
+    };
+    const combined = combineWaterAreas([lake], [{ outer: ring(0, 0, 20, 20), holes: [] }], 0.8);
+    // Both sources describe the same water, so the ocean is cut back to a ring
+    // around the lake rather than being drawn over the carved recess.
+    const ocean = combined.filter((area) => area.kind === "ocean");
+    expect(ocean).toHaveLength(1);
+    expect(ocean[0]?.polygon.holes).toHaveLength(1);
+    expect(combined.filter((area) => area.kind === "lake")).toEqual([lake]);
   });
 
   it("deduplicates and stitches waterways while preserving forks", () => {

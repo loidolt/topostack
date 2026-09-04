@@ -465,6 +465,14 @@ body {
   color: var(--loidolt-text-muted);
 }
 
+.depth-note {
+  display: block;
+  margin-top: var(--panel-space-1);
+  color: var(--loidolt-text-muted);
+  font: var(--panel-font-micro) var(--loidolt-font-utility);
+  line-height: 1.4;
+}
+
 .toggle-stack {
   display: flex;
   flex-direction: column;

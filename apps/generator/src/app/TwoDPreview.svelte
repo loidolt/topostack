@@ -2,6 +2,9 @@
   import { displayElevation, elevationUnit, labelPathData, type GeometryIRV1 } from "@topostack/core";
   let { geometry, selectedLayer }: { geometry: GeometryIRV1; selectedLayer: number } = $props();
   const layer = $derived(geometry.layers[selectedLayer] ?? geometry.layers[0]);
+  // Every sheet at or below the waterline sits under water, so the tint marks
+  // which part of this sheet the basin covers.
+  const submerged = $derived((geometry.waterSurfaces ?? []).filter((surface) => (layer?.index ?? 0) <= surface.layerIndex));
   function pathData(points: Array<{ x: number; y: number }>): string { return points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`).join(" "); }
   function markingColor(marking: NonNullable<typeof layer>["markings"][number]): string {
     if (marking.operation === "score") return "#365c79";
@@ -27,6 +30,11 @@
           </g>
         {/each}
       </g>
+      {#each submerged as surface (surface.id)}
+        {#each surface.polygons as polygon}
+          <path d={`${pathData(polygon.outer)} Z ${polygon.holes.map((hole) => `${pathData(hole)} Z`).join(" ")}`} fill="#7fb2cc" fill-opacity="0.38" stroke="none" fill-rule="evenodd" />
+        {/each}
+      {/each}
       {#each layer.markings as marking (marking.id)}
         <g data-marking-id={marking.id} data-marking-kind={marking.kind} data-transportation-class={marking.transportationClass}><path d={pathData(marking.points)} fill="none" stroke={markingColor(marking)} stroke-width="0.55" vector-effect="non-scaling-stroke" />{#if marking.label && marking.points[0]}<path d={labelPathData(marking.label, marking.points[0], 0, 0, marking.labelRotationRad, marking.textStyle)} fill="none" stroke={markingColor(marking)} stroke-width="0.2" stroke-linecap={marking.textStyle?.font === "rounded" ? "round" : "butt"} stroke-linejoin={marking.textStyle?.font === "rounded" ? "round" : "miter"} />{/if}</g>
       {/each}

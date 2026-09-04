@@ -17,7 +17,10 @@ describe("Atomm export policy", () => {
     const result = geometry();
     result.vectorStatus = "unavailable";
     expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/transportation and water data is unavailable/i);
-    const withoutVectorDetails = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false };
+    const depthOnly = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false };
+    const missingOceanMask = generateGeometry(depthOnly, { ...createSyntheticSource(depthOnly, 32), sourceKind: "real", vectorStatus: "not-requested" });
+    expect(exportBlockReason(missingOceanMask, depthOnly)).toMatch(/transportation and water data is unavailable/i);
+    const withoutVectorDetails = { ...depthOnly, showWaterDepth: false };
     const completeWithoutVectors = generateGeometry(withoutVectorDetails, { ...createSyntheticSource(withoutVectorDetails, 32), sourceKind: "real", vectorStatus: "not-requested" });
     expect(exportBlockReason(completeWithoutVectors, withoutVectorDetails)).toBeUndefined();
   });

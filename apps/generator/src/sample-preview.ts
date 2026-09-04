@@ -1,4 +1,4 @@
-import type { MarkingFeature, SourceBundleV1 } from "@topostack/core";
+import type { MarkingFeature, SourceBundleV1, WaterAreaV1 } from "@topostack/core";
 import { MAP_DATA_ATTRIBUTION } from "./map-attribution";
 import { SAMPLE_PREVIEW } from "./sample-preview.generated";
 
@@ -22,6 +22,9 @@ export function createSamplePreviewSource(): SourceBundleV1 {
       max: Math.max(...values),
     },
     markings: SAMPLE_PREVIEW.markings as unknown as MarkingFeature[],
+    // Present once the lake bathymetry archive has been provisioned and the
+    // fixture recaptured; absent fixtures simply preview flat water.
+    ...("waterAreas" in SAMPLE_PREVIEW ? { waterAreas: SAMPLE_PREVIEW.waterAreas as unknown as WaterAreaV1[] } : {}),
     vectorStatus: "available",
     datasetVersion: "mapzen-terrarium+protomaps-20260819-z12-preview-v1",
     sourceKind: "preview",

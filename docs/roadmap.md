@@ -16,7 +16,7 @@
 
 ## Next releases
 
-1. Add ocean bathymetry from GEBCO and user-uploaded DEM support for inland lakes where trustworthy depth data is unavailable.
+1. Add surveyed lake bathymetry (NOAA Great Lakes first) ahead of the modeled GLOBathy basins, and user-uploaded DEM support where neither has trustworthy depth. Ocean bathymetry already arrives with the Mapzen terrain tiles.
 2. Add custom SVG crop boundaries, DXF export, general translated/rotated sheet nesting, and multi-panel tabletop splitting.
 3. Add frames, advanced joinery templates, bills of material, machine presets, and explicit kerf calibration projects.
 4. Add optional cloud project synchronization behind a portable identity adapter.

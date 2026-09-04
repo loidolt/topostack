@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import { Box, ChevronDown, Circle, Compass, Download, Layers3, Map as MapIcon, Minus, Mountain, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, Topbar, Workspace, type ThemePreference } from "@loidolt/theme-svelte";
-  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, MAX_VERTICAL_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type GeoBounds, type GeometryIRV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
-  import { boundsForProject, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
+  import { buildFabricationPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type GeoBounds, type GeometryIRV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TextFont } from "@topostack/core";
+  import { boundsForProject, combineWaterAreas, loadLakeAreas, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
   import { createSamplePreviewSource } from "../sample-preview";
@@ -58,6 +58,7 @@
   }
 
   function layerForEnabledDetail(result: GeometryIRV1, patch: Partial<ProjectConfigV1>): number | undefined {
+    if (patch.showWaterDepth) return result.waterSurfaces[0]?.layerIndex;
     const matcher = patch.showRoads ? (id: string, kind: string) => kind === "road" :
       patch.showTrails ? (id: string, kind: string) => kind === "trail" :
       patch.showTransportationLabels ? (id: string) => id.startsWith("transport-label-") :
@@ -112,7 +113,7 @@
   const totalHeight = $derived(geometry.layers.length * project.materialThicknessMm);
   // Layer count follows from map scale, relief, and material thickness, so the
   // panel previews the stack the current settings will actually produce.
-  const stackPlan = $derived(planTerrainStack(project, geometry.maxElevationM - geometry.minElevationM, geometry.bounds));
+  const stackPlan = $derived(planTerrainStack(project, geometry.landReliefM, geometry.bounds, geometry.waterDepthBelowLandM));
   const fabricationPanelCount = $derived(geometry.layers.length - geometry.fabricationNests.length);
   const exportReady = $derived(!exportBlockReason(geometry, project));
   const visibleWarnings = $derived(geometry.warnings.slice(0, 2));
@@ -137,6 +138,36 @@
     }
     return counts;
   });
+
+  /**
+   * Lakes deep enough to be worth a control, largest basin first. HydroLAKES
+   * only names waterbodies of 500 km2 and up, so the label falls back to the
+   * OSM name and then to a plain index.
+   */
+  const modeledLakes = $derived((geometry.waterSurfaces ?? [])
+    // A maximum-depth override only affects modeled basins. Surveyed beds come
+    // from the DEM, so showing the same control for them would be a no-op.
+    .filter((surface) => surface.kind === "lake" && surface.hylakId !== undefined && surface.depthSource !== "surveyed" && surface.maxDepthM !== undefined)
+    .map((surface, index) => ({
+      id: surface.id,
+      hylakId: surface.hylakId!,
+      name: surface.name ?? `Lake ${index + 1}`,
+      maxDepthM: surface.maxDepthM ?? surface.surfaceElevationM - surface.bedElevationM,
+      depthSource: surface.depthSource,
+    }))
+    .sort((left, right) => right.maxDepthM - left.maxDepthM)
+    .slice(0, 4));
+  const hasDepthOverride = $derived(Object.keys(project.waterDepthOverrides).length > 0);
+
+  function shownDepth(valueM: number): number {
+    return Math.round(displayElevation(valueM, project.units));
+  }
+
+  function setLakeDepth(hylakId: number, shown: number): Promise<void> | undefined {
+    if (!Number.isFinite(shown) || shown <= 0) return undefined;
+    const depthM = project.units === "imperial" ? shown / 3.280839895 : shown;
+    return updateFabrication({ waterDepthOverrides: { ...project.waterDepthOverrides, [String(hylakId)]: depthM } });
+  }
 
   function shownLength(valueMm: number): number {
     return Number(displayLength(valueMm, project.units).toFixed(3));
@@ -262,7 +293,12 @@
     if (from.widthMm === to.widthMm && from.heightMm === to.heightMm) return source;
     const scaleX = to.widthMm / from.widthMm;
     const scaleY = to.heightMm / from.heightMm;
-    return { ...source, markings: source.markings.map((marking) => ({ ...marking, points: marking.points.map((point) => ({ x: point.x * scaleX, y: point.y * scaleY })) })) };
+    const scalePoints = (points: Point2D[]) => points.map((point) => ({ x: point.x * scaleX, y: point.y * scaleY }));
+    return {
+      ...source,
+      markings: source.markings.map((marking) => ({ ...marking, points: scalePoints(marking.points) })),
+      ...(source.waterAreas ? { waterAreas: source.waterAreas.map((area) => ({ ...area, polygon: { outer: scalePoints(area.polygon.outer), holes: area.polygon.holes.map(scalePoints) } })) } : {}),
+    };
   }
 
   function runGeometryWorker(config: ProjectConfigV1, source: SourceBundleV1): Promise<GeometryIRV1> {
@@ -289,15 +325,29 @@
     status = "Updating map details…";
     try {
       let source = resizeSource(activeSource, sourceProject, nextProject);
-      const needsVectors = nextProject.showRoads || nextProject.showTrails || nextProject.showWater;
+      const needsVectors = nextProject.showRoads || nextProject.showTrails || nextProject.showWater || nextProject.showWaterDepth;
       if (needsVectors && source.sourceKind !== "synthetic" && source.vectorStatus !== "available") {
         try {
-          const markings = await loadVectorMarkings(source.bounds, nextProject.location.zoom, nextProject, controller.signal);
-          source = { ...source, markings, vectorStatus: "available" };
+          const vector = await loadVectorMarkings(source.bounds, nextProject.location.zoom, nextProject, controller.signal);
+          const lakes = nextProject.showWaterDepth
+            ? await loadLakeAreas(source.bounds, nextProject.location.zoom, nextProject, controller.signal).catch(() => [])
+            : [];
+          source = { ...source, markings: vector.markings, waterAreas: combineWaterAreas(lakes, vector.ocean, nextProject.minimumFeatureMm), vectorStatus: "available" };
         } catch (error) {
           if (controller.signal.aborted) throw error;
           source = { ...source, markings: source.markings.filter((marking) => marking.kind !== "road" && marking.kind !== "trail" && marking.kind !== "water"), vectorStatus: "unavailable" };
         }
+      } else if (patch.showWaterDepth && !sourceProject.showWaterDepth && source.sourceKind === "real") {
+        // A source generated while depth was off already retains its OSM ocean
+        // masks, but it deliberately skipped the optional lake archive. Fetch
+        // those lakes once when the control is enabled so the toggle takes
+        // effect immediately without requiring a full terrain regeneration.
+        const lakes = await loadLakeAreas(source.bounds, nextProject.location.zoom, nextProject, controller.signal).catch((error) => {
+          if (controller.signal.aborted) throw error;
+          return [];
+        });
+        const ocean = (source.waterAreas ?? []).filter((area) => area.kind === "ocean").map((area) => area.polygon);
+        source = { ...source, waterAreas: combineWaterAreas(lakes, ocean, nextProject.minimumFeatureMm) };
       }
       const next = await runGeometryWorker(nextProject, source);
       if (controller.signal.aborted || revision !== operationRevision) return;
@@ -362,7 +412,7 @@
       if (loaded.fallback) next.warnings.push({ code: "DATA_FALLBACK", message: "The map service was unavailable, so this preview uses deterministic sample terrain." });
       if (controller.signal.aborted || revision !== operationRevision) return;
       geometry = next; project = generationProject; activeSource = loaded.source; sourceProject = generationProject; selectedLayer = featuredLayerIndex(next); mode = "3d"; generationState = "ready";
-      const vectorUnavailable = next.vectorStatus === "unavailable" && (generationProject.showRoads || generationProject.showTrails || generationProject.showWater);
+      const vectorUnavailable = next.vectorStatus !== "available" && (generationProject.showRoads || generationProject.showTrails || generationProject.showWater || generationProject.showWaterDepth);
       status = loaded.fallback ? "Sample terrain generated · connect the map API for real elevation" : vectorUnavailable ? "Terrain ready · transportation and water unavailable" : `Real terrain ready · ${next.layers.length} layers · ${next.layers.length - next.fabricationNests.length} cut panels`;
       void showToast({ type: loaded.fallback || vectorUnavailable ? "warning" : "success", message: loaded.fallback ? "Preview generated with sample terrain" : vectorUnavailable ? "Terrain generated without roads or water" : "Terrain project ready" });
     } catch (error) {
@@ -495,6 +545,36 @@
               <Switch checked={project.showTrails} onCheckedChange={(showTrails) => void updateMapDetails({ showTrails })} aria-label="Trails"><span class="toggle-label"><Minus size={16} />Trails</span></Switch>
               <Switch checked={project.showTransportationLabels} onCheckedChange={(showTransportationLabels) => void updateMapDetails({ showTransportationLabels })} aria-label="Transportation labels"><span class="toggle-label"><Minus size={16} />Transportation labels</span></Switch>
               <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
+              <div class="toggle-control">
+                <Switch checked={project.showWaterDepth} onCheckedChange={(showWaterDepth) => void updateMapDetails({ showWaterDepth })} aria-label="Water depth"><span class="toggle-label"><Waves size={16} />Water depth</span></Switch>
+                {#if project.showWaterDepth}
+                  <div class="toggle-settings">
+                    <div class="range-field">
+                      <span class="range-field__label"><b>Depth exaggeration</b></span>
+                      <div class="range-field__row">
+                        <input type="range" aria-label="Water depth exaggeration slider" min={MIN_WATER_DEPTH_EXAGGERATION} max={MAX_WATER_DEPTH_EXAGGERATION} step="0.25" value={project.waterDepthExaggeration} oninput={(event) => void updateFabrication({ waterDepthExaggeration: Number(event.currentTarget.value) })} />
+                        <span class="number-input number-input--compact"><NumberField label="Water depth exaggeration" value={project.waterDepthExaggeration} min={MIN_WATER_DEPTH_EXAGGERATION} max={MAX_WATER_DEPTH_EXAGGERATION} step={0.25} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ waterDepthExaggeration: event.currentTarget.valueAsNumber })} onValueChange={(value) => value !== project.waterDepthExaggeration && void updateFabrication({ waterDepthExaggeration: value })} /><em>×</em></span>
+                      </div>
+                      <small><span>{MIN_WATER_DEPTH_EXAGGERATION}×</span><span>{MAX_WATER_DEPTH_EXAGGERATION}× terrain</span></small>
+                    </div>
+                    <small class="depth-note">Relative to the terrain's vertical scale, which water already follows. 1× keeps lakes and sea floor on the same scale as the hills.</small>
+                  </div>
+                {/if}
+                {#if project.showWaterDepth && modeledLakes.length}
+                  <div class="toggle-settings">
+                    <div class="subgroup-heading subgroup-heading--action">
+                      <p>Maximum depth</p>
+                      {#if hasDepthOverride}<button type="button" onclick={() => void updateFabrication({ waterDepthOverrides: {} })}>Reset</button>{/if}
+                    </div>
+                    <div class="field-stack">
+                      {#each modeledLakes as lake (lake.id)}
+                        <Field label={lake.name} class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label={`${lake.name} maximum depth`} value={shownDepth(lake.maxDepthM)} min={1} max={Math.round(displayElevation(12000, project.units))} onValueChange={(depth) => void setLakeDepth(lake.hylakId, depth)} /><em>{shownElevationUnit}</em></span>{/snippet}</Field>
+                      {/each}
+                    </div>
+                    <small class="depth-note">Modeled from GLOBathy and HydroLAKES, which prefer surveyed depths where they exist.</small>
+                  </div>
+                {/if}
+              </div>
             </div>
           </div>
 

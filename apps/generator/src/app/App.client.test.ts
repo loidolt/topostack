@@ -5,7 +5,8 @@ import { theme } from "../lib/theme";
 
 const loadTerrainMock = vi.hoisted(() => vi.fn());
 const loadVectorMarkingsMock = vi.hoisted(() => vi.fn());
-vi.mock("../data-provider", async (importOriginal) => ({ ...await importOriginal<typeof import("../data-provider")>(), loadTerrain: loadTerrainMock, loadVectorMarkings: loadVectorMarkingsMock }));
+const loadLakeAreasMock = vi.hoisted(() => vi.fn());
+vi.mock("../data-provider", async (importOriginal) => ({ ...await importOriginal<typeof import("../data-provider")>(), loadTerrain: loadTerrainMock, loadVectorMarkings: loadVectorMarkingsMock, loadLakeAreas: loadLakeAreasMock }));
 vi.mock("../storage", async (importOriginal) => ({ ...await importOriginal<typeof import("../storage")>(), loadProject: vi.fn(async () => undefined), saveProject: vi.fn(async () => undefined) }));
 vi.mock("./atomm-bridge", () => ({ connectAtomm: vi.fn(() => () => undefined) }));
 vi.mock("./ThreePreview.svelte", async () => ({ default: (await import("./TestPreview.svelte")).default }));
@@ -30,7 +31,7 @@ describe("TopoStack Svelte shell", () => {
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorageStub });
     await import("./ThreePreview.svelte");
   });
-  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); theme.preference = "system"; localStorage.removeItem("topostack-theme"); delete window.atomm; });
+  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); loadLakeAreasMock.mockReset(); theme.preference = "system"; localStorage.removeItem("topostack-theme"); delete window.atomm; });
 
   it("edits and undoes the project name and switches preview modes", async () => {
     const target = document.createElement("div");
@@ -223,11 +224,16 @@ describe("TopoStack Svelte shell", () => {
   it("fetches only vector markings when a generated source did not request them", async () => {
     const source = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const, vectorStatus: "not-requested" as const };
     loadTerrainMock.mockResolvedValue({ source, fallback: false });
-    loadVectorMarkingsMock.mockResolvedValue([{ id: "fetched-road", kind: "road", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: -80 }, { x: 100, y: -80 }] }]);
+    loadVectorMarkingsMock.mockResolvedValue({
+      markings: [{ id: "fetched-road", kind: "road", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: -80 }, { x: 100, y: -80 }] }],
+      inland: [],
+      ocean: [],
+    });
+    loadLakeAreasMock.mockResolvedValue([]);
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    for (const label of ["Roads", "Trails", "Water outlines"]) {
+    for (const label of ["Roads", "Trails", "Water outlines", "Water depth"]) {
       const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
       input.click();
       await vi.waitFor(() => expect(input.getAttribute("aria-checked")).toBe("false"));
@@ -242,5 +248,31 @@ describe("TopoStack Svelte shell", () => {
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Map details updated"));
     await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
     expect(loadTerrainMock).toHaveBeenCalledOnce();
+  });
+
+  it("fetches lake metadata when water depth is enabled after generation", async () => {
+    const projectWithoutDepth = { ...DEFAULT_PROJECT, showWaterDepth: false };
+    const source = {
+      ...createSyntheticSource(projectWithoutDepth, 32),
+      sourceKind: "real" as const,
+      vectorStatus: "available" as const,
+      waterAreas: [],
+    };
+    loadTerrainMock.mockResolvedValue({ source, fallback: false });
+    loadLakeAreasMock.mockResolvedValue([]);
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    const depth = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Water depth"]')!;
+    depth.click();
+    await vi.waitFor(() => expect(depth.getAttribute("aria-checked")).toBe("false"));
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+
+    depth.click();
+    await vi.waitFor(() => expect(loadLakeAreasMock).toHaveBeenCalledOnce());
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(depth.getAttribute("aria-checked")).toBe("true"));
   });
 });

@@ -87,4 +87,19 @@ describe("project import validation", () => {
       explodedPreview: DEFAULT_PROJECT.explodedPreview,
     });
   });
+
+  it("loads projects saved before water depth existed", () => {
+    const { showWaterDepth: _legacyShowWaterDepth, waterDepthOverrides: _legacyOverrides, waterDepthExaggeration: _legacyExaggeration, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject)).toMatchObject({
+      showWaterDepth: DEFAULT_PROJECT.showWaterDepth,
+      waterDepthOverrides: {},
+      waterDepthExaggeration: DEFAULT_PROJECT.waterDepthExaggeration,
+    });
+  });
+
+  it("drops depth overrides that are not usable depths", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, waterDepthOverrides: { "9092": 594, "1": -5, "2": "deep", "3": 99999, lake: 20 } })).toMatchObject({
+      waterDepthOverrides: { "9092": 594 },
+    });
+  });
 });

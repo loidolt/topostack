@@ -4,8 +4,13 @@
 
 - Terrain: [Mapzen Terrain Tiles](https://registry.opendata.aws/terrain-tiles/). Individual contributing datasets have their own attribution requirements.
 - Roads, trails, and water: OpenStreetMap-derived PMTiles, licensed under ODbL. Major roads, local roads, and trails are classified from the Protomaps transportation schema; rail, aerialways, ferries, piers, and aeroways are excluded. The app displays attribution and every fabrication package includes `ATTRIBUTION.txt`.
+- Lake depth: [HydroLAKES v1.0](https://www.hydrosheds.org/products/hydrolakes) polygons (**CC BY 4.0**, Messager et al. 2016) joined to [GLOBathy](https://doi.org/10.1038/s41597-022-01132-9) maximum depths (CC0, Khazaei et al. 2022), published as a second PMTiles archive at `lakes/current.pmtiles` and served from `/v1/lakes.pmtiles`. HydroLAKES is the first attribution-required source in the stack, so its notice must reach `ATTRIBUTION.txt` in every export.
+
+  Terrain tiles carry real ocean soundings but render every lake flat at its surface elevation — the Great Lakes included — so lake basins are *modeled*, not surveyed. TopoStack reproduces GLOBathy's own published method (`D = l · Dmax / L`, a proximity-to-shore pass) at model resolution rather than shipping their 16.7 GB of rasters, and fits the profile exponent to HydroLAKES `Depth_avg` so basin steepness varies per lake. GLOBathy's `Dmax_use_m` prefers a surveyed depth wherever one exists and falls back to its random forest otherwise; the sidebar exposes a per-lake override.
 - Place search: Geoapify, proxied by the Worker so its API key is never shipped to the browser. Responses are cached for 24 hours under a hashed query key.
 - Interactive reference map: OpenFreeMap. Its imagery is preview-only and never enters fabrication exports.
+
+Both PMTiles archives are built and uploaded offline: `scripts/build-lake-data.mjs` then `scripts/provision-lake-data.mjs` for lake depth (requires `tippecanoe`; the shapefile is read in-process, so GDAL is not needed), mirroring `scripts/provision-vector-data.mjs` for the OSM archive. A missing lake archive is not an outage — `/v1/lakes.pmtiles` returns 404, the client falls back, and every lake simply renders flat.
 
 The operator is responsible for keeping the Worker manifest, PMTiles snapshot, dataset version, provider terms, and attribution notices synchronized. Mapzen's per-tile `X-Imagery-Sources` value is preserved in R2 metadata and included in each project manifest.
 
