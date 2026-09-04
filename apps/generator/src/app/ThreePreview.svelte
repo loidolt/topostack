@@ -39,6 +39,12 @@
     return shape;
   }
 
+  function shapeFromRing(points: Point2D[]): THREE.Shape {
+    const shape = new THREE.Shape();
+    points.forEach((point, index) => index === 0 ? shape.moveTo(point.x, point.y) : shape.lineTo(point.x, point.y));
+    return shape;
+  }
+
   function makeWoodTexture(): THREE.CanvasTexture {
     const canvas = document.createElement("canvas"); canvas.width = 256; canvas.height = 256;
     const context = canvas.getContext("2d")!;
@@ -154,6 +160,7 @@
       const boundaryMaterial = new THREE.LineDashedMaterial({ color: 0x6f4057, linewidth: style.boundaryMm, dashSize: Math.max(style.boundaryMm * 8, 1.6), gapSize: Math.max(style.boundaryMm * 5, 1) });
       const coordinateGridMaterial = new THREE.LineDashedMaterial({ color: 0x59636e, linewidth: style.coordinateGridMm, dashSize: 0.05, gapSize: Math.max(style.coordinateGridMm * 5, 0.9) });
       const labelMaterial = new THREE.LineBasicMaterial({ color: 0x21170f, linewidth: style.annotationMm });
+      const markerFillMaterial = new THREE.MeshBasicMaterial({ color: 0x2b2119, side: THREE.DoubleSide });
       // Water reads as a pane resting over the basin rather than as another
       // sheet of stock, so it is transmissive and never casts a shadow into the
       // recess it is meant to reveal.
@@ -175,7 +182,11 @@
           addStacked(runtime!.content, mesh, layer.index, baseZ);
         });
         layer.markings.forEach((marking) => {
-          if (marking.points.length > 1) {
+          if (marking.filled && marking.points.length > 2) {
+            const marker = new THREE.Mesh(new THREE.ShapeGeometry(shapeFromRing(marking.points)), markerFillMaterial);
+            marker.renderOrder = 2;
+            addStacked(runtime!.content, marker, layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
+          } else if (marking.points.length > 1) {
             const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints(marking.points, 0));
             const material = marking.operation === "score" ? scoreMaterial : marking.transportationClass === "major-road" ? majorRoadMaterial : marking.transportationClass === "local-road" ? localRoadMaterial : marking.transportationClass === "trail" ? trailMaterial : marking.kind === "boundary" ? boundaryMaterial : marking.kind === "grid" ? coordinateGridMaterial : engraveMaterial;
             const line = new THREE.Line(lineGeometry, material);

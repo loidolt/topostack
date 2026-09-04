@@ -98,6 +98,43 @@ describe("TopoStack geometry", () => {
     expect(createSyntheticSource(DEFAULT_PROJECT, 48).markings).toEqual([]);
   });
 
+  it("projects user markers into engraving paths and validates their coordinates and symbols", () => {
+    const markers = [
+      { id: "summit", lat: DEFAULT_PROJECT.location.lat, lon: DEFAULT_PROJECT.location.lon, symbol: "pin" as const },
+      { id: "camp", lat: DEFAULT_PROJECT.location.lat + 0.001, lon: DEFAULT_PROJECT.location.lon + 0.001, symbol: "star" as const },
+      { id: "crossing", lat: DEFAULT_PROJECT.location.lat - 0.001, lon: DEFAULT_PROJECT.location.lon - 0.001, symbol: "cross" as const },
+    ];
+    const project = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, markers };
+    const result = generateGeometry(project, realSource(project));
+    const rendered = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.kind === "marker");
+    expect(rendered.length).toBeGreaterThanOrEqual(3);
+    expect(rendered.every((marking) => marking.operation === "engrave" && marking.points.length > 1)).toBe(true);
+    expect(rendered.every((marking) => marking.filled)).toBe(true);
+    expect(rendered.filter((marking) => marking.id.startsWith("map-marker-2-"))).toHaveLength(2);
+    expect(rendered.filter((marking) => marking.id.startsWith("map-marker-2-")).every((marking) => marking.points.length === 5)).toBe(true);
+    expect(engravingToSvg(result, project)).toMatch(/id="map-marker-[^"]+"[^>]+fill="#111827"/);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [{ ...markers[0]!, lat: 90 }] })).toThrow(/marker latitude/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [{ ...markers[0]!, symbol: "flag" as never }] })).toThrow(/marker symbol/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [markers[0]!, { ...markers[1]!, id: markers[0]!.id }] })).toThrow(/unique/i);
+  });
+
+  it("projects custom trails and boundaries independently of built-in map-detail toggles", () => {
+    const center = DEFAULT_PROJECT.location;
+    const customLines = [
+      { id: "approach", kind: "trail" as const, points: [{ lat: center.lat, lon: center.lon - 0.004 }, { lat: center.lat, lon: center.lon + 0.004 }] },
+      { id: "district", kind: "boundary" as const, points: [{ lat: center.lat - 0.003, lon: center.lon }, { lat: center.lat + 0.003, lon: center.lon }] },
+    ];
+    const project = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, showTrails: false, showBoundaries: false, customLines };
+    const result = generateGeometry(project, realSource(project));
+    const rendered = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("custom-data-line-"));
+    expect(rendered.some((marking) => marking.kind === "trail" && marking.transportationClass === "trail")).toBe(true);
+    expect(rendered.some((marking) => marking.kind === "boundary")).toBe(true);
+    expect(engravingToSvg(result, project)).toContain("custom-data-line-");
+    expect(() => validateProject({ ...DEFAULT_PROJECT, customLines: [{ ...customLines[0]!, points: [customLines[0]!.points[0]!] }] })).toThrow(/at least two points/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, customLines: [{ ...customLines[0]!, kind: "river" as never }] })).toThrow(/trail or boundary/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, customLines: [{ ...customLines[0]!, points: [{ lat: 90, lon: 0 }, customLines[0]!.points[1]!] }] })).toThrow(/latitude/i);
+  });
+
   it("generates nested physical layers from a deterministic elevation grid", () => {
     const source = createSyntheticSource(DEFAULT_PROJECT, 48);
     const result = generateGeometry(DEFAULT_PROJECT, source);

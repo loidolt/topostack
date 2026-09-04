@@ -15,10 +15,11 @@ import {
   signedArea,
 } from "./geometry2d.js";
 import { placeElevationLabelStack, placeLabel, placeLinearLabel } from "./label-placement.js";
+import { geoPointToMapPoint, markerSymbolPaths } from "./markers.js";
 import { offsetClosedRing } from "./offset.js";
 import { northArrowFootprint, northArrowMarkings } from "./north-arrow.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
-import { MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, MAX_WATER_DEPTH_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES, SEA_LEVEL_M } from "./types.js";
+import { CUSTOM_LINE_KINDS, MAP_MARKER_SIZE_MM, MARKER_SYMBOLS, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, MAX_WATER_DEPTH_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES, SEA_LEVEL_M } from "./types.js";
 import { carveWaterDepth, clampCarveToLadder } from "./water.js";
 import type {
   ElevationGrid,
@@ -743,7 +744,18 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 
   const transportationLabels = new Map<string, Array<{ layer: LayerIR; paths: Point2D[][]; transportationClass: TransportationClass; excludedPolygons: Polygon2D[] }>>();
   const baseLayer = layers[0];
-  const mapMarkings = config.showCoordinateGrid ? [...source.markings, ...coordinateGridMarkings(config, source.bounds, modelGrid)] : source.markings;
+  const customLineMarkings: MarkingFeature[] = config.customLines.map((line, index) => ({
+    id: `custom-data-line-${index}`,
+    kind: line.kind,
+    operation: "engrave",
+    points: line.points.map((point) => geoPointToMapPoint(point.lat, point.lon, source.bounds, config.widthMm, config.heightMm)),
+    ...(line.kind === "trail" ? { transportationClass: "trail" as const } : {}),
+  }));
+  const mapMarkings = [
+    ...source.markings,
+    ...customLineMarkings,
+    ...(config.showCoordinateGrid ? coordinateGridMarkings(config, source.bounds, modelGrid) : []),
+  ];
   const sourceIdCounts = new Map<string, number>();
   mapMarkings.forEach((feature) => sourceIdCounts.set(feature.id, (sourceIdCounts.get(feature.id) ?? 0) + 1));
   const sourceIdOccurrences = new Map<string, number>();
@@ -752,7 +764,9 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     sourceIdOccurrences.set(feature.id, sourceOccurrence + 1);
     const featureId = (sourceIdCounts.get(feature.id) ?? 0) > 1 ? `${feature.id}-source-${sourceOccurrence}` : feature.id;
     const transportationClass = feature.transportationClass ?? (feature.kind === "trail" ? "trail" : feature.kind === "road" ? "local-road" : undefined);
-    const enabled = (transportationClass === "trail" && config.showTrails) ||
+    const isCustomData = feature.id.startsWith("custom-data-line-");
+    const enabled = isCustomData ||
+      (transportationClass === "trail" && config.showTrails) ||
       (transportationClass !== undefined && transportationClass !== "trail" && config.showRoads) ||
       (feature.kind === "water" && config.showWater) ||
       (feature.kind === "boundary" && config.showBoundaries) ||
@@ -829,6 +843,27 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
         points,
       }));
     });
+  });
+
+  // Markers are geographic annotations rather than fetched vector data. Place
+  // each one on the terrain sheet under its coordinate, or on the single face
+  // for a flat engraving, and clip the symbol to the printable surface.
+  config.markers.forEach((marker, markerIndex) => {
+    if (marker.lon < source.bounds.west || marker.lon > source.bounds.east || marker.lat < source.bounds.south || marker.lat > source.bounds.north) return;
+    const center = geoPointToMapPoint(marker.lat, marker.lon, source.bounds, config.widthMm, config.heightMm);
+    const layer = flatEngraving ? baseLayer : layers[layerForElevation(sampleElevation(modelGrid, center, config), thresholds)];
+    if (!layer || !layer.polygons.some((polygon) => pointInPolygon(center, polygon))) return;
+    markerSymbolPaths(marker.symbol, center, MAP_MARKER_SIZE_MM)
+      .filter((_, pathIndex) => marker.symbol !== "pin" || pathIndex === 0)
+      .forEach((path, pathIndex) => {
+        clipPolyline(path, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
+          id: `map-marker-${markerIndex}-${pathIndex}-${clipIndex}`,
+          operation: "engrave",
+          kind: "marker",
+          points,
+          filled: true,
+        }));
+      });
   });
 
   if (baseLayer && config.showNorthArrow) {
@@ -970,6 +1005,8 @@ export function validateProject(config: ProjectConfigV1): void {
   if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");
   if (!config.lineStyle || typeof config.lineStyle !== "object") throw new Error("Line style is required.");
   if (!config.northArrowPlacement || typeof config.northArrowPlacement !== "object" || !config.northArrowPlacement.offset || typeof config.northArrowPlacement.offset !== "object") throw new Error("North arrow placement is required.");
+  if (!Array.isArray(config.markers)) throw new Error("Project markers must be a list.");
+  if (!Array.isArray(config.customLines)) throw new Error("Custom lines must be a list.");
   for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showBoundaries: config.showBoundaries, showCoordinateGrid: config.showCoordinateGrid, showWaterDepth: config.showWaterDepth, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar, showEngravingBorder: config.showEngravingBorder })) {
     if (typeof value !== "boolean") throw new Error(`${label} must be true or false.`);
   }
@@ -980,6 +1017,27 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
+  const markerIds = new Set<string>();
+  for (const marker of config.markers) {
+    if (!marker || typeof marker !== "object" || typeof marker.id !== "string" || !marker.id.trim() || marker.id.length > 120) throw new Error("Each marker must have a valid id.");
+    if (markerIds.has(marker.id)) throw new Error("Marker ids must be unique.");
+    markerIds.add(marker.id);
+    if (!Number.isFinite(marker.lat) || marker.lat < -85.0511 || marker.lat > 85.0511) throw new Error("Marker latitude must be within Web Mercator limits.");
+    if (!Number.isFinite(marker.lon) || marker.lon < -180 || marker.lon > 180) throw new Error("Marker longitude must be between -180 and 180 degrees.");
+    if (!MARKER_SYMBOLS.includes(marker.symbol)) throw new Error("Marker symbol is invalid.");
+  }
+  const customLineIds = new Set<string>();
+  for (const line of config.customLines) {
+    if (!line || typeof line !== "object" || typeof line.id !== "string" || !line.id.trim() || line.id.length > 120) throw new Error("Each custom line must have a valid id.");
+    if (customLineIds.has(line.id)) throw new Error("Custom line ids must be unique.");
+    customLineIds.add(line.id);
+    if (!CUSTOM_LINE_KINDS.includes(line.kind)) throw new Error("Custom line type must be trail or boundary.");
+    if (!Array.isArray(line.points) || line.points.length < 2) throw new Error("Each custom line must contain at least two points.");
+    for (const point of line.points) {
+      if (!point || typeof point !== "object" || !Number.isFinite(point.lat) || point.lat < -85.0511 || point.lat > 85.0511) throw new Error("Custom line latitude must be within Web Mercator limits.");
+      if (!Number.isFinite(point.lon) || point.lon < -180 || point.lon > 180) throw new Error("Custom line longitude must be between -180 and 180 degrees.");
+    }
+  }
   const lineWidths = [config.lineStyle.contourMm, config.lineStyle.indexContourMm, config.lineStyle.majorRoadMm, config.lineStyle.localRoadMm, config.lineStyle.trailMm, config.lineStyle.waterMm, config.lineStyle.boundaryMm, config.lineStyle.coordinateGridMm, config.lineStyle.annotationMm, config.lineStyle.borderMm];
   if (![config.widthMm, config.heightMm, config.verticalExaggeration, config.materialThicknessMm, config.engravingContourCount, config.engravingIndexInterval, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y, ...lineWidths].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (lineWidths.some((width) => width < 0.05 || width > 1.5)) throw new Error("Line widths must be between 0.05 and 1.5 mm.");

@@ -6,7 +6,24 @@ export type UnitSystem = "metric" | "imperial";
 export type TextFont = "technical" | "rounded" | "stencil";
 export type TransportationClass = "major-road" | "local-road" | "trail";
 export type NorthArrowStyle = "minimal" | "classic" | "mariner";
+export type MarkerSymbol = "pin" | "circle" | "triangle" | "star" | "cross";
+export type CustomLineKind = "trail" | "boundary";
 export type NorthArrowAnchor = "top-left" | "top" | "top-right" | "left" | "center" | "right" | "bottom-left" | "bottom" | "bottom-right";
+
+export interface MapMarkerV1 extends GeoPoint {
+  id: string;
+  symbol: MarkerSymbol;
+}
+
+export const MARKER_SYMBOLS: readonly MarkerSymbol[] = ["pin", "circle", "triangle", "star", "cross"];
+export const MAP_MARKER_SIZE_MM = 8;
+export const CUSTOM_LINE_KINDS: readonly CustomLineKind[] = ["trail", "boundary"];
+
+export interface CustomLineFeatureV1 {
+  id: string;
+  kind: CustomLineKind;
+  points: GeoPoint[];
+}
 
 export interface NorthArrowPlacementV1 {
   anchor: NorthArrowAnchor;
@@ -176,6 +193,10 @@ export interface ProjectConfigV1 {
   northArrowSizeMm: number;
   northArrowPlacement: NorthArrowPlacementV1;
   showScaleBar: boolean;
+  /** User-placed symbols, projected from geographic coordinates onto the artwork. */
+  markers: MapMarkerV1[];
+  /** User-authored geographic paths, independent of fetched map-detail toggles. */
+  customLines: CustomLineFeatureV1[];
   explodedPreview: number;
 }
 
@@ -195,7 +216,7 @@ export interface SourceAttribution {
 
 export interface MarkingFeature {
   id: string;
-  kind: "road" | "trail" | "water" | "boundary" | "grid" | "contour" | "label" | "guide";
+  kind: "road" | "trail" | "water" | "boundary" | "grid" | "contour" | "label" | "guide" | "marker";
   operation: Exclude<Operation, "cut">;
   points: Point2D[];
   label?: string;
@@ -293,6 +314,8 @@ export interface OperationPath {
   labelRotationRad?: number;
   textStyle?: TextStyleV1;
   transportationClass?: TransportationClass;
+  /** Closed engraving paths that should render as solid marker artwork. */
+  filled?: boolean;
 }
 
 export interface LayerIR {
@@ -409,5 +432,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   northArrowSizeMm: 24,
   northArrowPlacement: { anchor: "bottom-right", offset: { x: 0, y: 0 } },
   showScaleBar: true,
+  markers: [],
+  customLines: [],
   explodedPreview: 0.35,
 };

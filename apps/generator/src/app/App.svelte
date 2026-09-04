@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Box, ChevronDown, Circle, Compass, Download, Grid3X3, Layers3, Map as MapIcon, Minus, Mountain, PenTool, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
+  import { Box, ChevronDown, Circle, Compass, Download, Grid3X3, Layers3, Map as MapIcon, MapPin, Minus, Mountain, PenTool, Plus, Route, Search, Sparkles, Square, Trash2, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, ThemeToggle, Topbar, Workspace } from "@loidolt/theme-svelte";
-  import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type GeoBounds, type GeometryIRV1, type LineStyleV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TextFont, type TrailPattern } from "@topostack/core";
+  import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, markerSymbolPaths, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type CustomLineFeatureV1, type CustomLineKind, type GeoBounds, type GeoPoint, type GeometryIRV1, type LineStyleV1, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TextFont, type TrailPattern } from "@topostack/core";
   import { boundsForProject, combineWaterAreas, loadLakeAreas, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
@@ -16,8 +16,8 @@
 
   type PreviewMode = "map" | "engraving" | "2d" | "3d";
   type GenerateState = "idle" | "loading" | "ready" | "error";
-  type ConfigSectionId = "setup" | "size" | "terrain" | "details" | "linework" | "advanced";
-  const CONFIG_SECTION_IDS: ConfigSectionId[] = ["setup", "size", "terrain", "details", "linework", "advanced"];
+  type ConfigSectionId = "setup" | "size" | "terrain" | "details" | "customData" | "linework" | "advanced";
+  const CONFIG_SECTION_IDS: ConfigSectionId[] = ["setup", "size", "terrain", "details", "customData", "linework", "advanced"];
   const MENU_STATE_KEY = "topostack-menu-sections-v1";
   const OSM_ATTRIBUTION = MAP_DATA_ATTRIBUTION.find((entry) => entry.name === "OpenStreetMap contributors") ?? { name: "OpenStreetMap contributors", url: "https://www.openstreetmap.org/copyright" };
   const PRESETS: PlaceResult[] = [
@@ -45,6 +45,17 @@
     { value: "top-left", label: "Top left" }, { value: "top", label: "Top" }, { value: "top-right", label: "Top right" },
     { value: "left", label: "Left" }, { value: "center", label: "Center" }, { value: "right", label: "Right" },
     { value: "bottom-left", label: "Bottom left" }, { value: "bottom", label: "Bottom" }, { value: "bottom-right", label: "Bottom right" },
+  ];
+  const MARKER_OPTIONS: Array<{ value: MarkerSymbol; label: string; paths: Point2D[][] }> = [
+    { value: "pin", label: "Pin", paths: markerSymbolPaths("pin", { x: 0, y: 0 }, 20) },
+    { value: "circle", label: "Circle", paths: markerSymbolPaths("circle", { x: 0, y: 0 }, 20) },
+    { value: "triangle", label: "Triangle", paths: markerSymbolPaths("triangle", { x: 0, y: 0 }, 20) },
+    { value: "star", label: "Star", paths: markerSymbolPaths("star", { x: 0, y: 0 }, 20) },
+    { value: "cross", label: "Cross", paths: markerSymbolPaths("cross", { x: 0, y: 0 }, 20) },
+  ];
+  const CUSTOM_LINE_OPTIONS: Array<{ value: CustomLineKind; label: string }> = [
+    { value: "trail", label: "Trail" },
+    { value: "boundary", label: "Boundary" },
   ];
 
   function previewFor(config: ProjectConfigV1, source: SourceBundleV1): GeometryIRV1 {
@@ -102,6 +113,7 @@
     size: false,
     terrain: false,
     details: false,
+    customData: false,
     linework: false,
     advanced: false,
   });
@@ -162,18 +174,20 @@
     project.outputMode === "engraving" && project.showEngravingBorder,
   ].filter(Boolean).length);
   const detailCounts = $derived.by(() => {
-    const counts = { road: 0, trail: 0, transportationLabel: 0, water: 0, contour: project.outputMode === "engraving" ? Math.max(0, geometry.layers.length - 1) : 0, alignment: 0, elevation: 0, north: 0, scale: 0 };
+    const counts = { road: 0, trail: 0, transportationLabel: 0, water: 0, contour: project.outputMode === "engraving" ? Math.max(0, geometry.layers.length - 1) : 0, alignment: 0, elevation: 0, north: 0, scale: 0, marker: 0, customLine: 0 };
     for (const layer of geometry.layers) {
       for (const marking of layer.markings) {
         if (marking.kind === "road") counts.road += 1;
         else if (marking.kind === "trail") counts.trail += 1;
         else if (marking.kind === "water") counts.water += 1;
         else if (marking.kind === "contour") counts.contour += 1;
-        if (marking.id.startsWith("alignment-")) counts.alignment += 1;
+        if (marking.id.startsWith("custom-data-line-")) counts.customLine += 1;
+        else if (marking.id.startsWith("alignment-")) counts.alignment += 1;
         else if (marking.id.startsWith("transport-label-")) counts.transportationLabel += 1;
         else if (marking.id.startsWith("elevation-")) counts.elevation += 1;
         else if (marking.id.startsWith("north-")) counts.north += 1;
         else if (marking.id.startsWith("scale-")) counts.scale += 1;
+        else if (marking.id.startsWith("map-marker-")) counts.marker += 1;
       }
     }
     return counts;
@@ -231,6 +245,71 @@
     return updateFabrication({ lineStyle: { ...project.lineStyle, [key]: storedLength(shown) } });
   }
 
+  function addMarker(): void {
+    const marker: MapMarkerV1 = {
+      id: crypto.randomUUID(),
+      lat: project.location.lat,
+      lon: project.location.lon,
+      symbol: "pin",
+    };
+    void updateFabrication({ markers: [...project.markers, marker] });
+  }
+
+  function updateMarker(id: string, patch: Partial<MapMarkerV1>): void {
+    const current = project.markers.find((marker) => marker.id === id);
+    if (!current) return;
+    const next = { ...current, ...patch };
+    if (!Number.isFinite(next.lat) || next.lat < -85.0511 || next.lat > 85.0511 || !Number.isFinite(next.lon) || next.lon < -180 || next.lon > 180) return;
+    void updateFabrication({ markers: project.markers.map((marker) => marker.id === id ? next : marker) });
+  }
+
+  function removeMarker(id: string): void {
+    void updateFabrication({ markers: project.markers.filter((marker) => marker.id !== id) });
+  }
+
+  function addCustomLine(): void {
+    const longitudeDelta = project.location.lon > 179.998 ? -0.002 : 0.002;
+    const line: CustomLineFeatureV1 = {
+      id: crypto.randomUUID(),
+      kind: "trail",
+      points: [
+        { lat: project.location.lat, lon: project.location.lon },
+        { lat: project.location.lat, lon: Math.max(-180, Math.min(180, project.location.lon + longitudeDelta)) },
+      ],
+    };
+    void updateFabrication({ customLines: [...project.customLines, line] });
+  }
+
+  function updateCustomLine(id: string, patch: Partial<CustomLineFeatureV1>): void {
+    void updateFabrication({ customLines: project.customLines.map((line) => line.id === id ? { ...line, ...patch } : line) });
+  }
+
+  function updateCustomLinePoint(id: string, pointIndex: number, patch: Partial<GeoPoint>): void {
+    const line = project.customLines.find((item) => item.id === id);
+    const current = line?.points[pointIndex];
+    if (!line || !current) return;
+    const next = { ...current, ...patch };
+    if (!Number.isFinite(next.lat) || next.lat < -85.0511 || next.lat > 85.0511 || !Number.isFinite(next.lon) || next.lon < -180 || next.lon > 180) return;
+    updateCustomLine(id, { points: line.points.map((point, index) => index === pointIndex ? next : point) });
+  }
+
+  function addCustomLinePoint(id: string): void {
+    const line = project.customLines.find((item) => item.id === id);
+    const last = line?.points.at(-1);
+    if (!line || !last) return;
+    updateCustomLine(id, { points: [...line.points, { ...last }] });
+  }
+
+  function removeCustomLinePoint(id: string, pointIndex: number): void {
+    const line = project.customLines.find((item) => item.id === id);
+    if (!line || line.points.length <= 2) return;
+    updateCustomLine(id, { points: line.points.filter((_, index) => index !== pointIndex) });
+  }
+
+  function removeCustomLine(id: string): void {
+    void updateFabrication({ customLines: project.customLines.filter((line) => line.id !== id) });
+  }
+
   function trailPatternDash(style: LineStyleV1): string | undefined {
     if (style.trailPattern === "solid") return undefined;
     return style.trailPattern === "dotted" ? "0.1 3.2" : "6 4";
@@ -266,6 +345,7 @@
       case "size": return `${project.cropShape === "circle" ? "Circle" : "Rectangle"} · ${shownLength(project.widthMm)} × ${shownLength(project.heightMm)} ${shownLengthUnit}`;
       case "terrain": return project.outputMode === "engraving" ? `${project.engravingContourCount} contours · index every ${project.engravingIndexInterval}` : `${stackPlan.layerCount} layers · ${shownLength(project.materialThicknessMm)} ${shownLengthUnit} material`;
       case "details": return `${activeDetailCount} ${activeDetailCount === 1 ? "detail" : "details"} enabled`;
+      case "customData": return `${project.markers.length} ${project.markers.length === 1 ? "marker" : "markers"} · ${project.customLines.length} ${project.customLines.length === 1 ? "path" : "paths"}`;
       case "linework": return activeLinePreset ? `${LINE_PRESETS.find((preset) => preset.value === activeLinePreset)?.label ?? activeLinePreset} preset` : "Custom stroke widths";
       case "advanced": return project.smoothing === 1 ? "Smooth contours" : "Standard contours";
     }
@@ -458,6 +538,7 @@
 
 
   async function updateFabrication(patch: Partial<ProjectConfigV1>): Promise<void> {
+    const updatesCustomData = patch.markers !== undefined || patch.customLines !== undefined;
     const nextWidth = patch.widthMm ?? project.widthMm;
     const nextHeight = patch.heightMm ?? project.heightMm;
     const maximumNorthArrowSize = Math.min(NORTH_ARROW_MAX_SIZE_MM, Math.max(NORTH_ARROW_MIN_SIZE_MM, Math.min(nextWidth, nextHeight) * NORTH_ARROW_MAX_MAP_FRACTION));
@@ -469,7 +550,7 @@
     const revision = operationRevision;
     if (!sameMapArea(sourceProject, nextProject)) { status = `${nextProject.outputMode === "engraving" ? "Artwork" : "Cut"} size changed · generate to refresh terrain`; return; }
     const controller = new AbortController(); detailAbort = controller; detailsUpdating = true;
-    status = nextProject.outputMode === "engraving" ? "Updating engraving artwork…" : "Resizing cut geometry…";
+    status = updatesCustomData ? "Updating custom data…" : nextProject.outputMode === "engraving" ? "Updating engraving artwork…" : "Resizing cut geometry…";
     try {
       const source = resizeSource(activeSource, sourceProject, nextProject);
       const next = await runGeometryWorker(nextProject, source);
@@ -478,7 +559,7 @@
       geometry = next; activeSource = source; sourceProject = nextProject;
       if (generationState === "error") generationState = "ready";
       selectedLayer = Math.min(selectedLayer, Math.max(0, next.layers.length - 1));
-      status = source.sourceKind === "preview" ? "Real-data sample updated" : source.sourceKind === "real" ? nextProject.outputMode === "engraving" ? "Engraving artwork updated" : "Fabrication geometry updated" : "Sample preview updated · generate for real map data";
+      status = updatesCustomData ? "Custom data updated" : source.sourceKind === "preview" ? "Real-data sample updated" : source.sourceKind === "real" ? nextProject.outputMode === "engraving" ? "Engraving artwork updated" : "Fabrication geometry updated" : "Sample preview updated · generate for real map data";
     } catch (error) {
       if (controller.signal.aborted || revision !== operationRevision || (error instanceof DOMException && error.name === "AbortError")) return;
       generationState = "error";
@@ -823,9 +904,97 @@
           </div>
         </Section>
 
+        <Section class="config-section custom-data-section">
+          <button type="button" class="section-disclosure" aria-expanded={openSections.customData} aria-controls="section-custom-data" onclick={() => toggleSection("customData")}>
+            <span class="section-number">06</span>
+            <span class="section-title">Custom Data<small>{sectionSummary("customData")}</small></span>
+            <ChevronDown size={16} class={openSections.customData ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
+          <div id="section-custom-data" class="section-content" hidden={!openSections.customData}>
+            <p class="custom-data-intro">Add your own geographic annotations. Coordinates stay attached to the project and are clipped to the selected map area during engraving.</p>
+
+            <div class="marker-editor">
+              <div class="subgroup-heading subgroup-heading--action">
+                <p><MapPin size={14} />Markers <span>{project.markers.length}</span></p>
+                <button type="button" class="marker-add-button" onclick={addMarker}><Plus size={13} />Add marker</button>
+              </div>
+              {#if project.markers.length === 0}
+                <small class="marker-empty">Add a marker, enter its latitude and longitude, then choose the symbol to engrave.</small>
+              {:else}
+                <div class="marker-list">
+                  {#each project.markers as marker, index (marker.id)}
+                    <div class="marker-card">
+                      <div class="marker-card__header">
+                        <b>Marker {index + 1}</b>
+                        <button type="button" aria-label={`Remove marker ${index + 1}`} title="Remove marker" onclick={() => removeMarker(marker.id)}><Trash2 size={14} /></button>
+                      </div>
+                      <div class="field-stack marker-coordinate-fields">
+                        <Field label="Latitude" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label={`Marker ${index + 1} latitude`} value={marker.lat} min={-85.0511} max={85.0511} step={0.0001} oninput={(event) => event.currentTarget.value !== "" && updateMarker(marker.id, { lat: event.currentTarget.valueAsNumber })} onValueChange={(lat) => lat !== marker.lat && updateMarker(marker.id, { lat })} /><em>°</em></span>{/snippet}</Field>
+                        <Field label="Longitude" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label={`Marker ${index + 1} longitude`} value={marker.lon} min={-180} max={180} step={0.0001} oninput={(event) => event.currentTarget.value !== "" && updateMarker(marker.id, { lon: event.currentTarget.valueAsNumber })} onValueChange={(lon) => lon !== marker.lon && updateMarker(marker.id, { lon })} /><em>°</em></span>{/snippet}</Field>
+                      </div>
+                      <div class="marker-symbol-options" role="radiogroup" aria-label={`Marker ${index + 1} symbol`}>
+                        {#each MARKER_OPTIONS as option}
+                          <button type="button" role="radio" aria-label={option.label} title={option.label} aria-checked={marker.symbol === option.value} data-state={marker.symbol === option.value ? "on" : "off"} tabindex={marker.symbol === option.value ? 0 : -1} onclick={() => updateMarker(marker.id, { symbol: option.value })} onkeydown={navigateChoice}>
+                            <svg viewBox="-11 -11 22 22" aria-hidden="true">{#each option.paths as path}<path d={path.map((point, pathIndex) => `${pathIndex === 0 ? "M" : "L"}${point.x} ${point.y}`).join(" ")} />{/each}</svg>
+                          </button>
+                        {/each}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              <small class="marker-note">Markers outside the selected crop remain saved but are not engraved.</small>
+            </div>
+
+            <div class="custom-line-editor">
+              <div class="subgroup-heading subgroup-heading--action">
+                <p><Route size={14} />Paths <span>{project.customLines.length}</span></p>
+                <button type="button" class="marker-add-button" onclick={addCustomLine}><Plus size={13} />Add path</button>
+              </div>
+              {#if project.customLines.length === 0}
+                <small class="marker-empty">Create a trail or boundary, then define its route with as many latitude/longitude points as needed.</small>
+              {:else}
+                <div class="marker-list">
+                  {#each project.customLines as line, lineIndex (line.id)}
+                    <div class="marker-card custom-line-card">
+                      <div class="marker-card__header">
+                        <b>Path {lineIndex + 1}</b>
+                        <button type="button" aria-label={`Remove path ${lineIndex + 1}`} title="Remove path" onclick={() => removeCustomLine(line.id)}><Trash2 size={14} /></button>
+                      </div>
+                      <div class="custom-line-kind-options" role="radiogroup" aria-label={`Path ${lineIndex + 1} type`}>
+                        {#each CUSTOM_LINE_OPTIONS as option}
+                          <button type="button" role="radio" aria-checked={line.kind === option.value} data-state={line.kind === option.value ? "on" : "off"} tabindex={line.kind === option.value ? 0 : -1} onclick={() => updateCustomLine(line.id, { kind: option.value })} onkeydown={navigateChoice}>
+                            {#if option.value === "trail"}<Route size={14} />{:else}<MapIcon size={14} />{/if}{option.label}
+                          </button>
+                        {/each}
+                      </div>
+                      <div class="custom-point-list">
+                        {#each line.points as point, pointIndex}
+                          <div class="custom-point-row">
+                            <div class="custom-point-heading">
+                              <span>Point {pointIndex + 1}</span>
+                              <button type="button" aria-label={`Remove point ${pointIndex + 1} from path ${lineIndex + 1}`} title={line.points.length <= 2 ? "A path needs at least two points" : "Remove point"} disabled={line.points.length <= 2} onclick={() => removeCustomLinePoint(line.id, pointIndex)}><Trash2 size={12} /></button>
+                            </div>
+                            <div class="field-stack marker-coordinate-fields">
+                              <Field label="Latitude" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label={`Path ${lineIndex + 1} point ${pointIndex + 1} latitude`} value={point.lat} min={-85.0511} max={85.0511} step={0.0001} oninput={(event) => event.currentTarget.value !== "" && updateCustomLinePoint(line.id, pointIndex, { lat: event.currentTarget.valueAsNumber })} onValueChange={(lat) => lat !== point.lat && updateCustomLinePoint(line.id, pointIndex, { lat })} /><em>°</em></span>{/snippet}</Field>
+                              <Field label="Longitude" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label={`Path ${lineIndex + 1} point ${pointIndex + 1} longitude`} value={point.lon} min={-180} max={180} step={0.0001} oninput={(event) => event.currentTarget.value !== "" && updateCustomLinePoint(line.id, pointIndex, { lon: event.currentTarget.valueAsNumber })} onValueChange={(lon) => lon !== point.lon && updateCustomLinePoint(line.id, pointIndex, { lon })} /><em>°</em></span>{/snippet}</Field>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                      <button type="button" class="custom-point-add" onclick={() => addCustomLinePoint(line.id)}><Plus size={13} />Add point</button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              <small class="marker-note">Custom paths render even when built-in Trails or Boundaries are switched off.</small>
+            </div>
+          </div>
+        </Section>
+
         <Section class="config-section linework-section">
           <button type="button" class="section-disclosure" aria-expanded={openSections.linework} aria-controls="section-linework" onclick={() => toggleSection("linework")}>
-            <span class="section-number">06</span>
+            <span class="section-number">07</span>
             <span class="section-title">Linework<small>{sectionSummary("linework")}</small></span>
             <ChevronDown size={16} class={openSections.linework ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
           </button>
@@ -883,7 +1052,7 @@
 
         <Section class="config-section advanced-section">
           <button type="button" class="section-disclosure" aria-expanded={openSections.advanced} aria-controls="section-advanced" onclick={() => toggleSection("advanced")}>
-            <span class="section-number">07</span>
+            <span class="section-number">08</span>
             <span class="section-title">{project.outputMode === "engraving" ? "Artwork settings" : "Fabrication settings"}<small>{sectionSummary("advanced")}</small></span>
             <ChevronDown size={16} class={openSections.advanced ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
           </button>
@@ -911,7 +1080,7 @@
 
     <section class="preview-panel" class:engraving-preview-panel={project.outputMode === "engraving"}>
       <div class="preview-toolbar"><div class="ldt-toggle-group mode-switch" role="radiogroup" aria-label="Preview mode">{#each previewModeOptions as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={mode === option.value} data-state={mode === option.value ? "on" : "off"} tabindex={mode === option.value ? 0 : -1} onclick={() => { if (option.value === "2d" && selectedLayer === 0) selectedLayer = featuredLayerIndex(geometry); mode = option.value as PreviewMode; }} onkeydown={navigateChoice}>{#if option.value === "map"}<MapIcon size={15} />{:else if option.value === "engraving"}<PenTool size={15} />{:else if option.value === "2d"}<Layers3 size={15} />{:else}<Box size={15} />{/if}{option.label}</button>{/each}</div><div class="preview-readout"><span>{shownLength(project.widthMm)} × {shownLength(project.heightMm)} {shownLengthUnit}</span><span>{Math.round(displayElevation(geometry.minElevationM, project.units)).toLocaleString()}–{Math.round(displayElevation(geometry.maxElevationM, project.units)).toLocaleString()} {shownElevationUnit}</span></div></div>
-      <div class="preview-stage" aria-busy={previewBusy} data-road-markings={detailCounts.road} data-trail-markings={detailCounts.trail} data-transportation-label-markings={detailCounts.transportationLabel} data-water-markings={detailCounts.water} data-contour-markings={detailCounts.contour} data-alignment-markings={detailCounts.alignment} data-elevation-markings={detailCounts.elevation} data-north-markings={detailCounts.north} data-scale-markings={detailCounts.scale}>{#if mode === "map"}{#if MapCanvas}<MapCanvas {project} onLocationChange={(lat: number, lon: number, zoom: number, bounds: GeoBounds) => updateLocation({ lat, lon, zoom, bounds, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` })} />{:else}<div class="preview-loading">Loading map…</div>{/if}{:else if mode === "engraving"}<EngravingPreview {geometry} {project} />{:else if mode === "2d"}<TwoDPreview {geometry} {selectedLayer} />{:else if ThreePreview}<ThreePreview {geometry} exploded={project.explodedPreview} />{:else}<div class="preview-loading">Loading 3D preview…</div>{/if}{#if mode !== "map"}<div class="preview-attribution">Map data © <a href={OSM_ATTRIBUTION.url} target="_blank" rel="noreferrer">{OSM_ATTRIBUTION.name}</a></div>{/if}{#if previewBusy}<div class:preview-update-overlay={detailsUpdating && generationState !== "loading"} class="generation-overlay" role="status" aria-live="polite" style:pointer-events={detailsUpdating && generationState !== "loading" ? "none" : undefined}><div class="contour-loader"><span></span><span></span><span></span></div><strong>{previewBusyLabel}</strong><small>{status}</small></div>{/if}{#if visibleWarnings.length}<div class="warning-stack">{#each visibleWarnings as warning (`${warning.code}-${warning.message}`)}<div><span>!</span>{warning.message}</div>{/each}</div>{/if}</div>
+      <div class="preview-stage" aria-busy={previewBusy} data-road-markings={detailCounts.road} data-trail-markings={detailCounts.trail} data-transportation-label-markings={detailCounts.transportationLabel} data-water-markings={detailCounts.water} data-contour-markings={detailCounts.contour} data-alignment-markings={detailCounts.alignment} data-elevation-markings={detailCounts.elevation} data-north-markings={detailCounts.north} data-scale-markings={detailCounts.scale} data-marker-markings={detailCounts.marker} data-custom-line-markings={detailCounts.customLine}>{#if mode === "map"}{#if MapCanvas}<MapCanvas {project} onLocationChange={(lat: number, lon: number, zoom: number, bounds: GeoBounds) => updateLocation({ lat, lon, zoom, bounds, label: `${lat.toFixed(4)}, ${lon.toFixed(4)}` })} />{:else}<div class="preview-loading">Loading map…</div>{/if}{:else if mode === "engraving"}<EngravingPreview {geometry} {project} />{:else if mode === "2d"}<TwoDPreview {geometry} {selectedLayer} />{:else if ThreePreview}<ThreePreview {geometry} exploded={project.explodedPreview} />{:else}<div class="preview-loading">Loading 3D preview…</div>{/if}{#if mode !== "map"}<div class="preview-attribution">Map data © <a href={OSM_ATTRIBUTION.url} target="_blank" rel="noreferrer">{OSM_ATTRIBUTION.name}</a></div>{/if}{#if previewBusy}<div class:preview-update-overlay={detailsUpdating && generationState !== "loading"} class="generation-overlay" role="status" aria-live="polite" style:pointer-events={detailsUpdating && generationState !== "loading" ? "none" : undefined}><div class="contour-loader"><span></span><span></span><span></span></div><strong>{previewBusyLabel}</strong><small>{status}</small></div>{/if}{#if visibleWarnings.length}<div class="warning-stack">{#each visibleWarnings as warning (`${warning.code}-${warning.message}`)}<div><span>!</span>{warning.message}</div>{/each}</div>{/if}</div>
       {#if project.outputMode === "stack"}<div class="layer-dock"><div class="layer-heading"><span><Layers3 size={16} /><b>Layer {selectedLayer + 1}</b> of {geometry.layers.length}</span><strong>{layerTicks[selectedLayer]?.toLocaleString()} {shownElevationUnit}</strong></div><input class="layer-range" type="range" min="0" max={Math.max(0, geometry.layers.length - 1)} value={selectedLayer} oninput={(event) => { selectedLayer = Number(event.currentTarget.value); if (mode === "3d") mode = "2d"; }} /><div class="layer-scale"><span>{layerTicks[0]?.toLocaleString()} {shownElevationUnit}</span><span>{layerTicks[Math.floor(layerTicks.length / 2)]?.toLocaleString()} {shownElevationUnit}</span><span>{layerTicks.at(-1)?.toLocaleString()} {shownElevationUnit}</span></div>{#if mode === "3d"}<label class="explode-control"><span>Stack</span><input type="range" min="0" max="1" step="0.05" value={project.explodedPreview} oninput={(event) => updateProject({ explodedPreview: Number(event.currentTarget.value) })} /><span>Exploded</span></label>{/if}</div>{/if}
     </section>
   </Workspace>

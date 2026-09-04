@@ -4,6 +4,28 @@ import { parseProject } from "./storage";
 
 describe("project import validation", () => {
   it("accepts a valid v1 project", () => expect(parseProject(DEFAULT_PROJECT)).toMatchObject({ schemaVersion: 1, widthMm: 300 }));
+  it("restores markers and defaults legacy projects to an empty marker list", () => {
+    const markers = [
+      { id: "one", lat: 42.9, lon: -122.1, symbol: "triangle" as const },
+      { id: "two", lat: 43, lon: -122, symbol: "cross" as const },
+    ];
+    expect(parseProject({ ...DEFAULT_PROJECT, markers }).markers).toEqual(markers);
+    const { markers: _legacyMarkers, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject).markers).toEqual([]);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, markers: [{ ...markers[0], symbol: "flag" }] })).toThrow(/marker symbol/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, markers: [{ ...markers[0], lon: 200 }] })).toThrow(/marker longitude/i);
+  });
+  it("restores custom trails and boundaries and defaults legacy projects to no paths", () => {
+    const customLines = [
+      { id: "trail-1", kind: "trail" as const, points: [{ lat: 42.9, lon: -122.1 }, { lat: 43, lon: -122 }] },
+      { id: "boundary-1", kind: "boundary" as const, points: [{ lat: 42.8, lon: -122.2 }, { lat: 43.1, lon: -121.9 }] },
+    ];
+    expect(parseProject({ ...DEFAULT_PROJECT, customLines }).customLines).toEqual(customLines);
+    const { customLines: _legacyCustomLines, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject).customLines).toEqual([]);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, customLines: [{ ...customLines[0], kind: "river" }] })).toThrow(/trail or boundary/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, customLines: [{ ...customLines[0], points: [customLines[0].points[0]] }] })).toThrow(/at least two points/i);
+  });
   it("validates and restores flat engraving settings", () => {
     expect(parseProject({ ...DEFAULT_PROJECT, outputMode: "engraving", engravingContourCount: 24, engravingIndexInterval: 6, showEngravingBorder: false })).toMatchObject({
       outputMode: "engraving",

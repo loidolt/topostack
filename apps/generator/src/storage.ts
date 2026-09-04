@@ -1,5 +1,5 @@
 import { del, get, set } from "idb-keyval";
-import { DEFAULT_PROJECT, validateProject, type NorthArrowAnchor, type NorthArrowStyle, type ProjectConfigV1 } from "@topostack/core";
+import { DEFAULT_PROJECT, validateProject, type CustomLineFeatureV1, type CustomLineKind, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type ProjectConfigV1 } from "@topostack/core";
 
 const PROJECT_KEY = "topostack:project:v1";
 
@@ -33,6 +33,47 @@ function northArrowStyleValue(value: unknown): NorthArrowStyle {
 function northArrowAnchorValue(value: unknown): NorthArrowAnchor {
   if (value === "top-left" || value === "top" || value === "top-right" || value === "left" || value === "center" || value === "right" || value === "bottom-left" || value === "bottom" || value === "bottom-right") return value;
   throw new Error("North arrow anchor is invalid.");
+}
+
+function markerSymbolValue(value: unknown): MarkerSymbol {
+  if (value === "pin" || value === "circle" || value === "triangle" || value === "star" || value === "cross") return value;
+  throw new Error("Marker symbol is invalid.");
+}
+
+function markersValue(value: unknown): MapMarkerV1[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Project markers must be a list.");
+  return value.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Each marker must be an object.");
+    const marker = item as Record<string, unknown>;
+    if (typeof marker.id !== "string") throw new Error("Each marker must have an id.");
+    return { id: marker.id, lat: numberValue(marker.lat), lon: numberValue(marker.lon), symbol: markerSymbolValue(marker.symbol) };
+  });
+}
+
+function customLineKindValue(value: unknown): CustomLineKind {
+  if (value === "trail" || value === "boundary") return value;
+  throw new Error("Custom line type must be trail or boundary.");
+}
+
+function customLinesValue(value: unknown): CustomLineFeatureV1[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Custom lines must be a list.");
+  return value.map((item) => {
+    if (!item || typeof item !== "object") throw new Error("Each custom line must be an object.");
+    const line = item as Record<string, unknown>;
+    if (typeof line.id !== "string") throw new Error("Each custom line must have an id.");
+    if (!Array.isArray(line.points)) throw new Error("Each custom line must contain a point list.");
+    return {
+      id: line.id,
+      kind: customLineKindValue(line.kind),
+      points: line.points.map((point) => {
+        if (!point || typeof point !== "object") throw new Error("Each custom line point must be an object.");
+        const coordinate = point as Record<string, unknown>;
+        return { lat: numberValue(coordinate.lat), lon: numberValue(coordinate.lon) };
+      }),
+    };
+  });
 }
 
 export async function loadProject(): Promise<ProjectConfigV1 | undefined> {
@@ -131,6 +172,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
       anchor: northArrowAnchorValue(northArrowPlacementRecord.anchor),
       offset: northArrowOffsetRecord ? { x: numberValue(northArrowOffsetRecord.x), y: numberValue(northArrowOffsetRecord.y) } : { ...DEFAULT_PROJECT.northArrowPlacement.offset },
     } : { anchor: DEFAULT_PROJECT.northArrowPlacement.anchor, offset: { ...DEFAULT_PROJECT.northArrowPlacement.offset } },
+    markers: markersValue(record.markers),
+    customLines: customLinesValue(record.customLines),
     explodedPreview: record.explodedPreview === undefined ? DEFAULT_PROJECT.explodedPreview : numberValue(record.explodedPreview),
   };
   validateProject(project);

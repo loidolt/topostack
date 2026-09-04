@@ -67,7 +67,8 @@ function categoryStrokeAttributes(category: string, style: LineStyleV1): string 
 
 function markingPath(mark: LayerIR["markings"][number], offsetX: number, offsetY: number): string {
   if (mark.label && mark.points[0]) return `<path id="${escapeXml(mark.id)}" d="${labelPathData(mark.label, mark.points[0], offsetX, offsetY, mark.labelRotationRad, mark.textStyle)}"${mark.textStyle?.font === "rounded" ? ' stroke-linecap="round" stroke-linejoin="round"' : ""}/>`;
-  return mark.points.length > 1 ? `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"/>` : "";
+  const fill = mark.filled ? ` fill="${mark.operation === "score" ? SCORE : ENGRAVE}"` : "";
+  return mark.points.length > 1 ? `<path id="${escapeXml(mark.id)}" d="${pathData(mark.points, offsetX, offsetY)}"${fill}/>` : "";
 }
 
 function layerMarkingPaths(layer: LayerIR, operation: "score" | "engrave", style: LineStyleV1, offsetX = 0, offsetY = 0): string {

@@ -145,7 +145,7 @@ describe("TopoStack Svelte shell", () => {
     await tick();
 
     const sections = [...target.querySelectorAll<HTMLButtonElement>(".section-disclosure")];
-    expect(sections).toHaveLength(6);
+    expect(sections).toHaveLength(7);
     expect(sections[0]?.getAttribute("aria-expanded")).toBe("true");
     expect(sections.slice(1).every((section) => section.getAttribute("aria-expanded") === "false")).toBe(true);
     expect(target.querySelector<HTMLElement>("#section-size")?.hidden).toBe(true);
@@ -382,6 +382,49 @@ describe("TopoStack Svelte shell", () => {
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Cut layers"))!.click();
     await vi.waitFor(() => expect(target.querySelector('[data-marking-kind="grid"]')).not.toBeNull());
     expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+  });
+
+  it("adds, edits, symbolizes, and removes an arbitrary marker list", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Add marker"))!.click();
+    await vi.waitFor(() => expect(target.querySelectorAll(".marker-card")).toHaveLength(1));
+    expect(target.querySelector<HTMLInputElement>('input[aria-label="Marker 1 latitude"]')?.value).toBe(String(DEFAULT_PROJECT.location.lat));
+    expect(target.querySelector<HTMLInputElement>('input[aria-label="Marker 1 longitude"]')?.value).toBe(String(DEFAULT_PROJECT.location.lon));
+    const star = target.querySelector<HTMLButtonElement>('.marker-symbol-options button[title="Star"]')!;
+    star.click();
+    await vi.waitFor(() => expect(star.getAttribute("aria-checked")).toBe("true"));
+    await vi.waitFor(() => expect(Number(target.querySelector<HTMLElement>(".preview-stage")?.dataset.markerMarkings)).toBeGreaterThan(0));
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Remove marker 1"]')!.click();
+    await vi.waitFor(() => expect(target.querySelectorAll(".marker-card")).toHaveLength(0));
+    await vi.waitFor(() => expect(target.querySelector<HTMLElement>(".preview-stage")?.dataset.markerMarkings).toBe("0"));
+  });
+
+  it("adds custom trail and boundary paths with arbitrary coordinate points", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Add path"))!.click();
+    await vi.waitFor(() => expect(target.querySelectorAll(".custom-line-card")).toHaveLength(1));
+    expect(target.querySelectorAll<HTMLInputElement>('input[aria-label^="Path 1 point"]')).toHaveLength(4);
+    const boundary = [...target.querySelectorAll<HTMLButtonElement>('.custom-line-kind-options button[role="radio"]')].find((button) => button.textContent?.includes("Boundary"))!;
+    boundary.click();
+    await vi.waitFor(() => expect(boundary.getAttribute("aria-checked")).toBe("true"));
+    target.querySelector<HTMLButtonElement>(".custom-point-add")!.click();
+    await vi.waitFor(() => expect(target.querySelectorAll<HTMLInputElement>('input[aria-label^="Path 1 point"]')).toHaveLength(6));
+    await vi.waitFor(() => expect(Number(target.querySelector<HTMLElement>(".preview-stage")?.dataset.customLineMarkings)).toBeGreaterThan(0));
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Remove point 3 from path 1"]')!.click();
+    await vi.waitFor(() => expect(target.querySelectorAll<HTMLInputElement>('input[aria-label^="Path 1 point"]')).toHaveLength(4));
+    target.querySelector<HTMLButtonElement>('button[aria-label="Remove path 1"]')!.click();
+    await vi.waitFor(() => expect(target.querySelectorAll(".custom-line-card")).toHaveLength(0));
+    await vi.waitFor(() => expect(target.querySelector<HTMLElement>(".preview-stage")?.dataset.customLineMarkings).toBe("0"));
   });
 
   it("fetches lake metadata when water depth is enabled after generation", async () => {
