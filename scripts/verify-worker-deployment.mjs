@@ -51,7 +51,7 @@ const appHtml = await appResponse.text();
 // Structural markers from apps/generator/src/app.html rather than marketing
 // copy: the SvelteKit body attribute and the Atomm platform SDK script survive
 // copy edits, and the built entry page has no <title> element to match on.
-if (!contentType.includes("text/html") || !appHtml.includes("data-sveltekit-preload-data") || !appHtml.includes("static-res.atomm.com/scripts/js/generator-sdk/platform-sdk.js")) {
+if (!contentType.includes("text/html") || !appHtml.includes("data-sveltekit-preload-data") || !appHtml.includes("static-res.makextool.com/scripts/js/generator-sdk/platform-sdk.js")) {
   throw new Error("The public deployment did not return the TopoStack frontend.");
 }
 

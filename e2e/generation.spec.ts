@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { unzipSync } from "fflate";
 
-test("generates deterministic real terrain and downloads a fabrication SVG", async ({ page }) => {
+test("generates deterministic real terrain and downloads the complete fabrication package", async ({ page }) => {
   test.setTimeout(180_000);
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.route("**/v1/**", (route) => route.abort("internetdisconnected"));
-  await page.route("https://static-res.atomm.com/**", (route) => route.abort("internetdisconnected"));
+  await page.route("https://static-res.makextool.com/**", (route) => route.abort("internetdisconnected"));
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Build the landscape." })).toBeVisible();
@@ -13,7 +14,7 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
   // The bundled real-data preview must never be exportable: fail closed until
   // the user generates fresh terrain.
   await expect(page.getByText("Generate before export")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Download SVG" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Download files" })).toBeDisabled();
   await page.getByRole("radio", { name: /Cut layers/ }).click();
   await expect(page.locator(".layer-heading")).toContainText(/Layer \d+.*of 10/);
   await expect(page.locator('[data-marking-kind="road"]')).not.toHaveCount(0);
@@ -44,17 +45,19 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
 
   await expect(page.locator(".status-line")).toContainText("Real terrain ready", { timeout: 30_000 });
   await expect(page.getByText("Ready to export")).toBeVisible();
-  const downloadButton = page.getByRole("button", { name: "Download SVG" });
+  const downloadButton = page.getByRole("button", { name: "Download files" });
   await expect(downloadButton).toBeEnabled();
 
   const downloadPromise = page.waitForEvent("download");
   await downloadButton.click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("crater-lake-master.svg");
+  expect(download.suggestedFilename()).toBe("crater-lake-project-files.zip");
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  const svg = Buffer.concat(chunks).toString("utf8");
+  const files = unzipSync(Buffer.concat(chunks));
+  expect(Object.keys(files)).toContain("README.txt");
+  const svg = Buffer.from(files["crater-lake-master.svg"]).toString("utf8");
   expect(svg).toContain('<svg xmlns="http://www.w3.org/2000/svg"');
   expect(svg).toContain('data-operation="CUT"');
   // Layer count is derived, and this 1200 mm cut resolves into thin bands, so
@@ -66,10 +69,11 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
   expect(svg).not.toContain("<text");
   expect(svg).toContain("Crater Lake — master layout");
   expect(browserErrors).toEqual([]);
+  await expect(page.locator(".export-feedback")).toContainText("Download ready");
 });
 
 test("persists the selected color scheme across reloads", async ({ page }) => {
-  await page.route("https://static-res.atomm.com/**", (route) => route.abort("internetdisconnected"));
+  await page.route("https://static-res.makextool.com/**", (route) => route.abort("internetdisconnected"));
   await page.goto("/");
   await page.getByRole("button", { name: "Colour scheme: System" }).click();
   await page.getByRole("button", { name: "Colour scheme: Light" }).click();
@@ -82,7 +86,7 @@ test("persists the selected color scheme across reloads", async ({ page }) => {
 });
 
 test("location dialog traps focus and restores it on Escape", async ({ page }) => {
-  await page.route("https://static-res.atomm.com/**", (route) => route.abort("internetdisconnected"));
+  await page.route("https://static-res.makextool.com/**", (route) => route.abort("internetdisconnected"));
   await page.goto("/");
   const trigger = page.locator(".location-card");
   await trigger.click();

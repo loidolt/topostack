@@ -9,13 +9,15 @@
   import { createSamplePreviewSource } from "../sample-preview";
   import { exportBlockReason } from "../export-policy";
   import { loadProject, parseProject, saveProject } from "../storage";
-  import { connectAtomm } from "./atomm-bridge";
+  import { connectAtomm, type ExportUpdate } from "./atomm-bridge";
+  import { prepareProjectDownload, startBrowserDownload } from "./native-export";
   import LocationDialog from "./LocationDialog.svelte";
   import EngravingPreview from "./EngravingPreview.svelte";
   import TwoDPreview from "./TwoDPreview.svelte";
 
   type PreviewMode = "map" | "engraving" | "2d" | "3d";
   type GenerateState = "idle" | "loading" | "ready" | "error";
+  type ExportPhase = "idle" | "preparing" | "ready" | "error";
   type ConfigSectionId = "setup" | "size" | "terrain" | "details" | "customData" | "linework" | "advanced";
   const CONFIG_SECTION_IDS: ConfigSectionId[] = ["setup", "size", "terrain", "details", "customData", "linework", "advanced"];
   const MENU_STATE_KEY = "topostack-menu-sections-v1";
@@ -120,6 +122,11 @@
     advanced: false,
   });
   let atommReady = $state(false);
+  let embeddedInPlatform = $state(false);
+  let exportPhase = $state<ExportPhase>("idle");
+  let exportTitle = $state("");
+  let exportDetail = $state("");
+  let exportNoticeTimeout: number | undefined;
   let themeColor = $state("");
   let booted = $state(false);
   let history = $state.raw<ProjectConfigV1[]>([]);
@@ -155,6 +162,8 @@
   const contourInterval = $derived(geometry.landReliefM / (project.engravingContourCount + 1));
   const fabricationPanelCount = $derived(geometry.layers.length - geometry.fabricationNests.length);
   const exportReady = $derived(!exportBlockReason(geometry, project));
+  const platformExportAvailable = $derived(atommReady && embeddedInPlatform);
+  const expectedExportFileCount = $derived(project.outputMode === "engraving" ? 4 : fabricationPanelCount * 2 + 5);
   const visibleWarnings = $derived(geometry.warnings.slice(0, 2));
   const layerTicks = $derived(geometry.layers.map((layer) => Math.round(displayElevation(layer.elevationM, project.units))));
   const shownLengthUnit = $derived(lengthUnit(project.units));
@@ -353,6 +362,35 @@
     }
   }
 
+  function handleExportUpdate(update: ExportUpdate): void {
+    if (exportNoticeTimeout !== undefined) window.clearTimeout(exportNoticeTimeout);
+    exportPhase = update.phase;
+    if (update.phase === "preparing") {
+      exportTitle = update.intent === "openInStudio" ? "Preparing Studio artwork" : "Building your download";
+      exportDetail = update.intent === "openInStudio"
+        ? "Creating one editable master SVG…"
+        : `Packaging ${expectedExportFileCount} project files into one download…`;
+      status = exportTitle;
+      return;
+    }
+    if (update.phase === "ready") {
+      exportTitle = update.intent === "openInStudio" ? "Artwork ready" : "Download ready";
+      exportDetail = update.intent === "openInStudio"
+        ? "The master SVG was handed to Atomm for Studio."
+        : `${update.fileCount} ${update.fileCount === 1 ? "file" : "files"} prepared. Your browser should save them as one download.`;
+      status = update.intent === "openInStudio"
+        ? "Master SVG prepared for Studio"
+        : `Download started · ${update.fileCount} ${update.fileCount === 1 ? "file" : "files"}`;
+    } else {
+      exportTitle = "Export failed";
+      exportDetail = update.message;
+      status = update.message;
+    }
+    exportNoticeTimeout = window.setTimeout(() => {
+      exportPhase = "idle";
+      exportNoticeTimeout = undefined;
+    }, 8_000);
+  }
   onMount(() => {
     let cancelled = false;
     try {
@@ -364,13 +402,14 @@
       // A malformed preference should never prevent the editor from loading.
     }
     menuStateReady = true;
-    const disconnectAtomm = connectAtomm(() => ({ geometry, project }), () => atommReady = true);
+    embeddedInPlatform = window.parent !== window;
+    const disconnectAtomm = connectAtomm(() => ({ geometry, project }), () => atommReady = true, handleExportUpdate);
     void loadProject().then((saved) => {
       if (cancelled) return;
       if (saved) { const source = createSyntheticSource(saved); project = saved; sourceProject = saved; activeSource = source; geometry = previewFor(saved, source); selectedLayer = featuredLayerIndex(geometry); status = "Local project restored · generate to refresh terrain"; }
       booted = true;
     });
-    return () => { cancelled = true; disconnectAtomm(); generationAbort?.abort(); detailAbort?.abort(); geometryWorker?.terminate(); geometryReject?.(new DOMException("Generator closed", "AbortError")); };
+    return () => { cancelled = true; disconnectAtomm(); if (exportNoticeTimeout !== undefined) window.clearTimeout(exportNoticeTimeout); generationAbort?.abort(); detailAbort?.abort(); geometryWorker?.terminate(); geometryReject?.(new DOMException("Generator closed", "AbortError")); };
   });
 
   $effect(() => {
@@ -604,9 +643,22 @@
     return window.atomm.ui.toast(options).catch(() => undefined);
   }
 
-  function downloadMaster(): void {
-    try { const output = buildProjectPackage(geometry, project); const url = URL.createObjectURL(output.master.blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = output.master.filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 0); }
-    catch (error) { generationState = "error"; status = error instanceof Error ? error.message : "Regenerate before exporting."; }
+  async function downloadProject(): Promise<void> {
+    const reason = exportBlockReason(geometry, project);
+    if (reason) {
+      handleExportUpdate({ phase: "error", intent: "download", message: reason });
+      return;
+    }
+    handleExportUpdate({ phase: "preparing", intent: "download" });
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    try {
+      const download = await prepareProjectDownload(buildProjectPackage(geometry, project));
+      startBrowserDownload(download);
+      handleExportUpdate({ phase: "ready", intent: "download", fileCount: download.fileCount });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "TopoStack could not prepare this download.";
+      handleExportUpdate({ phase: "error", intent: "download", message });
+    }
   }
   async function importProject(file: File | undefined): Promise<void> {
     if (!file) return;
@@ -636,12 +688,25 @@
         {/snippet}
         {#snippet actions()}
           <div class="bar-meta">{#if project.outputMode === "engraving"}<span>{project.engravingContourCount} contours</span><span>1 engrave SVG</span><span>No cut paths</span>{:else}<span>{geometry.layers.length} layers</span><span>{fabricationPanelCount} cut panels</span><span>{shownLength(totalHeight)} {shownLengthUnit} tall</span>{/if}</div>
-          <div class="export-slot"><div data-atomm-export-button class:atomm-export-pending={!atommReady}></div>{#if !atommReady}<Button class="fallback-export" disabled={!exportReady} onclick={downloadMaster}><Download size={15} /> Download SVG</Button>{/if}</div>
+          <div class="export-control">
+            <div class="export-slot">
+              <div data-atomm-export-button class:atomm-export-pending={!platformExportAvailable}></div>
+              {#if !platformExportAvailable}
+                <Button class="fallback-export" disabled={!exportReady || exportPhase === "preparing"} onclick={() => void downloadProject()}><Download size={15} /> {exportPhase === "preparing" ? "Preparing…" : "Download files"}</Button>
+              {/if}
+            </div>
+            {#if exportPhase !== "idle"}
+              <div class={`export-feedback export-feedback--${exportPhase}`} role="status" aria-live="polite">
+                <span class="export-feedback-indicator" aria-hidden="true"></span>
+                <span class="export-feedback-copy"><strong>{exportTitle}</strong><small>{exportDetail}</small></span>
+              </div>
+            {/if}
+          </div>
           <ThemeToggle {theme} class="theme-toggle" />
         {/snippet}
       </Topbar>
       <ContextBar section="Terrain" title={project.location.label.split(",")[0]} detail={project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}>
-        {#snippet actions()}<span class:ready={exportReady} class:error={!exportReady}>{exportReady ? "Ready to export" : "Generate before export"}</span>{/snippet}
+        {#snippet actions()}<span class:ready={exportReady && exportPhase !== "error"} class:error={!exportReady || exportPhase === "error"}>{exportPhase === "preparing" ? "Preparing files" : exportPhase === "ready" ? "Export ready" : exportPhase === "error" ? "Export failed" : exportReady ? "Ready to export" : "Generate before export"}</span>{/snippet}
       </ContextBar>
     </div>
   {/snippet}

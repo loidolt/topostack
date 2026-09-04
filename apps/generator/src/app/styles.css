@@ -81,9 +81,67 @@ body {
   background: var(--loidolt-border);
 }
 
-.export-slot {
-  min-width: 158px;
+.export-control {
+  position: relative;
+}
+
+.export-feedback {
+  position: absolute;
+  z-index: 1100;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(300px, calc(100vw - 24px));
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  color: var(--loidolt-text);
+  background: var(--loidolt-surface);
+  border: var(--loidolt-border-width) solid var(--loidolt-border);
+  border-radius: var(--loidolt-border-radius);
+  box-shadow: var(--loidolt-shadow-popover);
+}
+
+.export-feedback-indicator {
+  width: 8px;
+  height: 8px;
+  margin-top: 3px;
+  border-radius: 50%;
+  background: var(--loidolt-accent);
+}
+
+.export-feedback--preparing .export-feedback-indicator {
+  animation: pulse 1s infinite;
+}
+
+.export-feedback--ready .export-feedback-indicator {
+  background: var(--loidolt-success);
+}
+
+.export-feedback--error .export-feedback-indicator {
+  background: var(--loidolt-danger);
+}
+
+.export-feedback-copy {
+  min-width: 0;
   display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.export-feedback-copy strong {
+  font: 600 11px var(--loidolt-font-utility);
+}
+
+.export-feedback-copy small {
+  color: var(--loidolt-text-muted);
+  font: 10px/1.4 var(--loidolt-font-utility);
+}
+
+.export-slot {
+  display: flex;
+  min-width: 158px;
   justify-content: flex-end;
 }
 

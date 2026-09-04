@@ -16,6 +16,7 @@
     "@lucide/svelte": "^1.33.0",
     "@mapbox/vector-tile": "^3.0.0",
     "@topostack/core": "*",
+    "fflate": "^0.8.3",
     "idb-keyval": "^6.2.2",
     "maplibre-gl": "^5.7.1",
     "pbf": "^5.1.2",
