@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("generates deterministic real terrain and downloads a fabrication SVG", async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(90_000);
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.route("**/v1/**", (route) => route.abort("internetdisconnected"));
@@ -28,16 +28,19 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
     ["North arrow", "data-north-markings"],
     ["Scale bar", "data-scale-markings"],
   ] as const;
+  // Component tests cover every switch transition. Keep the browser test focused
+  // on rendered output plus one representative live geometry refresh.
   for (const [label, attribute] of mapDetails) {
-    const row = page.getByRole("switch", { name: label });
-    await expect.poll(async () => Number(await preview.getAttribute(attribute))).toBeGreaterThan(0);
-    await row.click();
-    await expect(row).not.toBeChecked();
-    await expect(preview).toHaveAttribute(attribute, "0", { timeout: 15_000 });
-    await row.click();
-    await expect(row).toBeChecked();
+    await expect(page.getByRole("switch", { name: label })).toBeChecked();
     await expect.poll(async () => Number(await preview.getAttribute(attribute)), { timeout: 15_000 }).toBeGreaterThan(0);
   }
+  const roads = page.getByRole("switch", { name: "Roads" });
+  await roads.click();
+  await expect(roads).not.toBeChecked();
+  await expect(preview).toHaveAttribute("data-road-markings", "0", { timeout: 15_000 });
+  await roads.click();
+  await expect(roads).toBeChecked();
+  await expect.poll(async () => Number(await preview.getAttribute("data-road-markings")), { timeout: 15_000 }).toBeGreaterThan(0);
   const transportationLabels = page.getByRole("switch", { name: "Transportation labels" });
   await expect(transportationLabels).not.toBeChecked();
   await transportationLabels.click();
