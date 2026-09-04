@@ -508,6 +508,21 @@ describe("TopoStack geometry", () => {
     }
   });
 
+  it("keeps rivers continuous at exact terrain-layer transitions", () => {
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const [project, source] = scaledForLayers(base, gridSource(base, 64, (nx) => 750 + nx * 250), 5);
+    source.markings = [{ id: "ridge-river", kind: "water", operation: "score", points: [{ x: -90, y: 0 }, { x: 90, y: 0 }] }];
+    const result = generateGeometry(project, source);
+    const markings = result.layers.flatMap((layer) => layer.markings
+      .filter((marking) => marking.id.startsWith("ridge-river-") && marking.points.length > 1)
+      .map((marking) => ({ layerIndex: layer.index, marking })));
+    expect(new Set(markings.map(({ layerIndex }) => layerIndex))).toEqual(new Set(result.layers.map((layer) => layer.index)));
+    for (let x = -89; x <= 89; x += 1) {
+      const distance = Math.min(...markings.flatMap(({ marking }) => marking.points.slice(0, -1).map((start, index) => distanceToSegment({ x, y: 0 }, start, marking.points[index + 1]!))));
+      expect(distance).toBeLessThan(0.02);
+    }
+  });
+
   it("joins double-line major roads cleanly at forks", () => {
     const project = { ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, roadStyle: "outlined" as const, majorRoadSpacingMm: 1.2 }, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
     const source = realSource(project);

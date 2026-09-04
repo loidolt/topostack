@@ -529,9 +529,12 @@ function layerForElevation(elevation: number, thresholds: number[]): number {
   return layer;
 }
 
+function isClosedWater(feature: MarkingFeature): boolean {
+  return feature.kind === "water" && feature.points.length > 3 && Math.hypot(feature.points[0]!.x - feature.points.at(-1)!.x, feature.points[0]!.y - feature.points.at(-1)!.y) <= 1e-6;
+}
+
 function splitMarking(feature: MarkingFeature, thresholds: number[], grid: ElevationGrid, config: ProjectConfigV1): Array<{ layer: number; points: Point2D[] }> {
-  const closedWater = feature.kind === "water" && feature.points.length > 3 && Math.hypot(feature.points[0]!.x - feature.points.at(-1)!.x, feature.points[0]!.y - feature.points.at(-1)!.y) <= 1e-6;
-  if (closedWater) {
+  if (isClosedWater(feature)) {
     const elevations = feature.points.slice(0, -1).map((point) => feature.elevationM ?? sampleElevation(grid, point, config)).sort((left, right) => left - right);
     const middle = Math.floor(elevations.length / 2);
     const elevation = elevations.length % 2 === 0 ? ((elevations[middle - 1] ?? grid.min) + (elevations[middle] ?? grid.min)) / 2 : (elevations[middle] ?? grid.min);
@@ -835,6 +838,35 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
         const label = feature.label && config.showTransportationLabels ? fabricationLabel(feature.label) : undefined;
         if (label && clipped.length) transportationLabels.set(label, [...(transportationLabels.get(label) ?? []), { layer, paths: clipped, transportationClass, excludedPolygons }]);
       });
+      continue;
+    }
+    // Open waterways are draped over the exposed face of every terrain layer.
+    // Assigning them from elevations sampled only at their source vertices can
+    // skip every intermediate layer when a coarse segment crosses a contour,
+    // leaving the score line visibly short of the step edge. Clipping the full
+    // path against each exposed layer footprint makes adjacent pieces meet at
+    // the exact contour intersection, independent of source vertex spacing.
+    if (feature.kind === "water" && !isClosedWater(feature) && feature.elevationM === undefined) {
+      layers.forEach((layer, layerIndex) => {
+        const excludedPolygons = coveringPolygons(layers, layerIndex);
+        clipPolyline(feature.points, layer.polygons, excludedPolygons).forEach((points, clipIndex) => layer.markings.push({
+          id: `${featureId}-${layer.index}-terrain-${clipIndex}`,
+          operation: feature.operation,
+          kind: feature.kind,
+          points,
+        }));
+      });
+      // Keep the existing elevation-based label behavior while the line itself
+      // follows the exact layer contours. Explicit-elevation water features use
+      // the legacy path below because they intentionally belong to one plane.
+      if (feature.label) {
+        for (const [segmentIndex, segment] of splitMarking(feature, thresholds, modelGrid, config).entries()) {
+          const layer = layers[segment.layer];
+          if (layer && segment.points[0] && layer.polygons.some((polygon) => pointInPolygon(segment.points[0]!, polygon))) {
+            layer.markings.push({ id: `${featureId}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label, textStyle: config.textStyle });
+          }
+        }
+      }
       continue;
     }
     for (const [segmentIndex, segment] of splitMarking(feature, thresholds, modelGrid, config).entries()) {
