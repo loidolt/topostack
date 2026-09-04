@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, geoPointToMapPoint, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
+import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, geoPointToMapPoint, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, waterPatternStrokes, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
 import { placeElevationLabel, placeLinearLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
@@ -313,6 +313,33 @@ describe("TopoStack geometry", () => {
     expect(output.master.filename).toBe("crater-lake-engraving.svg");
     expect(output.files).toHaveLength(4);
     expect(await output.master.blob.text()).toBe(svg);
+  });
+
+  it("adds optional laser-ready vector patterns inside flat water areas", () => {
+    const area = {
+      outer: [{ x: -60, y: -35 }, { x: 60, y: -35 }, { x: 60, y: 35 }, { x: -60, y: 35 }, { x: -60, y: -35 }],
+      holes: [[{ x: -12, y: -8 }, { x: -12, y: 8 }, { x: 12, y: 8 }, { x: 12, y: -8 }, { x: -12, y: -8 }]],
+    };
+    const source = { ...realSource(), waterPatternAreas: [area] };
+
+    for (const waterFillPattern of ["lines", "ripples", "dots"] as const) {
+      const project: ProjectConfigV1 = { ...DEFAULT_PROJECT, outputMode: "engraving", waterFillPattern };
+      const result = generateGeometry(project, source);
+      const strokes = waterPatternStrokes(waterFillPattern, result.waterPatternAreas, project.widthMm, project.heightMm, project.lineStyle.waterMm);
+      const svg = engravingToSvg(result, project);
+
+      expect(result.waterPatternAreas).toHaveLength(1);
+      expect(strokes.length).toBeGreaterThan(0);
+      expect(svg).toContain(`id="ENGRAVE-water-fill" data-water-pattern="${waterFillPattern}"`);
+      expect(svg).toContain(`id="water-fill-${waterFillPattern}-1"`);
+      expect(svg).not.toContain("<pattern");
+      expect(svg).not.toContain("<clipPath");
+    }
+
+    const none = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, waterFillPattern: "none" as const };
+    expect(engravingToSvg(generateGeometry(none, source), none)).not.toContain("ENGRAVE-water-fill");
+    const hidden = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, showWater: false, waterFillPattern: "ripples" as const };
+    expect(engravingToSvg(generateGeometry(hidden, source), hidden)).not.toContain("ENGRAVE-water-fill");
   });
 
   it("keeps flat linework bounded and uniquely keyed when provider ids repeat", () => {

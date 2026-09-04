@@ -13,6 +13,11 @@ function unitValue(value: unknown): ProjectConfigV1["units"] {
   if (value === "metric" || value === "imperial") return value;
   throw new Error("Project units must be metric or imperial.");
 }
+function waterFillPatternValue(value: unknown): ProjectConfigV1["waterFillPattern"] {
+  if (value === undefined) return DEFAULT_PROJECT.waterFillPattern;
+  if (value === "none" || value === "lines" || value === "ripples" || value === "dots") return value;
+  throw new Error("Water fill pattern must be none, lines, ripples, or dots.");
+}
 function outputModeValue(value: unknown): ProjectConfigV1["outputMode"] {
   if (value === undefined) return DEFAULT_PROJECT.outputMode;
   if (value === "stack" || value === "engraving") return value;
@@ -164,6 +169,7 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     showTrails: record.showTrails === undefined ? booleanValue(record.showRoads, "showRoads") : booleanValue(record.showTrails, "showTrails"),
     showTransportationLabels: record.showTransportationLabels === undefined ? false : booleanValue(record.showTransportationLabels, "showTransportationLabels"),
     showWater: booleanValue(record.showWater, "showWater"),
+    waterFillPattern: waterFillPatternValue(record.waterFillPattern),
     showBoundaries: record.showBoundaries === undefined ? DEFAULT_PROJECT.showBoundaries : booleanValue(record.showBoundaries, "showBoundaries"),
     showCoordinateGrid: record.showCoordinateGrid === undefined ? DEFAULT_PROJECT.showCoordinateGrid : booleanValue(record.showCoordinateGrid, "showCoordinateGrid"),
     showWaterDepth: record.showWaterDepth === undefined ? DEFAULT_PROJECT.showWaterDepth : booleanValue(record.showWaterDepth, "showWaterDepth"),

@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Box, ChevronDown, Circle, Compass, Download, Grid3X3, Layers3, Map as MapIcon, MapPin, Minus, Mountain, PenTool, Plus, Route, Search, Sparkles, Square, Trash2, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, ThemeToggle, Topbar, Workspace } from "@loidolt/theme-svelte";
-  import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, markerSymbolPaths, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type CustomLineFeatureV1, type CustomLineKind, type GeoBounds, type GeoPoint, type GeometryIRV1, type LineStyleV1, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type RoadCap, type RoadStyle, type SourceBundleV1, type TextFont, type TrailPattern } from "@topostack/core";
+  import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, markerSymbolPaths, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type CustomLineFeatureV1, type CustomLineKind, type GeoBounds, type GeoPoint, type GeometryIRV1, type LineStyleV1, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type RoadCap, type RoadStyle, type SourceBundleV1, type TextFont, type TrailPattern, type WaterFillPattern } from "@topostack/core";
   import { boundsForProject, combineWaterAreas, loadLakeAreas, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
@@ -38,6 +38,7 @@
     { value: "balanced", label: "Balanced", description: "Clear hierarchy", style: { ...DEFAULT_PROJECT.lineStyle } },
     { value: "bold", label: "Bold", description: "Strong contrast", style: { contourMm: 0.24, indexContourMm: 0.48, majorRoadMm: 0.56, localRoadMm: 0.36, trailMm: 0.3, waterMm: 0.44, boundaryMm: 0.34, coordinateGridMm: 0.24, annotationMm: 0.28, borderMm: 0.52, trailPattern: "dashed", roadStyle: "centerline", majorRoadSpacingMm: 1, roadCap: "round" } },
   ];
+  const WATER_FILL_PATTERNS: Array<{ value: WaterFillPattern; label: string }> = [{ value: "none", label: "None" }, { value: "lines", label: "Lines" }, { value: "ripples", label: "Ripples" }, { value: "dots", label: "Dots" }];
   const TRAIL_PATTERNS: Array<{ value: TrailPattern; label: string }> = [{ value: "solid", label: "Solid" }, { value: "dashed", label: "Dashed" }, { value: "dotted", label: "Dotted" }];
   const ROAD_STYLES: Array<{ value: RoadStyle; label: string }> = [{ value: "centerline", label: "Centerline" }, { value: "outlined", label: "Outlined" }];
   const ROAD_CAPS: Array<{ value: RoadCap; label: string }> = [{ value: "round", label: "Round" }, { value: "square", label: "Square" }];
@@ -508,6 +509,7 @@
       ...source,
       markings: source.markings.map((marking) => ({ ...marking, points: scalePoints(marking.points) })),
       ...(source.waterAreas ? { waterAreas: source.waterAreas.map((area) => ({ ...area, polygon: { outer: scalePoints(area.polygon.outer), holes: area.polygon.holes.map(scalePoints) } })) } : {}),
+      ...(source.waterPatternAreas ? { waterPatternAreas: source.waterPatternAreas.map((polygon) => ({ outer: scalePoints(polygon.outer), holes: polygon.holes.map(scalePoints) })) } : {}),
     };
   }
 
@@ -543,10 +545,10 @@
           const lakes = usesWaterDepth
             ? await loadLakeAreas(source.bounds, nextProject.location.zoom, nextProject, controller.signal).catch(() => [])
             : [];
-          source = { ...source, markings: vector.markings, waterAreas: combineWaterAreas(lakes, vector.ocean, nextProject.minimumFeatureMm), vectorStatus: "available" };
+          source = { ...source, markings: vector.markings, waterAreas: combineWaterAreas(lakes, vector.ocean, nextProject.minimumFeatureMm), waterPatternAreas: [...vector.ocean, ...vector.inland], vectorStatus: "available" };
         } catch (error) {
           if (controller.signal.aborted) throw error;
-          source = { ...source, markings: source.markings.filter((marking) => marking.kind !== "road" && marking.kind !== "trail" && marking.kind !== "water" && marking.kind !== "boundary"), vectorStatus: "unavailable" };
+          source = { ...source, markings: source.markings.filter((marking) => marking.kind !== "road" && marking.kind !== "trail" && marking.kind !== "water" && marking.kind !== "boundary"), waterPatternAreas: [], vectorStatus: "unavailable" };
         }
       } else if (nextProject.outputMode === "stack" && patch.showWaterDepth && !sourceProject.showWaterDepth && source.sourceKind === "real") {
         // A source generated while depth was off already retains its OSM ocean
@@ -844,7 +846,20 @@
               <Switch checked={project.showRoads} onCheckedChange={(showRoads) => void updateMapDetails({ showRoads })} aria-label="Roads"><span class="toggle-label"><Minus size={16} />Roads</span></Switch>
               <Switch checked={project.showTrails} onCheckedChange={(showTrails) => void updateMapDetails({ showTrails })} aria-label="Trails"><span class="toggle-label"><Minus size={16} />Trails</span></Switch>
               <Switch checked={project.showTransportationLabels} onCheckedChange={(showTransportationLabels) => void updateMapDetails({ showTransportationLabels })} aria-label="Transportation labels"><span class="toggle-label"><Minus size={16} />Transportation labels</span></Switch>
-              <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
+              <div class="toggle-control">
+                <Switch checked={project.showWater} onCheckedChange={(showWater) => void updateMapDetails({ showWater })} aria-label="Water outlines"><span class="toggle-label"><Waves size={16} />Water outlines</span></Switch>
+                {#if project.outputMode === "engraving" && project.showWater}
+                  <div class="toggle-settings">
+                    <p class="subgroup-heading">Water fill</p>
+                    <div class="ldt-toggle-group water-pattern-options" role="radiogroup" aria-label="Water fill pattern">
+                      {#each WATER_FILL_PATTERNS as option}
+                        <button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.waterFillPattern === option.value} data-state={project.waterFillPattern === option.value ? "on" : "off"} tabindex={project.waterFillPattern === option.value ? 0 : -1} onclick={() => void updateFabrication({ waterFillPattern: option.value })} onkeydown={navigateChoice}>{option.label}</button>
+                      {/each}
+                    </div>
+                    <small class="depth-note">Adds fabrication-ready vector marks inside water areas. None keeps outlines only.</small>
+                  </div>
+                {/if}
+              </div>
               <Switch checked={project.showBoundaries} onCheckedChange={(showBoundaries) => void updateMapDetails({ showBoundaries })} aria-label="State and province boundaries"><span class="toggle-label"><MapIcon size={16} />State / province boundaries</span></Switch>
               <Switch checked={project.showCoordinateGrid} onCheckedChange={(showCoordinateGrid) => void updateMapDetails({ showCoordinateGrid })} aria-label="Latitude and longitude grid"><span class="toggle-label"><Grid3X3 size={16} />Latitude / longitude grid</span></Switch>
               {#if project.outputMode === "engraving"}

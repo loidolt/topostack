@@ -3,6 +3,7 @@ import { planTerrainStack, projectFingerprint } from "./geometry.js";
 import { labelPathData } from "./labels.js";
 import { offsetClosedRing } from "./offset.js";
 import { displayElevation, displayLength, elevationUnit, lengthUnit } from "./units.js";
+import { waterPatternStrokes } from "./water-pattern.js";
 import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, LineStyleV1, Point2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
@@ -214,6 +215,13 @@ function flatMarkingPaths(ir: GeometryIRV1): string {
   }).join("");
 }
 
+function engravingWaterPatternPaths(ir: GeometryIRV1, config: ProjectConfigV1): string {
+  const strokes = waterPatternStrokes(config.waterFillPattern, ir.waterPatternAreas, config.widthMm, config.heightMm, ir.lineStyle.waterMm);
+  if (!strokes.length) return "";
+  const paths = strokes.map((points, index) => `<path id="water-fill-${config.waterFillPattern}-${index + 1}" d="${pathData(points)}"/>`).join("");
+  return `<g id="ENGRAVE-water-fill" data-water-pattern="${config.waterFillPattern}" stroke-width="${format(ir.lineStyle.waterMm)}">${paths}</g>`;
+}
+
 function engravingBorder(config: ProjectConfigV1): string {
   if (!config.showEngravingBorder) return "";
   if (config.cropShape === "circle") return `<circle id="engraving-border" cx="0" cy="0" r="${format(config.widthMm / 2)}"/>`;
@@ -225,7 +233,7 @@ export function engravingToSvg(ir: GeometryIRV1, config: ProjectConfigV1): strin
   const minor = flatContourPaths(ir, config, false);
   const index = flatContourPaths(ir, config, true);
   const style = ir.lineStyle;
-  const body = `<g id="ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-linecap="round" stroke-linejoin="round"><g id="ENGRAVE-contours-minor" stroke-width="${format(style.contourMm)}">${minor}</g><g id="ENGRAVE-contours-index" stroke-width="${format(style.indexContourMm)}">${index}</g><g id="ENGRAVE-map-details" stroke-width="${format(style.annotationMm)}">${flatMarkingPaths(ir)}</g><g id="ENGRAVE-border" stroke-width="${format(style.borderMm)}">${engravingBorder(config)}</g></g>`;
+  const body = `<g id="ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-linecap="round" stroke-linejoin="round">${engravingWaterPatternPaths(ir, config)}<g id="ENGRAVE-contours-minor" stroke-width="${format(style.contourMm)}">${minor}</g><g id="ENGRAVE-contours-index" stroke-width="${format(style.indexContourMm)}">${index}</g><g id="ENGRAVE-map-details" stroke-width="${format(style.annotationMm)}">${flatMarkingPaths(ir)}</g><g id="ENGRAVE-border" stroke-width="${format(style.borderMm)}">${engravingBorder(config)}</g></g>`;
   return svgDocument(config.widthMm, config.heightMm, body, `${ir.projectName} — flat topographic engraving`);
 }
 
@@ -371,13 +379,13 @@ export function buildEngravingPackage(ir: GeometryIRV1, config: ProjectConfigV1)
   const details = [
     config.showRoads ? "roads" : "",
     config.showTrails ? "trails" : "",
-    config.showWater ? "water outlines" : "",
+    config.showWater ? `water outlines${config.waterFillPattern !== "none" ? ` with ${config.waterFillPattern} fill` : ""}` : "",
     config.showBoundaries ? "state/province boundaries" : "",
     config.showCoordinateGrid ? "latitude/longitude grid" : "",
   ].filter(Boolean);
   const roadAppearance = config.lineStyle.roadStyle === "centerline" ? "centerlines" : `outlined major roads spaced ${format(config.lineStyle.majorRoadSpacingMm)} mm`;
   const linework = `Road appearance: ${roadAppearance}, ${config.lineStyle.roadCap} endpoints. Line widths: minor contours ${format(config.lineStyle.contourMm)} mm, index contours ${format(config.lineStyle.indexContourMm)} mm, major roads ${format(config.lineStyle.majorRoadMm)} mm, local roads ${format(config.lineStyle.localRoadMm)} mm, trails ${format(config.lineStyle.trailMm)} mm (${config.lineStyle.trailPattern}), water ${format(config.lineStyle.waterMm)} mm, state/province boundaries ${format(config.lineStyle.boundaryMm)} mm (dashed), latitude/longitude grid ${format(config.lineStyle.coordinateGridMm)} mm (dotted), annotations ${format(config.lineStyle.annotationMm)} mm, border ${format(config.lineStyle.borderMm)} mm.\n`;
-  const readme = `${ir.projectName}\n\nFlat topographic engraving\nArtwork size: ${size}\nContour lines: ${config.engravingContourCount}\nIndex contour: every ${config.engravingIndexInterval} lines\n${linework}Map details: ${details.length ? details.join(", ") : "none"}\nBorder: ${config.showEngravingBorder ? "engraved" : "none"}\n\nThe SVG contains one black ENGRAVE operation group and no CUT or SCORE paths. Minor and index contours are separated into named subgroups so their line weights can be assigned independently. Verify physical dimensions, focus, power, speed, and material settings with a small test engraving before processing the final item. Terrain data is decorative and is not survey, navigation, or engineering data.\n`;
+  const readme = `${ir.projectName}\n\nFlat topographic engraving\nArtwork size: ${size}\nContour lines: ${config.engravingContourCount}\nIndex contour: every ${config.engravingIndexInterval} lines\nWater fill: ${config.showWater ? config.waterFillPattern : "none"}\n${linework}Map details: ${details.length ? details.join(", ") : "none"}\nBorder: ${config.showEngravingBorder ? "engraved" : "none"}\n\nThe SVG contains one black ENGRAVE operation group and no CUT or SCORE paths. Minor and index contours are separated into named subgroups so their line weights can be assigned independently. Verify physical dimensions, focus, power, speed, and material settings with a small test engraving before processing the final item. Terrain data is decorative and is not survey, navigation, or engineering data.\n`;
   const files: ExportFile[] = [
     master,
     { filename: `${base}-project.json`, blob: new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }) },

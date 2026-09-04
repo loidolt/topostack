@@ -69,6 +69,13 @@ describe("TopoStack Svelte shell", () => {
     expect(target.querySelector<HTMLInputElement>('input[aria-label="Contour density"]')?.value).toBe("12");
     expect(target.querySelector('button[role="switch"][aria-label="Engraved border"]')).not.toBeNull();
     expect(target.querySelector('button[role="switch"][aria-label="Water depth"]')).toBeNull();
+    const waterFill = target.querySelector<HTMLElement>('div[aria-label="Water fill pattern"]')!;
+    const noWaterFill = [...waterFill.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent === "None")!;
+    const rippleFill = [...waterFill.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent === "Ripples")!;
+    expect(noWaterFill.getAttribute("aria-checked")).toBe("true");
+    rippleFill.click();
+    await vi.waitFor(() => expect(rippleFill.getAttribute("aria-checked")).toBe("true"));
+    await vi.waitFor(() => expect(target.querySelector('[data-water-pattern="ripples"]')).not.toBeNull());
     expect(target.querySelector(".layer-dock")).toBeNull();
     expect(target.querySelector(".bar-meta")?.textContent).toContain("No cut paths");
     const viewport = target.querySelector<HTMLElement>("[data-engraving-viewport]")!;

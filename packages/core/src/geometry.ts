@@ -612,6 +612,21 @@ function coordinateGridMarkings(config: ProjectConfigV1, bounds: GeoBounds, grid
   return markings;
 }
 
+function waterPatternAreasFromShorelines(markings: MarkingFeature[]): Polygon2D[] {
+  const grouped = new Map<string, Map<number, Point2D[]>>();
+  for (const marking of markings) {
+    const match = marking.kind === "water" ? marking.id.match(/^(.*water-area-[^-]+)-shore-(\d+)/) : undefined;
+    if (!match || marking.points.length < 4) continue;
+    const rings = grouped.get(match[1]!) ?? new Map<number, Point2D[]>();
+    rings.set(Number(match[2]), marking.points);
+    grouped.set(match[1]!, rings);
+  }
+  return [...grouped.values()].flatMap((rings) => {
+    const outer = rings.get(0);
+    return outer ? [{ outer, holes: [...rings.entries()].filter(([index]) => index > 0).sort(([left], [right]) => left - right).map(([, points]) => points) }] : [];
+  });
+}
+
 export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1): GeometryIRV1 {
   validateProject(config);
   if (source.schemaVersion !== 1) throw new Error("Unsupported source-data schema version.");
@@ -739,6 +754,14 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     if (!polygons.length) return [];
     return [{ ...surface, polygons, layerIndex: layerForElevation(surface.surfaceElevationM, thresholds) }];
   });
+
+  const waterPatternAreas = flatEngraving && config.showWater && config.waterFillPattern !== "none"
+    ? (source.waterPatternAreas ?? source.waterAreas?.map((area) => area.polygon) ?? waterPatternAreasFromShorelines(source.markings)).flatMap((polygon) => clipContours(
+        [[toRing(polygon.outer), ...polygon.holes.map(toRing)]] as MultiPolygon,
+        clip,
+        config.minimumFeatureMm,
+      ))
+    : [];
 
   const fabricationNests = flatEngraving ? [] : addMaterialNests(config, layers);
 
@@ -1003,6 +1026,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     waterDepthBelowLandM: depthBelowLandM,
     layers,
     waterSurfaces,
+    waterPatternAreas,
     fabricationNests,
     warnings,
     attribution: source.attribution,
@@ -1014,6 +1038,7 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.schemaVersion !== 1) throw new Error("Unsupported project schema version.");
   if (config.units !== "metric" && config.units !== "imperial") throw new Error("Project units must be metric or imperial.");
   if (config.outputMode !== "stack" && config.outputMode !== "engraving") throw new Error("Project output mode must be stack or engraving.");
+  if (config.waterFillPattern !== "none" && config.waterFillPattern !== "lines" && config.waterFillPattern !== "ripples" && config.waterFillPattern !== "dots") throw new Error("Water fill pattern must be none, lines, ripples, or dots.");
   if (config.cropShape !== "rectangle" && config.cropShape !== "circle") throw new Error("Crop shape must be rectangle or circle.");
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
   if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");

@@ -13,6 +13,8 @@ the workflow.
 4. Add or remove roads, trails, transportation labels, lakes/rivers,
    state/province boundaries, latitude/longitude grid lines, elevation
    labels, compass, scale bar, and the engraved border.
+   Water areas can optionally use Lines, Ripples, or Dots while None preserves
+   outline-only engraving.
 5. Choose a Fine, Balanced, or Bold linework preset, then optionally customize
    the physical widths and trail pattern.
 6. Generate real terrain, inspect the exact flattened preview, and export.
@@ -37,10 +39,13 @@ without downloading another vector layer.
 The primary file is named `<project>-engraving.svg` and is 1:1 at the selected
 physical size. It contains one black `ENGRAVE` operation group and no `CUT`
 or `SCORE` groups. Named subgroups separate minor contours, index contours,
-map details, and the optional border. State/province boundaries have their own
+map details, the optional water-fill linework, and the optional border. State/province boundaries have their own
 dashed group so they remain distinguishable from transportation and contour
 lines. Latitude/longitude lines have a dedicated dotted group. Layered score features such as water
 outlines are converted to engraving paths.
+Water fills are emitted as explicit clipped vector paths rather than SVG pattern
+or clipping elements, keeping the file predictable in laser software and
+preserving islands as unfilled material.
 
 ## Linework
 

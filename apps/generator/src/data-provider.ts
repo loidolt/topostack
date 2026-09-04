@@ -709,7 +709,7 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
         : Promise.resolve([] as WaterAreaV1[]),
     ]);
     const waterAreas = combineWaterAreas(lakes, vector.ocean, config.minimumFeatureMm);
-    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, waterAreas, vectorStatus: vector.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: MAP_DATA_ATTRIBUTION } };
+    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, waterAreas, waterPatternAreas: [...vector.ocean, ...vector.inland], vectorStatus: vector.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: MAP_DATA_ATTRIBUTION } };
   } catch (error) {
     if (signal?.aborted) throw error;
     const source = createSyntheticSource({ ...config, location: { ...config.location, bounds } });

@@ -1,6 +1,7 @@
 export type CropShape = "rectangle" | "circle";
 export type OutputMode = "stack" | "engraving";
 export type TrailPattern = "solid" | "dashed" | "dotted";
+export type WaterFillPattern = "none" | "lines" | "ripples" | "dots";
 export type RoadStyle = "centerline" | "outlined";
 export type RoadCap = "round" | "square";
 export type Operation = "cut" | "score" | "engrave";
@@ -185,6 +186,8 @@ export interface ProjectConfigV1 {
   showTrails: boolean;
   showTransportationLabels: boolean;
   showWater: boolean;
+  /** Optional vector pattern engraved inside water areas in flat mode. */
+  waterFillPattern: WaterFillPattern;
   showBoundaries: boolean;
   showCoordinateGrid: boolean;
   showWaterDepth: boolean;
@@ -290,6 +293,8 @@ export interface SourceBundleV1 {
   elevation: ElevationGrid;
   markings: MarkingFeature[];
   waterAreas?: WaterAreaV1[];
+  /** OSM water polygons retained independently of depth-modeling metadata. */
+  waterPatternAreas?: Polygon2D[];
   vectorStatus: "available" | "unavailable" | "not-requested";
   datasetVersion: string;
   sourceKind: "real" | "preview" | "synthetic";
@@ -384,6 +389,8 @@ export interface GeometryIRV1 {
   waterDepthBelowLandM: number;
   layers: LayerIR[];
   waterSurfaces: WaterSurfaceIR[];
+  /** Crop-clipped water polygons used by optional flat-engraving fills. */
+  waterPatternAreas: Polygon2D[];
   fabricationNests: FabricationNest[];
   warnings: GeometryWarning[];
   attribution: SourceAttribution[];
@@ -428,6 +435,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showTrails: true,
   showTransportationLabels: false,
   showWater: true,
+  waterFillPattern: "none",
   showBoundaries: false,
   showCoordinateGrid: false,
   showWaterDepth: true,

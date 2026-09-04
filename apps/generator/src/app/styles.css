@@ -538,12 +538,38 @@ body {
   margin-top: 5px;
 }
 
-.trail-pattern-options {
+.trail-pattern-options,
+.water-pattern-options {
   width: 100%;
 }
 
 .trail-pattern-options .ldt-toggle-group__item {
   flex: 1;
+}
+
+.water-pattern-options {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.water-pattern-options .ldt-toggle-group__item {
+  width: 100%;
+  min-width: 0;
+  padding-inline: var(--panel-space-2);
+}
+
+.water-pattern-options .ldt-toggle-group__item + .ldt-toggle-group__item {
+  border-left: 0;
+}
+
+.water-pattern-options .ldt-toggle-group__item:nth-child(even) {
+  border-left: var(--loidolt-border-width) solid var(--loidolt-border);
+}
+
+.water-pattern-options .ldt-toggle-group__item:nth-child(n + 3) {
+  border-top: var(--loidolt-border-width) solid var(--loidolt-border);
 }
 
 .linework-note {
@@ -1468,6 +1494,7 @@ body {
   stroke: none;
 }
 
+.engraving-water-pattern,
 .engraving-contours,
 .engraving-details,
 .engraving-border {

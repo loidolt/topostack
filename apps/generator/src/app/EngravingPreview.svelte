@@ -2,10 +2,11 @@
   import { onDestroy, onMount } from "svelte";
   import { IconButton } from "@loidolt/theme-svelte";
   import { Minus, Plus, RotateCcw } from "@lucide/svelte";
-  import { labelPathData, type GeometryIRV1, type OperationPath, type Point2D, type ProjectConfigV1 } from "@topostack/core";
+  import { labelPathData, waterPatternStrokes, type GeometryIRV1, type OperationPath, type Point2D, type ProjectConfigV1 } from "@topostack/core";
 
   let { geometry, project }: { geometry: GeometryIRV1; project: ProjectConfigV1 } = $props();
   const contourLayers = $derived(geometry.layers.slice(1));
+  const waterPattern = $derived(waterPatternStrokes(project.waterFillPattern, geometry.waterPatternAreas, geometry.widthMm, geometry.heightMm, geometry.lineStyle.waterMm));
   const markings = $derived(geometry.layers.flatMap((layer) => layer.markings)
     .filter((marking) => !marking.id.startsWith("alignment-")));
   const MIN_ZOOM = 1;
@@ -276,6 +277,11 @@
     {:else}
       <rect x={-project.widthMm / 2} y={-project.heightMm / 2} width={project.widthMm} height={project.heightMm} class="engraving-surface" filter="url(#engraving-shadow)" />
     {/if}
+    {#if waterPattern.length}
+      <g class="engraving-water-pattern" data-water-pattern={project.waterFillPattern} stroke-width={geometry.lineStyle.waterMm}>
+        {#each waterPattern as points, index (index)}<path d={linePath(points)} />{/each}
+      </g>
+    {/if}
     <g class="engraving-contours">
       {#each contourLayers as layer}
         {#each layer.polygons as polygon}
@@ -300,5 +306,5 @@
     </span>
     </span>
   </button>
-  <div class="engraving-legend"><span><i style:--sample-width={`${Math.max(1, geometry.lineStyle.contourMm * 5)}px`}></i> Minor contour</span><span><i class="index" style:--sample-width={`${Math.max(1, geometry.lineStyle.indexContourMm * 5)}px`}></i> Index every {project.engravingIndexInterval}</span><span>{project.engravingContourCount} contours</span></div>
+  <div class="engraving-legend"><span><i style:--sample-width={`${Math.max(1, geometry.lineStyle.contourMm * 5)}px`}></i> Minor contour</span><span><i class="index" style:--sample-width={`${Math.max(1, geometry.lineStyle.indexContourMm * 5)}px`}></i> Index every {project.engravingIndexInterval}</span><span>{project.engravingContourCount} contours</span>{#if project.showWater && project.waterFillPattern !== "none"}<span>{project.waterFillPattern} water</span>{/if}</div>
 </div>
