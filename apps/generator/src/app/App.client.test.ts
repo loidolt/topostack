@@ -31,7 +31,7 @@ describe("TopoStack Svelte shell", () => {
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorageStub });
     await import("./ThreePreview.svelte");
   });
-  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); loadLakeAreasMock.mockReset(); theme.preference = "system"; localStorage.removeItem("topostack-theme"); delete window.atomm; });
+  afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); loadLakeAreasMock.mockReset(); theme.preference = "system"; localStorage.removeItem("topostack-theme"); localStorage.removeItem("topostack-menu-sections-v1"); delete window.atomm; });
 
   it("edits and undoes the project name and switches preview modes", async () => {
     const target = document.createElement("div");
@@ -139,14 +139,42 @@ describe("TopoStack Svelte shell", () => {
     expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 
+  it("collapses, expands, and remembers configuration sections", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    const sections = [...target.querySelectorAll<HTMLButtonElement>(".section-disclosure")];
+    expect(sections).toHaveLength(6);
+    expect(sections[0]?.getAttribute("aria-expanded")).toBe("true");
+    expect(sections.slice(1).every((section) => section.getAttribute("aria-expanded") === "false")).toBe(true);
+    expect(target.querySelector<HTMLElement>("#section-size")?.hidden).toBe(true);
+
+    [...target.querySelectorAll<HTMLButtonElement>(".section-tools button")].find((button) => button.textContent === "Expand all")!.click();
+    await tick();
+    expect(sections.every((section) => section.getAttribute("aria-expanded") === "true")).toBe(true);
+    expect(target.querySelector<HTMLElement>("#section-size")?.hidden).toBe(false);
+
+    sections.find((section) => section.textContent?.includes("Map details"))!.click();
+    await tick();
+    const saved = JSON.parse(localStorage.getItem("topostack-menu-sections-v1") ?? "{}") as Record<string, boolean>;
+    expect(saved.details).toBe(false);
+    expect(saved.size).toBe(true);
+  });
+
   it("applies and persists an explicit color scheme", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    const system = [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("System"))!;
-    system.focus();
-    system.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    const toggle = target.querySelector<HTMLButtonElement>('button[data-theme-preference="system"]')!;
+    expect(toggle.getAttribute("aria-label")).toBe("Colour scheme: System");
+    toggle.click();
     await tick();
+    expect(toggle.dataset.themePreference).toBe("light");
+    toggle.click();
+    await tick();
+    expect(toggle.dataset.themePreference).toBe("dark");
+    expect(toggle.getAttribute("aria-label")).toBe("Colour scheme: Dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(localStorage.getItem("topostack-theme")).toBe("dark");
     expect(document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]')).not.toBeNull();

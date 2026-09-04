@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Box, ChevronDown, Circle, Compass, Download, Grid3X3, Layers3, Map as MapIcon, Minus, Mountain, PenTool, Search, Sparkles, Square, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
-  import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, Topbar, Workspace, type ThemePreference } from "@loidolt/theme-svelte";
+  import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, ThemeToggle, Topbar, Workspace } from "@loidolt/theme-svelte";
   import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type GeoBounds, type GeometryIRV1, type LineStyleV1, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TextFont, type TrailPattern } from "@topostack/core";
   import { boundsForProject, combineWaterAreas, loadLakeAreas, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
@@ -16,6 +16,9 @@
 
   type PreviewMode = "map" | "engraving" | "2d" | "3d";
   type GenerateState = "idle" | "loading" | "ready" | "error";
+  type ConfigSectionId = "setup" | "size" | "terrain" | "details" | "linework" | "advanced";
+  const CONFIG_SECTION_IDS: ConfigSectionId[] = ["setup", "size", "terrain", "details", "linework", "advanced"];
+  const MENU_STATE_KEY = "topostack-menu-sections-v1";
   const OSM_ATTRIBUTION = MAP_DATA_ATTRIBUTION.find((entry) => entry.name === "OpenStreetMap contributors") ?? { name: "OpenStreetMap contributors", url: "https://www.openstreetmap.org/copyright" };
   const PRESETS: PlaceResult[] = [
     { id: "crater-lake", label: "Crater Lake, Oregon, USA", lat: 42.9446, lon: -122.109 },
@@ -27,7 +30,6 @@
   const SHAPE_OPTIONS = [{ value: "rectangle", label: "Rectangle" }, { value: "circle", label: "Circle" }];
   const STACK_MODE_OPTIONS = [{ value: "map", label: "Map" }, { value: "2d", label: "Cut layers" }, { value: "3d", label: "3D stack" }];
   const ENGRAVING_MODE_OPTIONS = [{ value: "map", label: "Map" }, { value: "engraving", label: "Engraving" }];
-  const THEME_OPTIONS = [{ value: "light", label: "Light" }, { value: "dark", label: "Dark" }, { value: "system", label: "System" }];
   const FONT_OPTIONS: Array<{ value: TextFont; label: string }> = [{ value: "technical", label: "Technical" }, { value: "rounded", label: "Rounded" }, { value: "stencil", label: "Stencil" }];
   const LINE_PRESETS: Array<{ value: string; label: string; description: string; style: LineStyleV1 }> = [
     { value: "fine", label: "Fine", description: "Dense detail", style: { contourMm: 0.1, indexContourMm: 0.22, majorRoadMm: 0.3, localRoadMm: 0.18, trailMm: 0.14, waterMm: 0.22, boundaryMm: 0.16, coordinateGridMm: 0.1, annotationMm: 0.14, borderMm: 0.26, trailPattern: "dotted" } },
@@ -93,8 +95,16 @@
   let detailsUpdating = $state(false);
   let selectedLayer = $state(featuredLayerIndex(defaultPreviewGeometry));
   let searchOpen = $state(false);
-  let advancedOpen = $state(false);
   let lineworkOpen = $state(false);
+  let menuStateReady = $state(false);
+  let openSections = $state<Record<ConfigSectionId, boolean>>({
+    setup: true,
+    size: false,
+    terrain: false,
+    details: false,
+    linework: false,
+    advanced: false,
+  });
   let atommReady = $state(false);
   let themeColor = $state("");
   let booted = $state(false);
@@ -137,6 +147,20 @@
   const shownElevationUnit = $derived(elevationUnit(project.units));
   const northArrowMaximumMm = $derived(Math.min(NORTH_ARROW_MAX_SIZE_MM, Math.max(NORTH_ARROW_MIN_SIZE_MM, Math.min(project.widthMm, project.heightMm) * NORTH_ARROW_MAX_MAP_FRACTION)));
   const activeLinePreset = $derived(LINE_PRESETS.find((preset) => JSON.stringify(preset.style) === JSON.stringify(project.lineStyle))?.value);
+  const activeDetailCount = $derived([
+    project.showRoads,
+    project.showTrails,
+    project.showTransportationLabels,
+    project.showWater,
+    project.showBoundaries,
+    project.showCoordinateGrid,
+    project.showElevationLabels,
+    project.showNorthArrow,
+    project.showScaleBar,
+    project.outputMode === "stack" && project.showWaterDepth,
+    project.outputMode === "stack" && project.showAlignmentGuides,
+    project.outputMode === "engraving" && project.showEngravingBorder,
+  ].filter(Boolean).length);
   const detailCounts = $derived.by(() => {
     const counts = { road: 0, trail: 0, transportationLabel: 0, water: 0, contour: project.outputMode === "engraving" ? Math.max(0, geometry.layers.length - 1) : 0, alignment: 0, elevation: 0, north: 0, scale: 0 };
     for (const layer of geometry.layers) {
@@ -228,8 +252,36 @@
     choices[next]?.click();
   }
 
+  function toggleSection(section: ConfigSectionId): void {
+    openSections = { ...openSections, [section]: !openSections[section] };
+  }
+
+  function setAllSections(open: boolean): void {
+    openSections = Object.fromEntries(CONFIG_SECTION_IDS.map((section) => [section, open])) as Record<ConfigSectionId, boolean>;
+  }
+
+  function sectionSummary(section: ConfigSectionId): string {
+    switch (section) {
+      case "setup": return `${project.outputMode === "engraving" ? "Flat engraving" : "Layered relief"} · ${project.location.label.split(",")[0]}`;
+      case "size": return `${project.cropShape === "circle" ? "Circle" : "Rectangle"} · ${shownLength(project.widthMm)} × ${shownLength(project.heightMm)} ${shownLengthUnit}`;
+      case "terrain": return project.outputMode === "engraving" ? `${project.engravingContourCount} contours · index every ${project.engravingIndexInterval}` : `${stackPlan.layerCount} layers · ${shownLength(project.materialThicknessMm)} ${shownLengthUnit} material`;
+      case "details": return `${activeDetailCount} ${activeDetailCount === 1 ? "detail" : "details"} enabled`;
+      case "linework": return activeLinePreset ? `${LINE_PRESETS.find((preset) => preset.value === activeLinePreset)?.label ?? activeLinePreset} preset` : "Custom stroke widths";
+      case "advanced": return project.smoothing === 1 ? "Smooth contours" : "Standard contours";
+    }
+  }
+
   onMount(() => {
     let cancelled = false;
+    try {
+      const savedMenuState: unknown = JSON.parse(localStorage.getItem(MENU_STATE_KEY) ?? "null");
+      if (savedMenuState && typeof savedMenuState === "object") {
+        openSections = Object.fromEntries(CONFIG_SECTION_IDS.map((section) => [section, typeof (savedMenuState as Record<string, unknown>)[section] === "boolean" ? (savedMenuState as Record<string, boolean>)[section] : openSections[section]])) as Record<ConfigSectionId, boolean>;
+      }
+    } catch {
+      // A malformed preference should never prevent the editor from loading.
+    }
+    menuStateReady = true;
     const disconnectAtomm = connectAtomm(() => ({ geometry, project }), () => atommReady = true);
     void loadProject().then((saved) => {
       if (cancelled) return;
@@ -237,6 +289,12 @@
       booted = true;
     });
     return () => { cancelled = true; disconnectAtomm(); generationAbort?.abort(); detailAbort?.abort(); geometryWorker?.terminate(); geometryReject?.(new DOMException("Generator closed", "AbortError")); };
+  });
+
+  $effect(() => {
+    const current = openSections;
+    if (!menuStateReady) return;
+    try { localStorage.setItem(MENU_STATE_KEY, JSON.stringify(current)); } catch { /* Preferences are optional. */ }
   });
 
   $effect(() => {
@@ -495,8 +553,8 @@
         {/snippet}
         {#snippet actions()}
           <div class="bar-meta">{#if project.outputMode === "engraving"}<span>{project.engravingContourCount} contours</span><span>1 engrave SVG</span><span>No cut paths</span>{:else}<span>{geometry.layers.length} layers</span><span>{fabricationPanelCount} cut panels</span><span>{shownLength(totalHeight)} {shownLengthUnit} tall</span>{/if}</div>
-          <div class="ldt-toggle-group ldt-toggle-group--sm theme-toggle" role="radiogroup" aria-label="Colour scheme">{#each THEME_OPTIONS as option}<button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={theme.preference === option.value} data-state={theme.preference === option.value ? "on" : "off"} tabindex={theme.preference === option.value ? 0 : -1} onclick={() => theme.preference = option.value as ThemePreference} onkeydown={navigateChoice}>{option.label}</button>{/each}</div>
           <div class="export-slot"><div data-atomm-export-button class:atomm-export-pending={!atommReady}></div>{#if !atommReady}<Button class="fallback-export" disabled={!exportReady} onclick={downloadMaster}><Download size={15} /> Download SVG</Button>{/if}</div>
+          <ThemeToggle {theme} class="theme-toggle" />
         {/snippet}
       </Topbar>
       <ContextBar section="Terrain" title={project.location.label.split(",")[0]} detail={project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}>
@@ -509,9 +567,23 @@
     {#snippet sidebar()}
     <Sidebar class="config-panel">
       <div class="panel-scroll">
-        <Section class="config-section">
+        <div class="panel-intro">
+          <span class="section-kicker panel-eyebrow">Project controls</span>
           <h1>{project.outputMode === "engraving" ? "Draw the landscape." : "Build the landscape."}</h1>
-          <div class="section-kicker"><span>01</span> Output</div>
+          <p>Work through the essentials, then open details only when you need them.</p>
+          <div class="section-tools" aria-label="Section display controls">
+            <button type="button" onclick={() => setAllSections(true)} disabled={CONFIG_SECTION_IDS.every((section) => openSections[section])}>Expand all</button>
+            <button type="button" onclick={() => setAllSections(false)} disabled={CONFIG_SECTION_IDS.every((section) => !openSections[section])}>Collapse all</button>
+          </div>
+        </div>
+        <Section class="config-section">
+          <button type="button" class="section-disclosure" aria-expanded={openSections.setup} aria-controls="section-setup" onclick={() => toggleSection("setup")}>
+            <span class="section-number">01–02</span>
+            <span class="section-title">Project setup<small>{sectionSummary("setup")}</small></span>
+            <ChevronDown size={16} class={openSections.setup ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
+          <div id="section-setup" class="section-content" hidden={!openSections.setup}>
+            <div class="subsection-label">Output</div>
           <div class="output-options" role="radiogroup" aria-label="Output type">
             <button type="button" role="radio" aria-checked={project.outputMode === "stack"} data-state={project.outputMode === "stack" ? "on" : "off"} onclick={() => { mode = "3d"; void updateFabrication({ outputMode: "stack" }); }}>
               <Layers3 size={18} /><span><b>Layered relief</b><small>Cut and stack material</small></span>
@@ -520,7 +592,7 @@
               <PenTool size={18} /><span><b>Flat engraving</b><small>One engrave-only graphic</small></span>
             </button>
           </div>
-          <div class="section-kicker location-kicker"><span>02</span> Location</div>
+            <div class="subsection-label location-kicker">Location</div>
           <button class="location-card" onclick={() => searchOpen = true}>
             <span class="location-icon"><MapIcon size={18} /></span>
             <span>
@@ -534,10 +606,16 @@
               <button onclick={() => choosePlace(preset)}>{preset.label.split(",")[0].replace("Mount ", "Mt. ")}</button>
             {/each}
           </div>
+          </div>
         </Section>
 
         <Section class="config-section">
-          <div class="section-kicker"><span>03</span> {project.outputMode === "engraving" ? "Artwork size" : "Cut size"}</div>
+          <button type="button" class="section-disclosure" aria-expanded={openSections.size} aria-controls="section-size" onclick={() => toggleSection("size")}>
+            <span class="section-number">03</span>
+            <span class="section-title">{project.outputMode === "engraving" ? "Artwork size" : "Cut size"}<small>{sectionSummary("size")}</small></span>
+            <ChevronDown size={16} class={openSections.size ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
+          <div id="section-size" class="section-content" hidden={!openSections.size}>
           <div class="ldt-toggle-group unit-switch" role="radiogroup" aria-label="Display units">
             {#each UNIT_OPTIONS as option}
               <button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.units === option.value} data-state={project.units === option.value ? "on" : "off"} tabindex={project.units === option.value ? 0 : -1} onclick={() => void updateFabrication({ units: option.value as ProjectConfigV1["units"] })} onkeydown={navigateChoice}>{option.label}</button>
@@ -552,10 +630,16 @@
             <Field label="Width" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Width" value={shownLength(project.widthMm)} min={project.units === "imperial" ? 0.001 : 0.01} step={project.units === "imperial" ? 0.01 : 1} oninput={(event) => { if (event.currentTarget.value !== "") { const widthMm = storedLength(event.currentTarget.valueAsNumber); void updateFabrication({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) }); } }} onValueChange={(width) => { const widthMm = storedLength(width); if (widthMm !== project.widthMm) void updateFabrication({ widthMm, ...(project.cropShape === "circle" ? { heightMm: widthMm } : {}) }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
             <Field label="Height" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Height" value={shownLength(project.heightMm)} min={project.units === "imperial" ? 0.001 : 0.01} step={project.units === "imperial" ? 0.01 : 1} disabled={project.cropShape === "circle"} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ heightMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(height) => { const heightMm = storedLength(height); if (heightMm !== project.heightMm) void updateFabrication({ heightMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
           </div>
+          </div>
         </Section>
 
         <Section class="config-section">
-          <div class="section-kicker"><span>04</span> {project.outputMode === "engraving" ? "Contour design" : "Terrain layers"}</div>
+          <button type="button" class="section-disclosure" aria-expanded={openSections.terrain} aria-controls="section-terrain" onclick={() => toggleSection("terrain")}>
+            <span class="section-number">04</span>
+            <span class="section-title">{project.outputMode === "engraving" ? "Contour design" : "Terrain layers"}<small>{sectionSummary("terrain")}</small></span>
+            <ChevronDown size={16} class={openSections.terrain ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
+          <div id="section-terrain" class="section-content" hidden={!openSections.terrain}>
           {#if project.outputMode === "engraving"}
             <div class="range-field">
               <span class="range-field__label"><b>Contour density</b></span>
@@ -595,10 +679,16 @@
             </span>
           </div>
           {/if}
+          </div>
         </Section>
 
         <Section class="config-section">
-          <div class="section-kicker"><span>05</span> Map details</div>
+          <button type="button" class="section-disclosure" aria-expanded={openSections.details} aria-controls="section-details" onclick={() => toggleSection("details")}>
+            <span class="section-number">05</span>
+            <span class="section-title">Map details<small>{sectionSummary("details")}</small></span>
+            <ChevronDown size={16} class={openSections.details ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
+          <div id="section-details" class="section-content" hidden={!openSections.details}>
 
           <div class="detail-group">
             <p class="subgroup-heading">Terrain features</p>
@@ -730,10 +820,16 @@
               <small><span>{shownTextSize(2)} {shownLengthUnit}</span><span>{shownTextSize(10)} {shownLengthUnit}</span></small>
             </div>
           </div>
+          </div>
         </Section>
 
         <Section class="config-section linework-section">
-          <div class="section-kicker"><span>06</span> Linework</div>
+          <button type="button" class="section-disclosure" aria-expanded={openSections.linework} aria-controls="section-linework" onclick={() => toggleSection("linework")}>
+            <span class="section-number">06</span>
+            <span class="section-title">Linework<small>{sectionSummary("linework")}</small></span>
+            <ChevronDown size={16} class={openSections.linework ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          </button>
+          <div id="section-linework" class="section-content" hidden={!openSections.linework}>
           <div class="line-presets" role="radiogroup" aria-label="Linework preset">
             {#each LINE_PRESETS as preset}
               <button type="button" role="radio" aria-checked={activeLinePreset === preset.value} data-state={activeLinePreset === preset.value ? "on" : "off"} onclick={() => void updateFabrication({ lineStyle: { ...preset.style } })}>
@@ -782,14 +878,16 @@
               <small class="linework-note">Stroke widths are physical SVG values. Final engraved width also depends on focus, power, speed, material, and whether your laser software treats strokes as centerlines or filled shapes.</small>
             </div>
           {/if}
+          </div>
         </Section>
 
         <Section class="config-section advanced-section">
-          <button type="button" class="section-kicker section-kicker--trigger" aria-expanded={advancedOpen} onclick={() => advancedOpen = !advancedOpen}>
-            <span>07</span> {project.outputMode === "engraving" ? "Artwork settings" : "Fabrication settings"}
-            <ChevronDown size={14} class={advancedOpen ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
+          <button type="button" class="section-disclosure" aria-expanded={openSections.advanced} aria-controls="section-advanced" onclick={() => toggleSection("advanced")}>
+            <span class="section-number">07</span>
+            <span class="section-title">{project.outputMode === "engraving" ? "Artwork settings" : "Fabrication settings"}<small>{sectionSummary("advanced")}</small></span>
+            <ChevronDown size={16} class={openSections.advanced ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
           </button>
-          {#if advancedOpen}
+          <div id="section-advanced" class="section-content" hidden={!openSections.advanced}>
             <div class="advanced-fields">
               <div class="toggle-stack">
                 {#if project.outputMode === "stack"}<Switch checked={project.optimizeMaterialUse} onCheckedChange={(optimizeMaterialUse) => void updateFabrication({ optimizeMaterialUse })} aria-label="Material-saving nests"><span class="toggle-label"><Layers3 size={16} />Material-saving nests</span></Switch>{/if}
@@ -801,7 +899,7 @@
                 <Field label="Minimum feature" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Minimum feature" value={shownLength(project.minimumFeatureMm)} min={shownLength(0.2)} max={shownLength(5)} step={project.units === "imperial" ? 0.01 : 0.1} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ minimumFeatureMm: storedLength(event.currentTarget.valueAsNumber) })} onValueChange={(value) => { const minimumFeatureMm = storedLength(value); if (minimumFeatureMm !== project.minimumFeatureMm) void updateFabrication({ minimumFeatureMm }); }} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
               </div>
             </div>
-          {/if}
+          </div>
         </Section>
       </div>
       <div class="generate-dock">

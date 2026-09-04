@@ -9,6 +9,7 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Build the landscape." })).toBeVisible();
+  await page.getByRole("button", { name: "Expand all" }).click();
   // The bundled real-data preview must never be exportable: fail closed until
   // the user generates fresh terrain.
   await expect(page.getByText("Generate before export")).toBeVisible();
@@ -64,7 +65,7 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
   await expect(page.getByLabel("Text size slider")).toHaveValue("4.5");
   await page.getByRole("spinbutton", { name: "Label X", exact: true }).fill("0");
   await page.getByRole("spinbutton", { name: "Label Y", exact: true }).fill("0");
-  await page.getByRole("button", { name: /Fabrication settings/ }).click();
+  await expect(page.getByRole("button", { name: /Fabrication settings/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("switch", { name: "Material-saving nests" })).toBeChecked();
   await expect(page.getByRole("spinbutton", { name: "Glue margin", exact: true })).toHaveValue("8");
   await page.getByRole("button", { name: /Generate terrain/ }).click();
@@ -98,10 +99,13 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
 test("persists the selected color scheme across reloads", async ({ page }) => {
   await page.route("https://static-res.atomm.com/**", (route) => route.abort("internetdisconnected"));
   await page.goto("/");
-  await page.getByRole("radio", { name: "Dark" }).click();
+  await page.getByRole("button", { name: "Colour scheme: System" }).click();
+  await page.getByRole("button", { name: "Colour scheme: Light" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("button", { name: "Colour scheme: Dark" })).toBeVisible();
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.getByRole("button", { name: "Colour scheme: Dark" })).toBeVisible();
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#161814");
 });
 
