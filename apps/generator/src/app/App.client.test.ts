@@ -252,6 +252,13 @@ describe("TopoStack Svelte shell", () => {
     expect(width.value).toBe("47.244");
     expect(width.closest(".field-row")?.textContent).toContain("in");
     expect(target.querySelector(".layer-heading")?.textContent).toContain("ft");
+    width.value = "10";
+    width.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toMatch(/updated/i));
+    expect(target.querySelector(".preview-readout")?.textContent).toContain("10 × 7.874 in");
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Metric"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".preview-readout")?.textContent).toContain("254 × 200 mm"));
+    expect(width.value).toBe("254");
     expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 

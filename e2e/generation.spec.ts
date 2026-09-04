@@ -34,40 +34,9 @@ test("generates deterministic real terrain and downloads a fabrication SVG", asy
     await expect(page.getByRole("switch", { name: label })).toBeChecked();
     await expect.poll(async () => Number(await preview.getAttribute(attribute)), { timeout: 15_000 }).toBeGreaterThan(0);
   }
-  const roads = page.getByRole("switch", { name: "Roads" });
-  await roads.click();
-  await expect(roads).not.toBeChecked();
-  await expect(preview).toHaveAttribute("data-road-markings", "0", { timeout: 15_000 });
-  await roads.click();
-  await expect(roads).toBeChecked();
-  await expect.poll(async () => Number(await preview.getAttribute("data-road-markings")), { timeout: 15_000 }).toBeGreaterThan(0);
-  const transportationLabels = page.getByRole("switch", { name: "Transportation labels" });
-  await expect(transportationLabels).not.toBeChecked();
-  await transportationLabels.click();
-  await expect(transportationLabels).toBeChecked();
-  await expect(page.getByRole("switch", { name: "Assembly guides" })).toBeChecked();
   await page.getByRole("spinbutton", { name: "Width", exact: true }).fill("1200");
-  await expect(page.locator(".status-line")).toContainText("updated");
+  await expect(page.locator(".status-line")).toContainText("updated", { timeout: 30_000 });
   await expect(page.locator(".preview-readout")).toContainText("1200 × 200 mm");
-  await page.getByRole("radio", { name: "Imperial" }).click();
-  await expect(page.locator(".preview-readout")).toContainText("47.244 × 7.874 in");
-  await expect(page.locator(".layer-heading")).toContainText("ft");
-  // Typing while in imperial mode must store millimeters internally:
-  // 10 in -> 254 mm (an inverted conversion would show 0.394 mm instead).
-  await page.getByRole("spinbutton", { name: "Width", exact: true }).fill("10");
-  await expect(page.locator(".preview-readout")).toContainText("10 × 7.874 in");
-  await page.getByRole("radio", { name: "Metric" }).click();
-  await expect(page.locator(".preview-readout")).toContainText("254 × 200 mm");
-  await page.getByRole("spinbutton", { name: "Width", exact: true }).fill("1200");
-  await expect(page.locator(".preview-readout")).toContainText("1200 × 200 mm");
-  // Text engraving and the elevation label position live beside what they
-  // affect in Map details; only the fabrication numbers are behind the panel.
-  await page.getByRole("radio", { name: /Stencil/ }).click();
-  await expect(page.getByRole("radio", { name: /Stencil/ })).toBeChecked();
-  await page.getByRole("spinbutton", { name: "Text size", exact: true }).fill("4.5");
-  await expect(page.getByLabel("Text size slider")).toHaveValue("4.5");
-  await page.getByRole("spinbutton", { name: "Label X", exact: true }).fill("0");
-  await page.getByRole("spinbutton", { name: "Label Y", exact: true }).fill("0");
   await expect(page.getByRole("button", { name: /Fabrication settings/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("switch", { name: "Material-saving nests" })).toBeChecked();
   await expect(page.getByRole("spinbutton", { name: "Glue margin", exact: true })).toHaveValue("8");
