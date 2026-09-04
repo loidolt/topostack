@@ -3,7 +3,7 @@ import { env as workerEnv, exports } from "cloudflare:workers";
 import { geocodeLimit, isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, parseRangeHeader, validTile } from "../src/index";
 
 const env = {
-  ALLOWED_ORIGINS: "http://localhost:5273,http://127.0.0.1:5273,https://topostack.loidolt.space,https://www.atomm.com",
+  ALLOWED_ORIGINS: "http://localhost:5273,http://127.0.0.1:5273,https://topostack.echofoxtrot.works,https://www.atomm.com",
 } satisfies Pick<Env, "ALLOWED_ORIGINS">;
 
 describe("map API validation", () => {
@@ -23,7 +23,7 @@ describe("map API validation", () => {
 
   it("allows local, production, and Atomm origins without opening arbitrary origins", () => {
     expect(isAllowedOrigin("http://localhost:5273", env)).toBe(true);
-    expect(isAllowedOrigin("https://topostack.loidolt.space", env)).toBe(true);
+    expect(isAllowedOrigin("https://topostack.echofoxtrot.works", env)).toBe(true);
     expect(isAllowedOrigin("https://runtime.atomm.com", env)).toBe(true);
     expect(isAllowedOrigin("https://example.com", env)).toBe(false);
     expect(isAllowedOrigin("https://runtime.atomm.com.evil.example", env)).toBe(false);
