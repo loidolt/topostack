@@ -1,12 +1,19 @@
+/**
+ * Upload the lake bathymetry archive built by build-lake-data.mjs.
+ *
+ * Mirrors provision-vector-data.mjs, including its digest pin and its refusal to
+ * touch production without --prod: the object key is overwritten in place, so an
+ * unintended upload is visible to every live client immediately.
+ */
 import { access, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 
-const DATASET_SNAPSHOT = "20260819";
+const DATASET_SNAPSHOT = "hydrolakes-v10+globathy-2022";
 const EXPECTED_MAX_ZOOM = 12;
-const OBJECT_KEY = "osm/current.pmtiles";
+const OBJECT_KEY = "lakes/current.pmtiles";
 const DEVELOPMENT_BUCKET = "topostack-vector-data-development";
 const PRODUCTION_BUCKET = "topostack-vector-data";
 const credentialTtlSeconds = 24 * 60 * 60;
@@ -18,7 +25,7 @@ const skipDigestCheck = flags.includes("--skip-digest-check");
 const expectedDigest = (flags.find((flag) => flag.startsWith("--expected-sha256="))?.slice("--expected-sha256=".length)
   ?? process.env.EXPECTED_ARCHIVE_SHA256 ?? "").trim().toLowerCase();
 if (!archivePath || !flags.includes("--provision")) {
-  throw new Error("Usage: node scripts/provision-vector-data.mjs <archive.pmtiles> --provision [--prod] [--expected-sha256=<hex> | EXPECTED_ARCHIVE_SHA256=<hex>] [--skip-digest-check]");
+  throw new Error("Usage: node scripts/provision-lake-data.mjs <archive.pmtiles> --provision [--prod] [--expected-sha256=<hex> | EXPECTED_ARCHIVE_SHA256=<hex>] [--skip-digest-check]");
 }
 // The object key is overwritten in place, so touching the production bucket is
 // destructive for live clients. Default to development only.
@@ -88,7 +95,7 @@ if (!parent?.id || parent.status !== "active") throw new Error("The Cloudflare a
 const endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
 
 for (const bucket of buckets) {
-  console.log(`Uploading Protomaps ${DATASET_SNAPSHOT} to ${bucket}/${OBJECT_KEY}.`);
+  console.log(`Uploading lake bathymetry ${DATASET_SNAPSHOT} to ${bucket}/${OBJECT_KEY}.`);
   const credentials = await cloudflare(`/accounts/${accountId}/r2/temp-access-credentials`, {
     method: "POST",
     body: JSON.stringify({

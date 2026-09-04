@@ -11,20 +11,30 @@ npx wrangler r2 bucket create topostack-map-cache
 npx wrangler r2 bucket create topostack-vector-data
 ```
 
-TopoStack pins the Protomaps `20260819` basemap build (`4.15.2`) and extracts a global zoom 0–11 archive. The upstream archive's published BLAKE3 digest is `837084e3e47de6f3ec5708f6de116d89789520e2391d67494a99e3daeb66a862`. Build and verify the smaller archive with PMTiles CLI `1.31.2` or newer:
+TopoStack pins the Protomaps `20260819` basemap build (`4.15.2`) and extracts a global zoom 0–12 archive so local roads and trails are available. The upstream archive's published BLAKE3 digest is `837084e3e47de6f3ec5708f6de116d89789520e2391d67494a99e3daeb66a862`. Build and verify the archive with PMTiles CLI `1.31.2` or newer:
 
 ```bash
-pmtiles extract https://build.protomaps.com/20260819.pmtiles ./current.pmtiles --maxzoom=11
+pmtiles extract https://build.protomaps.com/20260819.pmtiles ./current.pmtiles --maxzoom=12
 pmtiles verify ./current.pmtiles
 ```
 
-The result is approximately 7.9 GB, above Wrangler's 315 MB object-upload limit and R2's 5 GiB single-part limit. The provisioning script verifies the archive, mints 24-hour credentials scoped to only `osm/current.pmtiles`, performs multipart uploads to both buckets, and reads each result back. It uses the existing account-owned Cloudflare API token without storing S3 credentials:
+The result is above Wrangler's 315 MB object-upload limit and R2's 5 GiB single-part limit. The provisioning script computes the extracted archive's SHA-256, verifies the archive, mints 24-hour credentials scoped to only `osm/current.pmtiles`, performs multipart uploads, and reads each result back. It uses the existing account-owned Cloudflare API token without storing S3 credentials.
+
+The script refuses to upload unless the computed SHA-256 matches a pinned digest supplied via `--expected-sha256=<hex>` or the `EXPECTED_ARCHIVE_SHA256` environment variable. When extracting a new snapshot for the first time, run once with `--skip-digest-check`, record the printed SHA-256, and pin it here alongside the snapshot pin for all subsequent runs. By default only the development bucket is written; the production key is live client data and is only overwritten when `--prod` is passed explicitly:
 
 ```bash
-PMTILES_BIN=/path/to/pmtiles node --env-file=.env scripts/provision-vector-data.mjs ./current.pmtiles --provision
+# Development only (default):
+PMTILES_BIN=/path/to/pmtiles EXPECTED_ARCHIVE_SHA256=<pinned-hex> \
+  node --env-file=.env scripts/provision-vector-data.mjs ./current.pmtiles --provision
+
+# Development and production:
+PMTILES_BIN=/path/to/pmtiles EXPECTED_ARCHIVE_SHA256=<pinned-hex> \
+  node --env-file=.env scripts/provision-vector-data.mjs ./current.pmtiles --provision --prod
 ```
 
-The API token must allow R2 object writes and temporary-credential creation. Do not commit the token, temporary credentials, or generated archive. Keep the pinned source, maximum zoom, `DATASET_VERSION`, manifest response, and attribution synchronized when updating the data. The Protomaps archive is an ODbL Produced Work based on OpenStreetMap data.
+The API token must allow R2 object writes and temporary-credential creation. Do not commit the token, temporary credentials, or generated archive. Keep the pinned source, maximum zoom, extracted-archive SHA-256, `DATASET_VERSION`, manifest response, and attribution synchronized when updating the data. The Protomaps archive is an ODbL Produced Work based on OpenStreetMap data.
+
+Because `osm/current.pmtiles` is overwritten in place on dataset updates, the Worker serves it with a short one-hour `cache-control` and etag revalidation (`If-None-Match` returns `304`) instead of a long immutable TTL, so clients cannot mix cached byte ranges from different archive generations. Terrain tiles cache under dataset-versioned keys (`terrain/<DATASET_VERSION>/terrarium/...`) and keep a 30-day immutable TTL; bump `DATASET_VERSION` when terrain data changes.
 
 ## Develop and validate
 
@@ -35,6 +45,8 @@ npm run typecheck
 npm run build
 ```
 
+`npm run dev` serves the Worker on port 8787; set `VITE_MAP_API_PORT` to use a different one. The root `npm run dev` additionally skips to the next free port when 8787 is taken. In the development environment the Worker allows any loopback origin, so a relocated generator dev server still passes CORS; deployed environments match `ALLOWED_ORIGINS` exactly.
+
 Before deployment, `/ready` intentionally returns `503` unless the vector archive and geocoder secret are available. `/health` only reports that the Worker itself is running.
 
 Local terrain-cache R2 storage is simulated automatically. The local development Worker reads the provisioned PMTiles archive through a remote binding to `topostack-vector-data-development`; this requires Wrangler authentication but avoids duplicating a multi-gigabyte archive on every workstation. Development and production deployments use separate environment declarations:
@@ -44,7 +56,9 @@ npx wrangler deploy --env development
 npx wrangler deploy --env production
 ```
 
-Review and replace the example production origin allowlist before deployment. Place search uses Geoapify through the Worker so the browser never receives the provider key:
+The top-level (no `--env`) configuration binds the `-development` buckets so a bare `wrangler deploy` can never write into production storage; those development buckets must exist (see the provisioning commands above). Deployments should always pass an explicit `--env`. The `--env=""` dry-run used by `npm run build` continues to work against the top-level configuration.
+
+Review and replace the example production origin allowlist before deployment. Cross-origin access is controlled by two vars: `ALLOWED_ORIGINS` (exact-match list) and `ALLOWED_ORIGIN_SUFFIXES` (comma-separated HTTPS host suffixes, default `.atomm.com`). Set `ALLOWED_ORIGIN_SUFFIXES` to an empty string to revoke suffix-based origins without a code change. Place search uses Geoapify through the Worker so the browser never receives the provider key:
 
 ```bash
 npx wrangler secret put GEOCODER_API_KEY --env development

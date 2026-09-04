@@ -24,6 +24,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.3.0",
+    "shapefile": "^0.6.6",
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",
     "wrangler": "^4.30.0"

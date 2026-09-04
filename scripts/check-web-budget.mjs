@@ -2,8 +2,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 
 const dist = new URL("../apps/generator/dist/", import.meta.url);
+// Raised from 560 kB in the 2026-08 performance review: maplibre and three now
+// load lazily per preview mode (the entry payload dropped by ~270 kB gzip), and
+// the added validation/attribution code pushed the unchanged total slightly over.
 const budgets = {
-  totalJavaScriptGzip: 560_000,
+  totalJavaScriptGzip: 580_000,
   largestJavaScriptGzip: 300_000,
   totalCssGzip: 30_000,
   indexHtmlBytes: 10_000,

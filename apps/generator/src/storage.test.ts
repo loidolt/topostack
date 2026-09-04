@@ -12,6 +12,7 @@ describe("project import validation", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, optimizeMaterialUse: "yes" })).toThrow(/optimizeMaterialUse/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, glueMarginMm: 30 })).toThrow(/glue margin/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, laserKerfMm: 1.1 })).toThrow(/laser kerf/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, units: "yards" })).toThrow(/units/i);
   });
   it("adds new fabrication defaults to projects saved before those fields existed", () => {
     const {
@@ -20,6 +21,13 @@ describe("project import validation", () => {
       optimizeMaterialUse: _legacyOptimizeMaterialUse,
       glueMarginMm: _legacyGlueMarginMm,
       laserKerfMm: _legacyLaserKerfMm,
+      units: _legacyUnits,
+      textStyle: _legacyTextStyle,
+      northArrowStyle: _legacyNorthArrowStyle,
+      northArrowSizeMm: _legacyNorthArrowSize,
+      northArrowPlacement: _legacyNorthArrowPlacement,
+      showTrails: _legacyTrails,
+      showTransportationLabels: _legacyTransportationLabels,
       ...legacyProject
     } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
@@ -28,6 +36,70 @@ describe("project import validation", () => {
       optimizeMaterialUse: true,
       glueMarginMm: 8,
       laserKerfMm: 0.15,
+      units: "metric",
+      textStyle: DEFAULT_PROJECT.textStyle,
+      northArrowStyle: "classic",
+      northArrowSizeMm: 24,
+      northArrowPlacement: { anchor: "bottom-right", offset: { x: 0, y: 0 } },
+      showTrails: DEFAULT_PROJECT.showRoads,
+      showTransportationLabels: false,
+    });
+  });
+  it("loads a project saved with an explicit layer count at the derived default", () => {
+    // Layer count used to be a stored setting; it is now derived from map
+    // scale, so an old save keeps everything else and adopts the default
+    // exaggeration rather than failing to load.
+    const { verticalExaggeration: _derivedNow, ...saved } = DEFAULT_PROJECT;
+    const legacyProject = { ...saved, layerCount: 18 };
+    const parsed = parseProject(legacyProject);
+    expect(parsed.verticalExaggeration).toBe(DEFAULT_PROJECT.verticalExaggeration);
+    expect(parsed).not.toHaveProperty("layerCount");
+    expect(parsed.widthMm).toBe(DEFAULT_PROJECT.widthMm);
+  });
+  it("validates and restores transportation controls", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, showRoads: false, showTrails: true, showTransportationLabels: true })).toMatchObject({ showRoads: false, showTrails: true, showTransportationLabels: true });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showTrails: "yes" })).toThrow(/showTrails/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showTransportationLabels: "yes" })).toThrow(/showTransportationLabels/i);
+  });
+  it("validates and restores fabrication typography", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "stencil", sizeMm: 5 } }).textStyle).toEqual({ font: "stencil", sizeMm: 5 });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "serif", sizeMm: 5 } })).toThrow(/text font/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "technical", sizeMm: 1 } })).toThrow(/text size/i);
+  });
+  it("validates and restores north-arrow customization", () => {
+    const project = parseProject({ ...DEFAULT_PROJECT, northArrowStyle: "mariner", northArrowSizeMm: 32, northArrowPlacement: { anchor: "top-left", offset: { x: 0.2, y: -0.3 } } });
+    expect(project).toMatchObject({ northArrowStyle: "mariner", northArrowSizeMm: 32, northArrowPlacement: { anchor: "top-left", offset: { x: 0.2, y: -0.3 } } });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowStyle: "ornate" })).toThrow(/north arrow style/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowSizeMm: 4 })).toThrow(/north arrow size/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowPlacement: { anchor: "outside", offset: { x: 0, y: 0 } } })).toThrow(/north arrow anchor/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, northArrowPlacement: { anchor: "center", offset: { x: 1.1, y: 0 } } })).toThrow(/north arrow offsets/i);
+  });
+  it("defaults smoothing, minimum feature, and exploded preview for legacy projects", () => {
+    const {
+      smoothing: _legacySmoothing,
+      minimumFeatureMm: _legacyMinimumFeature,
+      explodedPreview: _legacyExplodedPreview,
+      ...legacyProject
+    } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject)).toMatchObject({
+      smoothing: DEFAULT_PROJECT.smoothing,
+      minimumFeatureMm: DEFAULT_PROJECT.minimumFeatureMm,
+      explodedPreview: DEFAULT_PROJECT.explodedPreview,
+    });
+  });
+
+  it("loads projects saved before water depth existed", () => {
+    const { showWaterDepth: _legacyShowWaterDepth, waterDepthOverrides: _legacyOverrides, waterDepthExaggeration: _legacyExaggeration, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject)).toMatchObject({
+      showWaterDepth: DEFAULT_PROJECT.showWaterDepth,
+      waterDepthOverrides: {},
+      waterDepthExaggeration: DEFAULT_PROJECT.waterDepthExaggeration,
+    });
+  });
+
+  it("drops depth overrides that are not usable depths", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, waterDepthOverrides: { "9092": 594, "1": -5, "2": "deep", "3": 99999, lake: 20 } })).toMatchObject({
+      waterDepthOverrides: { "9092": 594 },
     });
   });
 });
