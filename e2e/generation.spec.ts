@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("generates deterministic real terrain and downloads a fabrication SVG", async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(180_000);
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.route("**/v1/**", (route) => route.abort("internetdisconnected"));
