@@ -144,6 +144,12 @@
   let ThreePreview = $state.raw<typeof import("./ThreePreview.svelte").default | undefined>(undefined);
 
   $effect(() => {
+    const outputMode = project.outputMode;
+    if (outputMode === "engraving" && mode !== "map" && mode !== "engraving") mode = "engraving";
+    else if (outputMode === "stack" && mode === "engraving") mode = "3d";
+  });
+
+  $effect(() => {
     theme.resolved;
     themeColor = getComputedStyle(document.documentElement).getPropertyValue("--loidolt-background").trim();
   });
@@ -680,7 +686,7 @@
       <Topbar class="topbar">
         {#snippet brand()}<Brand name="TopoStack" meta="Terrain studio" />{/snippet}
         {#snippet navigation()}
-          <label class="project-name"><span>Project</span><Input aria-label="Project name" value={project.name} oninput={(event) => updateProject({ name: event.currentTarget.value })} /></label>
+          <label class="project-name"><span>Project name</span><Input aria-label="Project name" value={project.name} oninput={(event) => updateProject({ name: event.currentTarget.value })} /></label>
           <div class="history-actions">
             <IconButton label="Undo" onclick={undo} disabled={!history.length}><Undo2 size={17} /></IconButton>
             <IconButton label="Redo" onclick={redo} disabled={!future.length}><Redo2 size={17} /></IconButton>
@@ -707,8 +713,20 @@
           <ThemeToggle {theme} class="theme-toggle" />
         {/snippet}
       </Topbar>
-      <ContextBar section="Terrain" title={project.location.label.split(",")[0]} detail={project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}>
-        {#snippet actions()}<span class:ready={exportReady && exportPhase !== "error"} class:error={!exportReady || exportPhase === "error"}>{exportPhase === "preparing" ? "Preparing files" : exportPhase === "ready" ? "Export ready" : exportPhase === "error" ? "Export failed" : exportReady ? "Ready to export" : "Generate before export"}</span>{/snippet}
+      <ContextBar class="terrain-contextbar" section="Terrain" title={project.location.label.split(",")[0]} detail={project.location.label.split(",").slice(1).join(",") || "Selected coordinates"}>
+        {#snippet actions()}
+          <div class="ldt-toggle-group ldt-toggle-group--sm output-mode-switch" role="radiogroup" aria-label="Output type">
+            <button type="button" class="ldt-toggle-group__item" role="radio" aria-label="Layered relief" aria-checked={project.outputMode === "stack"} data-state={project.outputMode === "stack" ? "on" : "off"} tabindex={project.outputMode === "stack" ? 0 : -1} onclick={() => { mode = "3d"; void updateFabrication({ outputMode: "stack" }); }} onkeydown={navigateChoice}>
+              <span class="output-mode-switch__icon" aria-hidden="true"><Layers3 size={16} strokeWidth={2.2} /></span>
+              <span>Layered</span>
+            </button>
+            <button type="button" class="ldt-toggle-group__item" role="radio" aria-label="Flat engraving" aria-checked={project.outputMode === "engraving"} data-state={project.outputMode === "engraving" ? "on" : "off"} tabindex={project.outputMode === "engraving" ? 0 : -1} onclick={() => { mode = "engraving"; void updateFabrication({ outputMode: "engraving" }); }} onkeydown={navigateChoice}>
+              <span class="output-mode-switch__icon" aria-hidden="true"><PenTool size={16} strokeWidth={2.2} /></span>
+              <span>Flat</span>
+            </button>
+          </div>
+          <span class="context-export-status" class:ready={exportReady && exportPhase !== "error"} class:error={!exportReady || exportPhase === "error"}>{exportPhase === "preparing" ? "Preparing files" : exportPhase === "ready" ? "Export ready" : exportPhase === "error" ? "Export failed" : exportReady ? "Ready to export" : "Generate before export"}</span>
+        {/snippet}
       </ContextBar>
     </div>
   {/snippet}
@@ -733,16 +751,7 @@
             <ChevronDown size={16} class={openSections.setup ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
           </button>
           <div id="section-setup" class="section-content" hidden={!openSections.setup}>
-            <div class="subsection-label">Output</div>
-          <div class="output-options" role="radiogroup" aria-label="Output type">
-            <button type="button" role="radio" aria-checked={project.outputMode === "stack"} data-state={project.outputMode === "stack" ? "on" : "off"} onclick={() => { mode = "3d"; void updateFabrication({ outputMode: "stack" }); }}>
-              <Layers3 size={18} /><span><b>Layered relief</b><small>Cut and stack material</small></span>
-            </button>
-            <button type="button" role="radio" aria-checked={project.outputMode === "engraving"} data-state={project.outputMode === "engraving" ? "on" : "off"} onclick={() => { mode = "engraving"; void updateFabrication({ outputMode: "engraving" }); }}>
-              <PenTool size={18} /><span><b>Flat engraving</b><small>One engrave-only graphic</small></span>
-            </button>
-          </div>
-            <div class="subsection-label location-kicker">Location</div>
+            <div class="subsection-label">Location</div>
           <button class="location-card" onclick={() => searchOpen = true}>
             <span class="location-icon"><MapIcon size={18} /></span>
             <span>

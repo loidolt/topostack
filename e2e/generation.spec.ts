@@ -97,3 +97,50 @@ test("location dialog traps focus and restores it on Escape", async ({ page }) =
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
 });
+
+test("compact layouts keep the preview and controls reachable", async ({ page }) => {
+  await page.route("https://static-res.makextool.com/**", (route) => route.abort("internetdisconnected"));
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto("/");
+
+  await expect(page.locator(".project-name > span")).toHaveText("Project name");
+  await expect(page.locator(".terrain-contextbar").getByRole("radiogroup", { name: "Output type" })).toBeVisible();
+
+  const previewBox = await page.locator(".preview-panel").boundingBox();
+  const controlsBox = await page.locator(".config-panel").boundingBox();
+  expect(previewBox).not.toBeNull();
+  expect(controlsBox).not.toBeNull();
+  expect(previewBox!.height).toBeGreaterThan(400);
+  expect(controlsBox!.y).toBeGreaterThanOrEqual(previewBox!.y + previewBox!.height);
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  const topbarBox = await page.locator(".topbar").boundingBox();
+  expect(topbarBox).not.toBeNull();
+  expect(topbarBox!.height).toBeLessThanOrEqual(70);
+  await expect(page.getByRole("radiogroup", { name: "Output type" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Expand all" }).click();
+  const widthField = page.getByRole("spinbutton", { name: "Width", exact: true });
+  await widthField.scrollIntoViewIfNeeded();
+
+  const decrementBox = await page.getByRole("button", { name: "Decrease Width" }).boundingBox();
+  const incrementBox = await page.getByRole("button", { name: "Increase Width" }).boundingBox();
+  expect(decrementBox).not.toBeNull();
+  expect(incrementBox).not.toBeNull();
+  expect(decrementBox!.width).toBeGreaterThanOrEqual(44);
+  expect(incrementBox!.width).toBeGreaterThanOrEqual(44);
+
+  const numberInput = page.locator(".number-input").filter({ has: widthField });
+  const numberFieldBox = await numberInput.locator(".ldt-number-field").boundingBox();
+  const unitBox = await numberInput.locator("em").boundingBox();
+  expect(numberFieldBox).not.toBeNull();
+  expect(unitBox).not.toBeNull();
+  expect(numberFieldBox!.x + numberFieldBox!.width).toBeLessThanOrEqual(unitBox!.x + 0.5);
+
+  const roadsBox = await page.getByRole("switch", { name: "Roads" }).boundingBox();
+  const presetBox = await page.getByRole("button", { name: "Grand Canyon", exact: true }).boundingBox();
+  expect(roadsBox!.height).toBeGreaterThanOrEqual(44);
+  expect(presetBox!.height).toBeGreaterThanOrEqual(44);
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+});

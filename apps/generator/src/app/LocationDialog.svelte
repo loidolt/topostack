@@ -46,9 +46,26 @@
       <Button onclick={() => dialog.close()}>Use coordinates</Button>
     </div>
     <div class="search-results">
-      {#each results as result (result.id)}<button onclick={() => onChoose(result)}><span><MapIcon size={17} /></span><span><strong>{result.label.split(",")[0]}</strong><small>{result.label.split(",").slice(1).join(",")}</small></span></button>{/each}
+      {#each results as result (result.id)}
+        <button class="location-option" onclick={() => onChoose(result)}>
+          <span class="location-option__icon"><MapIcon size={17} /></span>
+          <span class="location-option__copy"><strong>{result.label.split(",")[0]}</strong><small>{result.label.split(",").slice(1).join(",")}</small></span>
+        </button>
+      {/each}
       {#if searchError}<p role="status">{searchError}</p>{/if}
-      {#if !query}<div class="preset-grid">{#each presets as preset (preset.id)}<button onclick={() => onChoose(preset)}><Mountain size={21} /><span><strong>{preset.label.split(",")[0]}</strong><small>{preset.label.split(",").slice(1).join(",")}</small></span></button>{/each}</div>{/if}
+      {#if !query}
+        <section class="preset-locations" aria-labelledby="preset-locations-title">
+          <h3 id="preset-locations-title">Example locations</h3>
+          <div class="preset-grid">
+            {#each presets as preset (preset.id)}
+              <button class="location-option" onclick={() => onChoose(preset)}>
+                <span class="location-option__icon"><Mountain size={19} /></span>
+                <span class="location-option__copy"><strong>{preset.label.split(",")[0]}</strong><small>{preset.label.split(",").slice(1).join(",")}</small></span>
+              </button>
+            {/each}
+          </div>
+        </section>
+      {/if}
     </div>
     <small class="provider-attribution">Place search by <a href="https://www.geoapify.com/" target="_blank" rel="noreferrer">Geoapify</a> · © OpenStreetMap contributors</small>
   </div>
