@@ -69,11 +69,11 @@ CI normally synchronizes this secret from the matching GitHub environment during
 
 ## GitHub deployment mapping
 
-| Git branch | GitHub environment | Wrangler environment | Worker |
-| --- | --- | --- | --- |
-| `dev` | `development` | `development` | `topostack-dev` |
-| `main` | `production` | `production` | `topostack` |
+| Git branch | GitHub environment | Wrangler environment | Worker | Public URL | Map cache | Vector data |
+| --- | --- | --- | --- | --- | --- | --- |
+| `dev` | `development` | `development` | `topostack-dev` | `https://dev-topostack.echofoxtrot.works` | `topostack-map-cache-development` | `topostack-vector-data-development` |
+| `main` | `production` | `production` | `topostack` | `https://topostack.echofoxtrot.works` | `topostack-map-cache` | `topostack-vector-data` |
 
-The production frontend and API are one Worker deployment at `https://topostack.echofoxtrot.works`. Wrangler uploads `apps/generator/dist` as static assets, while `/health` and `/v1/*` run the API Worker. Atomm is allowed to call the production API cross-origin; local Vite origins are additionally allowed in development.
+The development frontend and API are deployed at `https://dev-topostack.echofoxtrot.works`; production remains at `https://topostack.echofoxtrot.works`. Wrangler uploads `apps/generator/dist` as static assets, while `/health` and `/v1/*` run the API Worker. Atomm is allowed to call the production API cross-origin; local Vite origins are additionally allowed in development.
 
-Configure `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `GEOCODER_API_KEY` as secrets in both GitHub environments. The Cloudflare token needs Workers Scripts edit and R2 edit at the account level plus Workers Routes edit for the `echofoxtrot.works` zone so production can manage its Custom Domain. Restrict the development environment to `dev` and production to `main`; production should also use required reviewers. Pull requests run validation without environment access or Cloudflare credentials.
+Configure `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `GEOCODER_API_KEY` as secrets in both GitHub environments. The Cloudflare token needs Workers Scripts edit and R2 edit at the account level plus Workers Routes edit for the `echofoxtrot.works` zone so both environments can manage their Custom Domains. Restrict the development environment to `dev` and production to `main`; production should also use required reviewers. Pull requests run validation without environment access or Cloudflare credentials.

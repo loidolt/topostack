@@ -51,7 +51,7 @@ VITE_MAP_API_URL="$DEPLOYED_WORKER_URL" npm run package:atomm
 The Atomm-ready artifact is written to `apps/generator/topostack-atomm.zip`.
 Packaging fails closed when the Worker URL is missing, non-HTTPS, local, on a reserved test/placeholder domain (`.invalid`, `.test`, `.local`, `.localhost`, `example.*`), or a `*.workers.dev` preview URL; the built artifact is scanned for the same endpoint families. Deploy the production Worker and set its `GEOCODER_API_KEY` secret before creating a submission artifact.
 
-After every successful production deployment and readiness smoke test, CI packages the production URL, generates a SHA-256 checksum, and uploads a 30-day `topostack-atomm-<commit>` workflow artifact containing the generator ZIP, checksum, cover image, and listing copy. Run `VITE_MAP_API_URL=https://topostack.loidolt.space npm run release:atomm` to reproduce the same release files locally.
+After every successful production deployment and readiness smoke test, CI packages the production URL, generates a SHA-256 checksum, and uploads a 30-day `topostack-atomm-<commit>` workflow artifact containing the generator ZIP, checksum, cover image, and listing copy. Run `VITE_MAP_API_URL=https://topostack.echofoxtrot.works npm run release:atomm` to reproduce the same release files locally.
 
 ## CI and deployment environments
 
@@ -64,13 +64,13 @@ Create two GitHub environments with selected-branch deployment rules:
 
 Store these secrets separately in both environments, using environment-appropriate values:
 
-- `CLOUDFLARE_API_TOKEN` — a token restricted to the deployment account with Workers Scripts edit, Account Settings read, and Workers R2 Storage edit permissions, plus Workers Routes edit for the `loidolt.space` zone.
+- `CLOUDFLARE_API_TOKEN` — a token restricted to the deployment account with Workers Scripts edit, Account Settings read, and Workers R2 Storage edit permissions, plus Workers Routes edit for the `echofoxtrot.works` zone.
 - `CLOUDFLARE_ACCOUNT_ID` — the target Cloudflare account ID.
 - `GEOCODER_API_KEY` — the Geoapify credential synchronized to the selected Worker as an encrypted runtime secret.
 
 The Cloudflare credentials authenticate CI but are not exposed to Worker code. Only `GEOCODER_API_KEY` is uploaded as a Worker binding. The workflow is defined in `.github/workflows/ci.yml`.
 
-Production uses the `topostack` Worker as the origin for `https://topostack.loidolt.space`. The same deployment serves the generated frontend as static assets and the map API at `/v1/*`. Development deploys the same combined app/API shape to the `topostack-dev` Worker from the `dev` branch.
+Production uses the `topostack` Worker at `https://topostack.echofoxtrot.works`. Development uses the separate `topostack-dev` Worker at `https://dev-topostack.echofoxtrot.works` from the `dev` branch. Each deployment serves the generated frontend as static assets and the map API at `/v1/*`.
 
 The `Production Monitor` workflow runs an hourly canary against the frontend, `/health`, `/ready`, the data manifest, and a PMTiles byte-range read. Failed scheduled runs surface through normal GitHub Actions notifications. CI also enforces gzip budgets for total JavaScript, the largest JavaScript chunk, CSS, and the entry HTML via `npm run budget:web`; adjust a limit only alongside an intentional performance review.
 
