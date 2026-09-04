@@ -62,7 +62,7 @@ describe("TopoStack Svelte shell", () => {
     const target = document.createElement("div");
     component = mount(App, { target });
     await tick();
-    const engraving = [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("Flat engraving"))!;
+    const engraving = target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!;
     engraving.click();
     await vi.waitFor(() => expect(engraving.getAttribute("aria-checked")).toBe("true"));
     await vi.waitFor(() => expect(target.querySelector('svg[aria-label="Flat engraving preview"]')).not.toBeNull());
@@ -130,7 +130,7 @@ describe("TopoStack Svelte shell", () => {
     const bold = [...target.querySelectorAll<HTMLButtonElement>('.line-presets button[role="radio"]')].find((button) => button.textContent?.includes("Bold"))!;
     bold.click();
     await vi.waitFor(() => expect(bold.getAttribute("aria-checked")).toBe("true"));
-    [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("Flat engraving"))!.click();
+    target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!.click();
     await vi.waitFor(() => expect(target.querySelector('svg[aria-label="Flat engraving preview"]')).not.toBeNull());
     await vi.waitFor(() => expect(target.querySelector('.engraving-contours path:not(.index-contour)')?.getAttribute("stroke-width")).toBe("0.24"));
     target.querySelector<HTMLButtonElement>(".linework-customize")!.click();
