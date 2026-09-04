@@ -82,7 +82,7 @@
     <g class="engraving-details">
       {#each markings as marking (marking.id)}
         <g data-marking-id={marking.id} data-marking-kind={marking.kind} data-transportation-class={marking.transportationClass}>
-          {#if marking.points.length > 1}<path d={linePath(marking.points)} fill={marking.filled ? "#2b2119" : "none"} stroke-width={markingWidth(marking)} stroke-dasharray={markingDash(marking)} />{/if}
+          {#if marking.points.length > 1}<path d={linePath(marking.points)} fill={marking.knockout ? "#e8cfaa" : marking.filled ? "#2b2119" : "none"} stroke={marking.knockout ? "#e8cfaa" : undefined} stroke-width={markingWidth(marking)} stroke-dasharray={markingDash(marking)} />{/if}
           {#if marking.label && marking.points[0]}<path d={labelPathData(marking.label, marking.points[0], 0, 0, marking.labelRotationRad, marking.textStyle)} stroke-width={geometry.lineStyle.annotationMm} stroke-linecap={marking.textStyle?.font === "rounded" ? "round" : "butt"} stroke-linejoin={marking.textStyle?.font === "rounded" ? "round" : "miter"} />{/if}
         </g>
       {/each}

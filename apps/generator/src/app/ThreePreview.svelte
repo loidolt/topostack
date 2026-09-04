@@ -183,9 +183,10 @@
         });
         layer.markings.forEach((marking) => {
           if (marking.filled && marking.points.length > 2) {
-            const marker = new THREE.Mesh(new THREE.ShapeGeometry(shapeFromRing(marking.points)), markerFillMaterial);
-            marker.renderOrder = 2;
-            addStacked(runtime!.content, marker, layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
+            const marker = new THREE.Mesh(new THREE.ShapeGeometry(shapeFromRing(marking.points)), marking.knockout ? face : markerFillMaterial);
+            marker.renderOrder = marking.knockout ? 2 : 3;
+            const lift = markingLift(layer.materialThicknessMm) * (marking.knockout ? 1 : 1.25);
+            addStacked(runtime!.content, marker, layer.index, baseZ + layer.materialThicknessMm + lift);
           } else if (marking.points.length > 1) {
             const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints(marking.points, 0));
             const material = marking.operation === "score" ? scoreMaterial : marking.transportationClass === "major-road" ? majorRoadMaterial : marking.transportationClass === "local-road" ? localRoadMaterial : marking.transportationClass === "trail" ? trailMaterial : marking.kind === "boundary" ? boundaryMaterial : marking.kind === "grid" ? coordinateGridMaterial : engraveMaterial;

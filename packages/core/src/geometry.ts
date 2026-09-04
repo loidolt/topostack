@@ -15,11 +15,11 @@ import {
   signedArea,
 } from "./geometry2d.js";
 import { placeElevationLabelStack, placeLabel, placeLinearLabel } from "./label-placement.js";
-import { geoPointToMapPoint, markerSymbolPaths } from "./markers.js";
+import { geoPointToMapPoint, markerSymbolCenterForAnchor, markerSymbolPaths } from "./markers.js";
 import { offsetClosedRing } from "./offset.js";
 import { northArrowFootprint, northArrowMarkings } from "./north-arrow.js";
 import { displayElevation, elevationUnit, FEET_PER_METER } from "./units.js";
-import { CUSTOM_LINE_KINDS, MAP_MARKER_SIZE_MM, MARKER_SYMBOLS, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, MAX_WATER_DEPTH_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES, SEA_LEVEL_M } from "./types.js";
+import { CUSTOM_LINE_KINDS, MAP_MARKER_CLEARANCE_MM, MAP_MARKER_SIZE_MM, MARKER_SYMBOLS, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, MAX_WATER_DEPTH_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, MAX_VERTICAL_EXAGGERATION, MIN_LAYER_COUNT, MIN_VERTICAL_EXAGGERATION, NORTH_ARROW_ANCHORS, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, NORTH_ARROW_STYLES, SEA_LEVEL_M } from "./types.js";
 import { carveWaterDepth, clampCarveToLadder } from "./water.js";
 import type {
   ElevationGrid,
@@ -845,27 +845,6 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     });
   });
 
-  // Markers are geographic annotations rather than fetched vector data. Place
-  // each one on the terrain sheet under its coordinate, or on the single face
-  // for a flat engraving, and clip the symbol to the printable surface.
-  config.markers.forEach((marker, markerIndex) => {
-    if (marker.lon < source.bounds.west || marker.lon > source.bounds.east || marker.lat < source.bounds.south || marker.lat > source.bounds.north) return;
-    const center = geoPointToMapPoint(marker.lat, marker.lon, source.bounds, config.widthMm, config.heightMm);
-    const layer = flatEngraving ? baseLayer : layers[layerForElevation(sampleElevation(modelGrid, center, config), thresholds)];
-    if (!layer || !layer.polygons.some((polygon) => pointInPolygon(center, polygon))) return;
-    markerSymbolPaths(marker.symbol, center, MAP_MARKER_SIZE_MM)
-      .filter((_, pathIndex) => marker.symbol !== "pin" || pathIndex === 0)
-      .forEach((path, pathIndex) => {
-        clipPolyline(path, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
-          id: `map-marker-${markerIndex}-${pathIndex}-${clipIndex}`,
-          operation: "engrave",
-          kind: "marker",
-          points,
-          filled: true,
-        }));
-      });
-  });
-
   if (baseLayer && config.showNorthArrow) {
     baseLayer.markings.push(...northArrowMarkings(config));
   }
@@ -947,6 +926,40 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       message: `Elevation labels were omitted from layer${omittedLayers.length === 1 ? "" : "s"} ${omittedLayers.join(", ")} because no collision-free position fit the exposed face.`,
     });
   }
+
+  // Markers are added after every other annotation so their material-colored
+  // knockout footprints can visibly interrupt contours, labels, and map
+  // details before the solid symbol is drawn on top.
+  config.markers.forEach((marker, markerIndex) => {
+    if (marker.lon < source.bounds.west || marker.lon > source.bounds.east || marker.lat < source.bounds.south || marker.lat > source.bounds.north) return;
+    const anchor = geoPointToMapPoint(marker.lat, marker.lon, source.bounds, config.widthMm, config.heightMm);
+    const layer = flatEngraving ? baseLayer : layers[layerForElevation(sampleElevation(modelGrid, anchor, config), thresholds)];
+    if (!layer || !layer.polygons.some((polygon) => pointInPolygon(anchor, polygon))) return;
+    const symbolCenter = markerSymbolCenterForAnchor(marker.symbol, anchor, MAP_MARKER_SIZE_MM);
+    const paths = markerSymbolPaths(marker.symbol, symbolCenter, MAP_MARKER_SIZE_MM)
+      .filter((_, pathIndex) => marker.symbol !== "pin" || pathIndex === 0);
+    paths.forEach((path, pathIndex) => {
+      offsetClosedRing(path, MAP_MARKER_CLEARANCE_MM, "round").forEach((halo, haloIndex) => {
+        clipPolyline(halo, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
+          id: `map-marker-${markerIndex}-halo-${pathIndex}-${haloIndex}-${clipIndex}`,
+          operation: "engrave",
+          kind: "marker",
+          points,
+          filled: true,
+          knockout: true,
+        }));
+      });
+    });
+    paths.forEach((path, pathIndex) => {
+      clipPolyline(path, layer.polygons).forEach((points, clipIndex) => layer.markings.push({
+        id: `map-marker-${markerIndex}-${pathIndex}-${clipIndex}`,
+        operation: "engrave",
+        kind: "marker",
+        points,
+        filled: true,
+      }));
+    });
+  });
 
   // External vector archives are allowed to repeat source IDs. Preserve stable
   // human-readable prefixes while guaranteeing valid keyed previews and unique

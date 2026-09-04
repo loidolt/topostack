@@ -20,6 +20,11 @@ function thickSegment(start: Point2D, end: Point2D, width: number): Point2D[] {
   ];
 }
 
+/** Center a symbol around its geographic anchor. Pins sit above the anchor so their tip identifies it. */
+export function markerSymbolCenterForAnchor(symbol: MarkerSymbol, anchor: Point2D, size: number): Point2D {
+  return symbol === "pin" ? { x: anchor.x, y: anchor.y - size / 2 } : { ...anchor };
+}
+
 /** Fabrication-safe line paths for the marker picker, previews, and SVG output. */
 export function markerSymbolPaths(symbol: MarkerSymbol, center: Point2D, size: number): Point2D[][] {
   const radius = size / 2;

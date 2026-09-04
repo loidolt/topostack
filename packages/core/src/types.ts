@@ -17,6 +17,7 @@ export interface MapMarkerV1 extends GeoPoint {
 
 export const MARKER_SYMBOLS: readonly MarkerSymbol[] = ["pin", "circle", "triangle", "star", "cross"];
 export const MAP_MARKER_SIZE_MM = 8;
+export const MAP_MARKER_CLEARANCE_MM = 1.2;
 export const CUSTOM_LINE_KINDS: readonly CustomLineKind[] = ["trail", "boundary"];
 
 export interface CustomLineFeatureV1 {
@@ -316,6 +317,8 @@ export interface OperationPath {
   transportationClass?: TransportationClass;
   /** Closed engraving paths that should render as solid marker artwork. */
   filled?: boolean;
+  /** Paper/material-colored geometry that protects a marker from underlying engravings. */
+  knockout?: boolean;
 }
 
 export interface LayerIR {

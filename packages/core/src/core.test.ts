@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
+import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, geoPointToMapPoint, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
 import { placeElevationLabel, placeLinearLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
@@ -110,9 +110,18 @@ describe("TopoStack geometry", () => {
     expect(rendered.length).toBeGreaterThanOrEqual(3);
     expect(rendered.every((marking) => marking.operation === "engrave" && marking.points.length > 1)).toBe(true);
     expect(rendered.every((marking) => marking.filled)).toBe(true);
-    expect(rendered.filter((marking) => marking.id.startsWith("map-marker-2-"))).toHaveLength(2);
-    expect(rendered.filter((marking) => marking.id.startsWith("map-marker-2-")).every((marking) => marking.points.length === 5)).toBe(true);
-    expect(engravingToSvg(result, project)).toMatch(/id="map-marker-[^"]+"[^>]+fill="#111827"/);
+    const halos = rendered.filter((marking) => marking.knockout);
+    const foregroundPin = rendered.find((marking) => marking.id.startsWith("map-marker-0-") && !marking.knockout);
+    const foregroundCross = rendered.filter((marking) => marking.id.startsWith("map-marker-2-") && !marking.knockout);
+    const pinAnchor = geoPointToMapPoint(markers[0]!.lat, markers[0]!.lon, realSource(project).bounds, project.widthMm, project.heightMm);
+    expect(halos.length).toBeGreaterThanOrEqual(markers.length);
+    expect(foregroundPin?.points[0]?.x).toBeCloseTo(pinAnchor.x);
+    expect(foregroundPin?.points[0]?.y).toBeCloseTo(pinAnchor.y);
+    expect(foregroundCross).toHaveLength(2);
+    expect(foregroundCross.every((marking) => marking.points.length === 5)).toBe(true);
+    const svg = engravingToSvg(result, project);
+    expect(svg).toMatch(/id="map-marker-[^"]+"[^>]+fill="#111827"/);
+    expect(svg).toMatch(/id="map-marker-[^"]+-halo-[^"]+"[^>]+fill="#ffffff"[^>]+data-knockout="true"/);
     expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [{ ...markers[0]!, lat: 90 }] })).toThrow(/marker latitude/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [{ ...markers[0]!, symbol: "flag" as never }] })).toThrow(/marker symbol/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [markers[0]!, { ...markers[1]!, id: markers[0]!.id }] })).toThrow(/unique/i);

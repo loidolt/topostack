@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { LocateFixed } from "@lucide/svelte";
   import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
-  import { markerSymbolPaths, type CustomLineFeatureV1, type GeoBounds, type MapMarkerV1, type ProjectConfigV1 } from "@topostack/core";
+  import { markerSymbolCenterForAnchor, markerSymbolPaths, type CustomLineFeatureV1, type GeoBounds, type MapMarkerV1, type MarkerSymbol, type ProjectConfigV1 } from "@topostack/core";
   let { project, onLocationChange }: { project: ProjectConfigV1; onLocationChange: (lat: number, lon: number, zoom: number, bounds: GeoBounds) => void } = $props();
   let container: HTMLDivElement;
   let guide: HTMLDivElement;
@@ -12,6 +12,15 @@
   const CUSTOM_SOURCE_ID = "topostack-custom-lines";
   const CUSTOM_TRAIL_LAYER_ID = "topostack-custom-trails";
   const CUSTOM_BOUNDARY_LAYER_ID = "topostack-custom-boundaries";
+  const MARKER_SYMBOL_SIZE = 22;
+  const MARKER_VIEWBOX_SIZE = 26;
+  const MARKER_ELEMENT_SIZE_PX = 30;
+
+  function markerPixelOffset(symbol: MarkerSymbol): [number, number] {
+    const center = markerSymbolCenterForAnchor(symbol, { x: 0, y: 0 }, MARKER_SYMBOL_SIZE);
+    const scale = MARKER_ELEMENT_SIZE_PX / MARKER_VIEWBOX_SIZE;
+    return [center.x * scale, center.y * scale];
+  }
 
   function markerElement(marker: MapMarkerV1): HTMLDivElement {
     const element = document.createElement("div");
@@ -22,7 +31,7 @@
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "-13 -13 26 26");
     svg.setAttribute("aria-hidden", "true");
-    for (const points of markerSymbolPaths(marker.symbol, { x: 0, y: 0 }, 22)) {
+    for (const points of markerSymbolPaths(marker.symbol, { x: 0, y: 0 }, MARKER_SYMBOL_SIZE)) {
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("d", points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`).join(" "));
       svg.append(path);
@@ -120,7 +129,7 @@
         rendered = undefined;
       }
       if (!rendered) {
-        rendered = new maplibregl.Marker({ element: markerElement(marker), anchor: "center" }).setLngLat([marker.lon, marker.lat]).addTo(map);
+        rendered = new maplibregl.Marker({ element: markerElement(marker), anchor: "center", offset: markerPixelOffset(marker.symbol) }).setLngLat([marker.lon, marker.lat]).addTo(map);
         mapMarkers.set(marker.id, rendered);
       } else {
         rendered.setLngLat([marker.lon, marker.lat]);
@@ -157,9 +166,10 @@
     height: 100%;
     overflow: visible;
     fill: currentColor;
-    stroke: currentColor;
-    stroke-width: 1.8;
+    stroke: #fff;
+    stroke-width: 4.8;
     stroke-linecap: round;
     stroke-linejoin: round;
+    paint-order: stroke fill;
   }
 </style>
