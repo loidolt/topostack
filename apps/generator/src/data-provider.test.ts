@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROJECT } from "@topostack/core";
-import { boundsForProject, classifyTransportation, cleanWaterwayMarkings, clipVectorTileLine, combineWaterAreas, dissolveWaterAreas, dissolveWaterPolygons, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
+import { boundsForProject, classifyTransportation, cleanBoundaryMarkings, cleanWaterwayMarkings, clipVectorTileLine, combineWaterAreas, dissolveWaterAreas, dissolveWaterPolygons, fittingDataZoom, isStateProvinceBoundary, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
 
 describe("transportation metadata", () => {
   it("classifies supported roads and trails while excluding other transport", () => {
@@ -44,6 +44,26 @@ describe("transportation metadata", () => {
       road("north", [{ x: 0, y: 0 }, { x: 0, y: 10 }]),
     ]);
     expect(fork).toHaveLength(3);
+  });
+});
+
+describe("administrative boundaries", () => {
+  it("selects normalized state and province boundaries without counties or countries", () => {
+    expect(isStateProvinceBoundary({ kind: "region", kind_detail: 4 })).toBe(true);
+    expect(isStateProvinceBoundary({ kind: "county", kind_detail: 6 })).toBe(false);
+    expect(isStateProvinceBoundary({ kind: "country", kind_detail: 2 })).toBe(false);
+  });
+
+  it("deduplicates and joins boundary pieces across tile edges", () => {
+    const boundary = (id: string, points: Array<{ x: number; y: number }>) => ({ id, kind: "boundary" as const, operation: "engrave" as const, points });
+    const cleaned = cleanBoundaryMarkings([
+      boundary("west", [{ x: -10, y: 0 }, { x: 0, y: 0 }]),
+      boundary("duplicate", [{ x: 0, y: 0 }, { x: -10, y: 0 }]),
+      boundary("east", [{ x: 0, y: 0 }, { x: 10, y: 2 }]),
+    ], 0.8);
+    expect(cleaned).toHaveLength(1);
+    expect(cleaned[0]).toMatchObject({ id: "boundary-0", kind: "boundary", operation: "engrave" });
+    expect(cleaned[0]?.points.at(-1)).toEqual({ x: 10, y: 2 });
   });
 });
 
@@ -183,5 +203,11 @@ describe("vector marking zoom", () => {
     await loadVectorMarkings(bounds, 11.6, DEFAULT_PROJECT);
     expect(getZxyMock).toHaveBeenCalled();
     for (const call of getZxyMock.mock.calls) expect(call[0]).toBe(11);
+  });
+
+  it("reduces oversized statewide requests to a bounded tile window", () => {
+    const colorado = { west: -109.06, east: -102.04, south: 36.99, north: 41.01 };
+    expect(fittingDataZoom(colorado, 11)).toBeLessThan(11);
+    expect(fittingDataZoom(boundsForProject(DEFAULT_PROJECT), 11)).toBe(11);
   });
 });

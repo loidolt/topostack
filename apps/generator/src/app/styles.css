@@ -249,6 +249,157 @@ body {
   margin-top: var(--panel-space-3);
 }
 
+.output-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.output-options button {
+  min-width: 0;
+  border: 1px solid var(--loidolt-border);
+  border-radius: var(--loidolt-border-radius);
+  background: var(--loidolt-surface-input);
+  color: var(--loidolt-text-muted);
+  padding: 10px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.output-options button[data-state="on"] {
+  border-color: var(--loidolt-accent);
+  background: color-mix(in srgb, var(--loidolt-accent) 9%, var(--loidolt-surface-input));
+  color: var(--loidolt-text);
+}
+
+.output-options button:focus-visible {
+  outline: 2px solid var(--loidolt-accent);
+  outline-offset: 2px;
+}
+
+.output-options button > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.output-options b {
+  font-size: var(--panel-font-label);
+  font-weight: 650;
+}
+
+.output-options small {
+  color: var(--loidolt-text-muted);
+  font-size: var(--panel-font-micro);
+  line-height: 1.35;
+}
+
+.location-kicker {
+  margin-top: 17px;
+}
+
+.line-presets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.line-presets button {
+  min-width: 0;
+  border: 1px solid var(--loidolt-border);
+  border-radius: var(--loidolt-border-radius);
+  background: var(--loidolt-surface-input);
+  color: var(--loidolt-text-muted);
+  padding: 7px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.line-presets button[data-state="on"] {
+  border-color: var(--loidolt-accent);
+  background: color-mix(in srgb, var(--loidolt-accent) 9%, var(--loidolt-surface-input));
+  color: var(--loidolt-text);
+}
+
+.line-presets button:focus-visible,
+.linework-customize:focus-visible {
+  outline: 2px solid var(--loidolt-accent);
+  outline-offset: 2px;
+}
+
+.line-presets svg {
+  width: 100%;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+}
+
+.line-presets button > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.line-presets b {
+  font-size: var(--panel-font-label);
+  font-weight: 650;
+}
+
+.line-presets small {
+  font-size: var(--panel-font-micro);
+  color: var(--loidolt-text-muted);
+}
+
+.linework-customize {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--loidolt-border);
+  background: transparent;
+  color: var(--loidolt-text-muted);
+  padding: 10px 1px 7px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font: var(--panel-font-caption) var(--loidolt-font-utility);
+  text-transform: uppercase;
+  letter-spacing: var(--loidolt-font-tracking-utility);
+}
+
+.linework-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 12px;
+}
+
+.linework-controls .subgroup-heading:not(:first-child) {
+  margin-top: 5px;
+}
+
+.trail-pattern-options {
+  width: 100%;
+}
+
+.trail-pattern-options .ldt-toggle-group__item {
+  flex: 1;
+}
+
+.linework-note {
+  color: var(--loidolt-text-muted);
+  font-size: var(--panel-font-micro);
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
 .location-card {
   width: 100%;
   min-height: 54px;
@@ -683,6 +834,10 @@ body {
   background: var(--loidolt-surface-sunken);
 }
 
+.preview-panel.engraving-preview-panel {
+  grid-template-rows: 48px minmax(0, 1fr);
+}
+
 .preview-toolbar {
   background: var(--loidolt-surface-alt);
   display: flex;
@@ -847,6 +1002,65 @@ body {
   overflow: visible;
 }
 
+.engraving-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(90%, 1040px);
+  height: min(84%, 760px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.engraving-stage svg {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: visible;
+}
+
+.engraving-surface {
+  fill: #e8cfaa;
+  stroke: none;
+}
+
+.engraving-contours,
+.engraving-details,
+.engraving-border {
+  fill: none;
+  stroke: #2b2119;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.engraving-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: var(--loidolt-text-muted);
+  font: var(--panel-font-caption, 10px) var(--loidolt-font-utility);
+  text-transform: uppercase;
+  letter-spacing: var(--loidolt-font-tracking-utility);
+}
+
+.engraving-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.engraving-legend i {
+  width: 24px;
+  border-top: var(--sample-width, 1px) solid currentColor;
+}
+
+.engraving-legend i.index {
+  border-top-width: var(--sample-width, 2px);
+}
+
 .axis {
   position: absolute;
   z-index: 2;
@@ -937,6 +1151,57 @@ body {
   justify-content: center;
   background: color-mix(in srgb, var(--loidolt-surface-inverse) 95%, transparent);
   color: var(--loidolt-text-inverse);
+}
+
+.generation-overlay.preview-update-overlay {
+  inset: 14px 14px auto auto;
+  width: min(250px, calc(100% - 28px));
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-content: initial;
+  column-gap: 9px;
+  padding: 10px 12px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--loidolt-surface) 92%, transparent);
+  color: var(--loidolt-text);
+  border: 1px solid var(--loidolt-border);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--loidolt-shadow, #000) 18%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.generation-overlay.preview-update-overlay .contour-loader {
+  width: 34px;
+  height: 24px;
+  grid-row: 1 / 3;
+}
+
+.generation-overlay.preview-update-overlay .contour-loader span {
+  border-width: 1.5px;
+}
+
+.generation-overlay.preview-update-overlay .contour-loader span:nth-child(2) {
+  inset: 4px 6px;
+}
+
+.generation-overlay.preview-update-overlay .contour-loader span:nth-child(3) {
+  inset: 8px 12px;
+}
+
+.generation-overlay.preview-update-overlay strong {
+  margin: 0;
+  font-size: 11px;
+}
+
+.generation-overlay.preview-update-overlay small {
+  min-width: 0;
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--loidolt-text-muted);
+  opacity: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .generation-overlay strong {

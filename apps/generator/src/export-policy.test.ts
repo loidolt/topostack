@@ -16,10 +16,10 @@ describe("Atomm export policy", () => {
   it("blocks incomplete requested vector data", () => {
     const result = geometry();
     result.vectorStatus = "unavailable";
-    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/transportation and water data is unavailable/i);
+    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/map detail data is unavailable/i);
     const depthOnly = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false };
     const missingOceanMask = generateGeometry(depthOnly, { ...createSyntheticSource(depthOnly, 32), sourceKind: "real", vectorStatus: "not-requested" });
-    expect(exportBlockReason(missingOceanMask, depthOnly)).toMatch(/transportation and water data is unavailable/i);
+    expect(exportBlockReason(missingOceanMask, depthOnly)).toMatch(/map detail data is unavailable/i);
     const withoutVectorDetails = { ...depthOnly, showWaterDepth: false };
     const completeWithoutVectors = generateGeometry(withoutVectorDetails, { ...createSyntheticSource(withoutVectorDetails, 32), sourceKind: "real", vectorStatus: "not-requested" });
     expect(exportBlockReason(completeWithoutVectors, withoutVectorDetails)).toBeUndefined();
@@ -33,5 +33,14 @@ describe("Atomm export policy", () => {
     expect("filename" in studio && studio.filename.endsWith("-master.svg")).toBe(true);
     expect(Array.isArray(download)).toBe(true);
     expect(Array.isArray(download) && download.length).toBe((result.layers.length - result.fabricationNests.length) * 2 + 5);
+  });
+
+  it("returns the engrave-only artwork for a flat project", () => {
+    const project = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, engravingContourCount: 10 };
+    const result = generateGeometry(project, { ...createSyntheticSource(project, 32), sourceKind: "real" });
+    const studio = createAtommExport(result, project, "openInStudio");
+    const download = createAtommExport(result, project, "download");
+    expect("filename" in studio && studio.filename.endsWith("-engraving.svg")).toBe(true);
+    expect(Array.isArray(download) && download).toHaveLength(4);
   });
 });

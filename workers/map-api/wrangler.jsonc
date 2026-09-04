@@ -11,7 +11,7 @@
   },
   "vars": {
     "ENVIRONMENT": "development",
-    "ALLOWED_ORIGINS": "http://localhost:5273,http://127.0.0.1:5273,https://topostack.loidolt.space,https://www.atomm.com",
+    "ALLOWED_ORIGINS": "http://localhost:5273,http://127.0.0.1:5273,https://topostack.echofoxtrot.works,https://www.atomm.com",
     "ALLOWED_ORIGIN_SUFFIXES": ".atomm.com",
     "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
     "GEOCODER_ORIGIN": "https://api.geoapify.com",
@@ -39,7 +39,7 @@
       "name": "topostack-dev",
       "vars": {
         "ENVIRONMENT": "development",
-        "ALLOWED_ORIGINS": "http://localhost:5273,http://127.0.0.1:5273,https://topostack.loidolt.space,https://www.atomm.com",
+        "ALLOWED_ORIGINS": "http://localhost:5273,http://127.0.0.1:5273,https://topostack.echofoxtrot.works,https://www.atomm.com",
         "ALLOWED_ORIGIN_SUFFIXES": ".atomm.com",
         "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
         "GEOCODER_ORIGIN": "https://api.geoapify.com",
@@ -58,11 +58,11 @@
     "production": {
       "name": "topostack",
       "routes": [
-        { "pattern": "topostack.loidolt.space", "custom_domain": true }
+        { "pattern": "topostack.echofoxtrot.works", "custom_domain": true }
       ],
       "vars": {
         "ENVIRONMENT": "production",
-        "ALLOWED_ORIGINS": "https://topostack.loidolt.space,https://www.atomm.com",
+        "ALLOWED_ORIGINS": "https://topostack.echofoxtrot.works,https://www.atomm.com",
         "ALLOWED_ORIGIN_SUFFIXES": ".atomm.com",
         "TERRAIN_ORIGIN": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium",
         "GEOCODER_ORIGIN": "https://api.geoapify.com",

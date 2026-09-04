@@ -19,6 +19,7 @@ const vectorArchive = new PMTiles(`${apiBase}/v1/osm.pmtiles`);
 const lakeArchive = new PMTiles(`${apiBase}/v1/lakes.pmtiles`);
 const TILE_SIZE = 256;
 const MAX_DATA_TILES = 24;
+const MAX_VECTOR_MARKINGS = 1800;
 const MAJOR_ROAD_DETAILS = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"]);
 const LOCAL_ROAD_DETAILS = new Set(["tertiary", "tertiary_link", "residential", "service", "unclassified", "road", "raceway", "driveway", "parking_aisle", "alley", "drive-through", "emergency_access"]);
 const TRAIL_DETAILS = new Set(["pedestrian", "track", "path", "cycleway", "bridleway", "steps", "corridor", "sidewalk", "crossing"]);
@@ -61,6 +62,21 @@ function tileWindow(bounds: GeoBounds, zoom: number): TileWindow {
   return { zoom, westX, eastX, northY, southY, tiles };
 }
 
+function fittingTileWindow(bounds: GeoBounds, requestedZoom: number, minimumZoom = 0): TileWindow {
+  let zoom = Math.max(minimumZoom, requestedZoom);
+  while (true) {
+    try { return tileWindow(bounds, zoom); }
+    catch (error) {
+      if (zoom <= minimumZoom || !(error instanceof Error) || !error.message.includes("too large")) throw error;
+      zoom -= 1;
+    }
+  }
+}
+
+export function fittingDataZoom(bounds: GeoBounds, requestedZoom: number): number {
+  return fittingTileWindow(bounds, requestedZoom).zoom;
+}
+
 export function classifyTransportation(properties: Record<string, unknown>): TransportationClass | undefined {
   const kind = typeof properties.kind === "string" ? properties.kind : "";
   const detail = typeof properties.kind_detail === "string" ? properties.kind_detail : "";
@@ -77,6 +93,11 @@ export function transportationLabel(properties: Record<string, unknown>): string
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+/** Protomaps normalizes first-level administrative lines to kind=region. */
+export function isStateProvinceBoundary(properties: Record<string, unknown>): boolean {
+  return properties.kind === "region";
 }
 
 // Vector tiles deliberately repeat linework in a buffer outside each tile so a
@@ -298,6 +319,10 @@ export function cleanWaterwayMarkings(markings: MarkingFeature[], minimumFeature
   return result;
 }
 
+export function cleanBoundaryMarkings(markings: MarkingFeature[], minimumFeatureMm: number): MarkingFeature[] {
+  return cleanWaterwayMarkings(markings, minimumFeatureMm).map((marking, index) => ({ ...marking, id: `boundary-${index}` }));
+}
+
 // Once tile buffers are removed, join matching road pieces at unambiguous
 // degree-two endpoints. This keeps offset normals continuous around bends while
 // preserving real forks and intersections as separate branches.
@@ -454,6 +479,10 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
     x: (((tile.x + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
     y: (((tile.y + point.y / extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
   });
+  // Keep the amount of geometry decoded and stitched bounded across the whole
+  // selected area. A per-tile maximum makes a statewide request do up to 24x
+  // the work before the final slice can discard it.
+  const markingBudgetPerTile = Math.max(1, Math.ceil(MAX_VECTOR_MARKINGS / window.tiles.length));
   const perTile = await Promise.all(window.tiles.map(async (tile): Promise<{ markings: MarkingFeature[]; waterPolygons: Polygon2D[]; oceanPolygons: Polygon2D[] }> => {
     const markings: MarkingFeature[] = [];
     const waterPolygons: Polygon2D[] = [];
@@ -465,10 +494,12 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
       const lowered = layerName.toLowerCase();
       const isRoad = lowered.includes("road") || lowered.includes("transportation");
       const isWater = lowered === "water" || lowered.includes("waterway");
-      if (!isRoad && !isWater) continue;
+      const isBoundary = lowered === "boundaries" || lowered.includes("boundary");
+      if (!isRoad && !isWater && !isBoundary) continue;
       for (let featureIndex = 0; featureIndex < layer.length; featureIndex += 1) {
         const feature = layer.feature(featureIndex);
         if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
+        if (isBoundary && !isStateProvinceBoundary(feature.properties as Record<string, unknown>)) continue;
         const transportationClass = isRoad ? classifyTransportation(feature.properties as Record<string, unknown>) : undefined;
         if (isRoad && !transportationClass) continue;
         const label = isRoad ? transportationLabel(feature.properties as Record<string, unknown>) : undefined;
@@ -486,12 +517,12 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
         // Keep scanning after the marking budget is full: polygon layers may
         // follow transportation in the archive, and their ocean mask is still
         // required to plan coastal stacks correctly.
-        if (markings.length >= 1800) continue;
+        if (markings.length >= markingBudgetPerTile && !isBoundary) continue;
         geometry.forEach((line, lineIndex) => {
           const lines = clipVectorTileLine(line, feature.extent);
           lines.forEach((clippedLine, clippedIndex) => {
-            if (clippedLine.length < 2 || markings.length >= 1800) return;
-            markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}-${clippedIndex}`, kind: transportationClass === "trail" ? "trail" : isRoad ? "road" : "water", operation: isRoad ? "engrave" : "score", ...(transportationClass ? { transportationClass } : {}), ...(label ? { label } : {}), points: clippedLine.map((point) => ({
+            if (clippedLine.length < 2 || (markings.length >= markingBudgetPerTile && !isBoundary)) return;
+            markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}-${clippedIndex}`, kind: isBoundary ? "boundary" : transportationClass === "trail" ? "trail" : isRoad ? "road" : "water", operation: isWater ? "score" : "engrave", ...(transportationClass ? { transportationClass } : {}), ...(label ? { label } : {}), points: clippedLine.map((point) => ({
               ...projectPoint(tile, feature.extent, point),
             })) });
           });
@@ -501,13 +532,14 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
     return { markings, waterPolygons, oceanPolygons };
   }));
   const rawMarkings = perTile.flatMap((tile) => tile.markings);
-  const transportation = stitchTransportationMarkings(rawMarkings.filter((marking) => marking.kind !== "water"));
+  const boundaries = cleanBoundaryMarkings(rawMarkings.filter((marking) => marking.kind === "boundary"), config.minimumFeatureMm);
+  const transportation = stitchTransportationMarkings(rawMarkings.filter((marking) => marking.kind === "road" || marking.kind === "trail"));
   const waterways = cleanWaterwayMarkings(rawMarkings.filter((marking) => marking.kind === "water"), config.minimumFeatureMm);
   const inland = dissolveWaterAreas(perTile.flatMap((tile) => tile.waterPolygons), config.minimumFeatureMm);
   const ocean = dissolveWaterAreas(perTile.flatMap((tile) => tile.oceanPolygons), config.minimumFeatureMm);
   const shorelines = shorelineMarkings([...ocean, ...inland]);
   return {
-    markings: [...transportation, ...shorelines, ...waterways].slice(0, 1800),
+    markings: [...boundaries, ...transportation, ...shorelines, ...waterways].slice(0, MAX_VECTOR_MARKINGS),
     inland,
     ocean,
   };
@@ -648,10 +680,15 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
   }
   const zoom = Math.max(0, Math.min(15, Math.round(config.location.zoom)));
   try {
-    const window = tileWindow(bounds, zoom);
+    // Imported/custom bounds can be much wider than their stored map zoom.
+    // Downshift terrain resolution until the request fits the bounded tile
+    // budget, matching the vector and lake behavior instead of falling back to
+    // synthetic terrain for an otherwise valid statewide selection.
+    const window = fittingTileWindow(bounds, zoom);
     // Ocean polygons are how geometry separates bathymetry from land relief,
     // so depth modeling needs vectors even when shoreline scoring is hidden.
-    const vectorRequested = config.showRoads || config.showTrails || config.showWater || config.showWaterDepth;
+    const usesWaterDepth = config.outputMode === "stack" && config.showWaterDepth;
+    const vectorRequested = config.showRoads || config.showTrails || config.showWater || config.showBoundaries || usesWaterDepth;
     const [{ elevation, imagerySources, datasetVersion }, vector, lakes] = await Promise.all([
       loadElevation(window, signal),
       vectorRequested
@@ -664,7 +701,7 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
         : Promise.resolve({ markings: [], inland: [], ocean: [], status: "not-requested" as const }),
       // Depth data is an enhancement: a missing or unprovisioned archive leaves
       // the water flat rather than failing the whole generation.
-      config.showWaterDepth
+      usesWaterDepth
         ? loadLakeAreas(bounds, zoom, config, signal).catch((error) => {
             if (signal?.aborted) throw error;
             return [] as WaterAreaV1[];
@@ -676,7 +713,7 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
   } catch (error) {
     if (signal?.aborted) throw error;
     const source = createSyntheticSource({ ...config, location: { ...config.location, bounds } });
-    return { source: { ...source, vectorStatus: config.showRoads || config.showTrails || config.showWater || config.showWaterDepth ? "unavailable" : "not-requested" }, fallback: true };
+    return { source: { ...source, vectorStatus: config.showRoads || config.showTrails || config.showWater || config.showBoundaries || (config.outputMode === "stack" && config.showWaterDepth) ? "unavailable" : "not-requested" }, fallback: true };
   }
 }
 

@@ -4,6 +4,30 @@ import { parseProject } from "./storage";
 
 describe("project import validation", () => {
   it("accepts a valid v1 project", () => expect(parseProject(DEFAULT_PROJECT)).toMatchObject({ schemaVersion: 1, widthMm: 300 }));
+  it("validates and restores flat engraving settings", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, outputMode: "engraving", engravingContourCount: 24, engravingIndexInterval: 6, showEngravingBorder: false })).toMatchObject({
+      outputMode: "engraving",
+      engravingContourCount: 24,
+      engravingIndexInterval: 6,
+      showEngravingBorder: false,
+    });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, outputMode: "print" })).toThrow(/output mode/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, engravingContourCount: 41 })).toThrow(/contour count/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, engravingIndexInterval: 1 })).toThrow(/index interval/i);
+  });
+  it("validates, restores, and defaults shared linework settings", () => {
+    const lineStyle = { ...DEFAULT_PROJECT.lineStyle, contourMm: 0.14, majorRoadMm: 0.5, trailPattern: "dotted" as const };
+    expect(parseProject({ ...DEFAULT_PROJECT, lineStyle }).lineStyle).toEqual(lineStyle);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, lineStyle: { ...lineStyle, waterMm: 2 } })).toThrow(/line widths/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, lineStyle: { ...lineStyle, trailPattern: "zigzag" } })).toThrow(/trail pattern/i);
+    const { lineStyle: _legacyLineStyle, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject).lineStyle).toEqual(DEFAULT_PROJECT.lineStyle);
+    const { boundaryMm: _legacyBoundaryWidth, coordinateGridMm: _legacyCoordinateGridWidth, ...legacyStyle } = DEFAULT_PROJECT.lineStyle;
+    expect(parseProject({ ...DEFAULT_PROJECT, lineStyle: legacyStyle }).lineStyle).toMatchObject({
+      boundaryMm: DEFAULT_PROJECT.lineStyle.boundaryMm,
+      coordinateGridMm: DEFAULT_PROJECT.lineStyle.coordinateGridMm,
+    });
+  });
   it("rejects non-finite and out-of-range values", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, widthMm: "not-a-number" })).toThrow(/finite/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, location: { ...DEFAULT_PROJECT.location, lat: 90 } })).toThrow(/Mercator/i);
@@ -28,6 +52,8 @@ describe("project import validation", () => {
       northArrowPlacement: _legacyNorthArrowPlacement,
       showTrails: _legacyTrails,
       showTransportationLabels: _legacyTransportationLabels,
+      showBoundaries: _legacyBoundaries,
+      showCoordinateGrid: _legacyCoordinateGrid,
       ...legacyProject
     } = DEFAULT_PROJECT;
     expect(parseProject(legacyProject)).toMatchObject({
@@ -43,6 +69,8 @@ describe("project import validation", () => {
       northArrowPlacement: { anchor: "bottom-right", offset: { x: 0, y: 0 } },
       showTrails: DEFAULT_PROJECT.showRoads,
       showTransportationLabels: false,
+      showBoundaries: false,
+      showCoordinateGrid: false,
     });
   });
   it("loads a project saved with an explicit layer count at the derived default", () => {
@@ -56,10 +84,12 @@ describe("project import validation", () => {
     expect(parsed).not.toHaveProperty("layerCount");
     expect(parsed.widthMm).toBe(DEFAULT_PROJECT.widthMm);
   });
-  it("validates and restores transportation controls", () => {
-    expect(parseProject({ ...DEFAULT_PROJECT, showRoads: false, showTrails: true, showTransportationLabels: true })).toMatchObject({ showRoads: false, showTrails: true, showTransportationLabels: true });
+  it("validates and restores transportation, boundary, and coordinate grid controls", () => {
+    expect(parseProject({ ...DEFAULT_PROJECT, showRoads: false, showTrails: true, showTransportationLabels: true, showBoundaries: true, showCoordinateGrid: true })).toMatchObject({ showRoads: false, showTrails: true, showTransportationLabels: true, showBoundaries: true, showCoordinateGrid: true });
     expect(() => parseProject({ ...DEFAULT_PROJECT, showTrails: "yes" })).toThrow(/showTrails/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, showTransportationLabels: "yes" })).toThrow(/showTransportationLabels/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showBoundaries: "yes" })).toThrow(/showBoundaries/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, showCoordinateGrid: "yes" })).toThrow(/showCoordinateGrid/i);
   });
   it("validates and restores fabrication typography", () => {
     expect(parseProject({ ...DEFAULT_PROJECT, textStyle: { font: "stencil", sizeMm: 5 } }).textStyle).toEqual({ font: "stencil", sizeMm: 5 });

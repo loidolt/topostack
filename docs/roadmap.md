@@ -2,12 +2,13 @@
 
 ## Implemented v1 foundation
 
+- First-class flat topographic engravings with independent contour density, heavier index contours, exact single-surface preview, optional engraved border, and an engrave-only 1:1 SVG package.
 - Atomm-first static generator and export lifecycle.
 - Global land-elevation tile flow with offline deterministic fallback.
 - Rectangular and circular crops, 2–24 layers, configurable dimensions and material thickness.
 - Contour polygon generation, feature filtering, cut/score/engrave IR, per-layer and master SVGs.
 - Map, 2D, and stacked/exploded 3D previews.
-- OSM PMTiles adapter for classified roads, trails, transportation labels, and water; local IndexedDB projects; undo/redo; and project JSON import/export.
+- OSM PMTiles adapter for classified roads, trails, transportation labels, water, and state/province boundaries; generated latitude/longitude graticules; local IndexedDB projects; undo/redo; and project JSON import/export.
 - Cloudflare Worker with R2 caching, range requests, geocoding, CORS, rate limiting, and observability.
 - Editable elevation-label anchors with font-independent vector paths, material-boundary checks, and automatic collision repair.
 - Optional next-layer alignment outlines and hidden registration labels for reliable physical assembly.

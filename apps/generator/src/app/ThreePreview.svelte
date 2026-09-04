@@ -138,12 +138,22 @@
       if (!runtime) return;
       disposeContent(runtime.content);
       const side = new THREE.MeshStandardMaterial({ color: 0x8b6039, roughness: 0.82, metalness: 0, ...SURFACE_DEPTH_BIAS });
-      const engraveMaterial = new THREE.LineBasicMaterial({ color: 0x39291d });
-      const majorRoadMaterial = new THREE.LineBasicMaterial({ color: 0x24180f });
-      const localRoadMaterial = new THREE.LineBasicMaterial({ color: 0x62442f });
-      const trailMaterial = new THREE.LineBasicMaterial({ color: 0x8a5e35 });
-      const scoreMaterial = new THREE.LineBasicMaterial({ color: 0x365c79 });
-      const labelMaterial = new THREE.LineBasicMaterial({ color: 0x21170f });
+      const style = activeGeometry.lineStyle;
+      const engraveMaterial = new THREE.LineBasicMaterial({ color: 0x39291d, linewidth: style.annotationMm });
+      const majorRoadMaterial = new THREE.LineBasicMaterial({ color: 0x24180f, linewidth: style.majorRoadMm });
+      const localRoadMaterial = new THREE.LineBasicMaterial({ color: 0x62442f, linewidth: style.localRoadMm });
+      const trailMaterial = style.trailPattern === "solid"
+        ? new THREE.LineBasicMaterial({ color: 0x8a5e35, linewidth: style.trailMm })
+        : new THREE.LineDashedMaterial({
+            color: 0x8a5e35,
+            linewidth: style.trailMm,
+            dashSize: style.trailPattern === "dotted" ? 0.05 : Math.max(style.trailMm * 6, 1.2),
+            gapSize: Math.max(style.trailMm * 4, 0.7),
+          });
+      const scoreMaterial = new THREE.LineBasicMaterial({ color: 0x365c79, linewidth: style.waterMm });
+      const boundaryMaterial = new THREE.LineDashedMaterial({ color: 0x6f4057, linewidth: style.boundaryMm, dashSize: Math.max(style.boundaryMm * 8, 1.6), gapSize: Math.max(style.boundaryMm * 5, 1) });
+      const coordinateGridMaterial = new THREE.LineDashedMaterial({ color: 0x59636e, linewidth: style.coordinateGridMm, dashSize: 0.05, gapSize: Math.max(style.coordinateGridMm * 5, 0.9) });
+      const labelMaterial = new THREE.LineBasicMaterial({ color: 0x21170f, linewidth: style.annotationMm });
       // Water reads as a pane resting over the basin rather than as another
       // sheet of stock, so it is transmissive and never casts a shadow into the
       // recess it is meant to reveal.
@@ -167,8 +177,10 @@
         layer.markings.forEach((marking) => {
           if (marking.points.length > 1) {
             const lineGeometry = new THREE.BufferGeometry().setFromPoints(linePoints(marking.points, 0));
-            const material = marking.operation === "score" ? scoreMaterial : marking.transportationClass === "major-road" ? majorRoadMaterial : marking.transportationClass === "local-road" ? localRoadMaterial : marking.transportationClass === "trail" ? trailMaterial : engraveMaterial;
-            addStacked(runtime!.content, new THREE.Line(lineGeometry, material), layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
+            const material = marking.operation === "score" ? scoreMaterial : marking.transportationClass === "major-road" ? majorRoadMaterial : marking.transportationClass === "local-road" ? localRoadMaterial : marking.transportationClass === "trail" ? trailMaterial : marking.kind === "boundary" ? boundaryMaterial : marking.kind === "grid" ? coordinateGridMaterial : engraveMaterial;
+            const line = new THREE.Line(lineGeometry, material);
+            if (material instanceof THREE.LineDashedMaterial) line.computeLineDistances();
+            addStacked(runtime!.content, line, layer.index, baseZ + layer.materialThicknessMm + markingLift(layer.materialThicknessMm));
           }
           if (marking.label && marking.points[0]) {
             const labelGeometry = new THREE.BufferGeometry().setFromPoints(labelPoints(marking.label, marking.points[0], marking.labelRotationRad, marking.textStyle));

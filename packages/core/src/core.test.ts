@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFabricationPackage, carveWaterDepth, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
+import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
 import { placeElevationLabel, placeLinearLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
@@ -223,13 +223,140 @@ describe("TopoStack geometry", () => {
     expect(await fabrication.master.blob.text()).toContain("master layout");
   });
 
+  it("builds one physical-size engrave-only graphic with contours and optional map details", async () => {
+    const project: ProjectConfigV1 = {
+      ...DEFAULT_PROJECT,
+      outputMode: "engraving",
+      engravingContourCount: 8,
+      engravingIndexInterval: 4,
+      lineStyle: { ...DEFAULT_PROJECT.lineStyle, contourMm: 0.12, indexContourMm: 0.4, majorRoadMm: 0.52, trailMm: 0.18, waterMm: 0.36, borderMm: 0.46, trailPattern: "dotted" },
+      showWaterDepth: true,
+      showAlignmentGuides: true,
+    };
+    const source = {
+      ...realSource(project),
+      markings: [
+        { id: "road-flat", kind: "road" as const, operation: "engrave" as const, transportationClass: "major-road" as const, points: [{ x: -120, y: -30 }, { x: 120, y: 30 }] },
+        { id: "trail-flat", kind: "trail" as const, operation: "engrave" as const, transportationClass: "trail" as const, points: [{ x: -100, y: 40 }, { x: 100, y: -40 }] },
+        { id: "water-flat", kind: "water" as const, operation: "score" as const, points: [{ x: -80, y: 10 }, { x: 80, y: 10 }] },
+      ],
+    };
+    const result = generateGeometry(project, source);
+    expect(result.layers).toHaveLength(9);
+    expect(result.fabricationNests).toEqual([]);
+    expect(result.layers.flatMap((layer) => layer.markings).some((marking) => marking.id.startsWith("alignment-"))).toBe(false);
+    const svg = engravingToSvg(result, project);
+    expect(svg).toContain('width="300mm"');
+    expect(svg).toContain('height="200mm"');
+    expect(svg).toContain('data-operation="ENGRAVE"');
+    expect(svg).toContain('id="ENGRAVE-contours-minor"');
+    expect(svg).toContain('id="ENGRAVE-contours-index"');
+    expect(svg).toContain('id="ENGRAVE-contours-minor" stroke-width="0.12"');
+    expect(svg).toContain('id="ENGRAVE-contours-index" stroke-width="0.4"');
+    expect(svg).toContain('id="ENGRAVE-major-roads" stroke-width="0.52"');
+    expect(svg).toMatch(/id="ENGRAVE-trails" stroke-width="0\.18" stroke-dasharray="0\.01 [^"]+"/);
+    expect(svg).toContain('id="ENGRAVE-water" stroke-width="0.36"');
+    expect(svg).toContain('id="ENGRAVE-border" stroke-width="0.46"');
+    expect(svg).toContain("road-flat");
+    expect(svg).toContain("trail-flat");
+    expect(svg).toContain("water-flat");
+    expect(svg).toContain('id="engraving-border"');
+    expect(svg).not.toContain('data-operation="CUT"');
+    expect(svg).not.toContain('data-operation="SCORE"');
+    const output = buildEngravingPackage(result, project);
+    expect(output.master.filename).toBe("crater-lake-engraving.svg");
+    expect(output.files).toHaveLength(4);
+    expect(await output.master.blob.text()).toBe(svg);
+  });
+
+  it("keeps flat linework bounded and uniquely keyed when provider ids repeat", () => {
+    const project: ProjectConfigV1 = {
+      ...DEFAULT_PROJECT,
+      outputMode: "engraving",
+      engravingContourCount: 40,
+      showElevationLabels: false,
+      showNorthArrow: false,
+      showScaleBar: false,
+      showTransportationLabels: false,
+      showWater: false,
+    };
+    const source = realSource(project);
+    source.markings = Array.from({ length: 200 }, (_, index) => ({
+      id: index < 2 ? "duplicate-provider-id" : `statewide-road-${index}`,
+      kind: "road" as const,
+      operation: "engrave" as const,
+      transportationClass: "local-road" as const,
+      points: [{ x: -140, y: -90 + index * 0.9 }, { x: 140, y: -90 + index * 0.9 }],
+    }));
+    const result = generateGeometry(project, source);
+    const roadsByLayer = result.layers.map((layer) => layer.markings.filter((marking) => marking.kind === "road"));
+    const roads = roadsByLayer.flat();
+    const ids = result.layers.flatMap((layer) => layer.markings).map((marking) => marking.id);
+    const svgIds = [...engravingToSvg(result, project).matchAll(/ id="([^"]+)"/g)].map((match) => match[1]);
+
+    expect(roads).toHaveLength(200);
+    expect(roadsByLayer.filter((markings) => markings.length > 0)).toHaveLength(1);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(new Set(svgIds).size).toBe(svgIds.length);
+  });
+
+  it("renders optional state and province boundaries as a dedicated dashed engraving layer", () => {
+    const project: ProjectConfigV1 = { ...DEFAULT_PROJECT, outputMode: "engraving", showBoundaries: true, lineStyle: { ...DEFAULT_PROJECT.lineStyle, boundaryMm: 0.27 } };
+    const source = realSource(project);
+    source.markings = [{ id: "region-line", kind: "boundary", operation: "engrave", points: [{ x: -140, y: -15 }, { x: 140, y: 25 }] }];
+    const result = generateGeometry(project, source);
+    const boundaries = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.kind === "boundary");
+    const svg = engravingToSvg(result, project);
+
+    expect(boundaries).toHaveLength(1);
+    expect(svg).toMatch(/id="ENGRAVE-boundaries" stroke-width="0\.27" stroke-dasharray="[^"]+"/);
+    expect(generateGeometry({ ...project, showBoundaries: false }, source).layers.flatMap((layer) => layer.markings).some((marking) => marking.kind === "boundary")).toBe(false);
+  });
+
+  it("generates an area-sensitive latitude and longitude grid as local dotted linework", () => {
+    const coloradoBounds = { west: -109.06, south: 36.99, east: -102.04, north: 41.01 };
+    const project: ProjectConfigV1 = {
+      ...DEFAULT_PROJECT,
+      outputMode: "engraving",
+      showRoads: false,
+      showTrails: false,
+      showWater: false,
+      showBoundaries: false,
+      showCoordinateGrid: true,
+      showElevationLabels: false,
+      showNorthArrow: false,
+      showScaleBar: false,
+      lineStyle: { ...DEFAULT_PROJECT.lineStyle, coordinateGridMm: 0.13 },
+    };
+    const source = { ...realSource(project), bounds: coloradoBounds, vectorStatus: "not-requested" as const };
+    const result = generateGeometry(project, source);
+    const grid = result.layers.flatMap((layer) => layer.markings).filter((marking) => marking.kind === "grid");
+    const svg = engravingToSvg(result, project);
+
+    expect(coordinateGridInterval(coloradoBounds)).toBe(1);
+    expect(grid.length).toBeGreaterThan(0);
+    expect(grid.some((marking) => marking.id.startsWith("coordinate-longitude-"))).toBe(true);
+    expect(grid.some((marking) => marking.id.startsWith("coordinate-latitude-"))).toBe(true);
+    expect(result.warnings.some((warning) => warning.code === "VECTOR_DATA_UNAVAILABLE")).toBe(false);
+    expect(svg).toMatch(/id="ENGRAVE-coordinate-grid" stroke-width="0\.13" stroke-dasharray="0\.01 [^"]+"/);
+    expect(generateGeometry({ ...project, showCoordinateGrid: false }, source).layers.flatMap((layer) => layer.markings).some((marking) => marking.kind === "grid")).toBe(false);
+  });
+
   it("blocks stale and synthetic fabrication exports", () => {
     const synthetic = generateGeometry(DEFAULT_PROJECT, createSyntheticSource(DEFAULT_PROJECT, 32));
     expect(() => buildFabricationPackage(synthetic, DEFAULT_PROJECT)).toThrow(/real terrain/i);
     const real = generateGeometry(DEFAULT_PROJECT, realSource());
     expect(() => buildFabricationPackage(real, { ...DEFAULT_PROJECT, widthMm: 301 })).toThrow(/settings changed/i);
     real.vectorStatus = "unavailable";
-    expect(() => buildFabricationPackage(real, DEFAULT_PROJECT)).toThrow(/transportation and water data is unavailable/i);
+    expect(() => buildFabricationPackage(real, DEFAULT_PROJECT)).toThrow(/map detail data is unavailable/i);
+  });
+
+  it("validates physical line widths and trail patterns", () => {
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, contourMm: 0.04 } })).toThrow(/line widths/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, majorRoadMm: 1.51 } })).toThrow(/line widths/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, trailPattern: "railroad" as never } })).toThrow(/trail pattern/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, boundaryMm: 0.01 } })).toThrow(/line widths/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, coordinateGridMm: 0.01 } })).toThrow(/line widths/i);
   });
 
   it("records unavailable requested vector data as a geometry warning", () => {
@@ -274,7 +401,7 @@ describe("TopoStack geometry", () => {
     expect(riverLayers.length).toBeGreaterThan(1);
   });
 
-  it("turns transportation classes into durable physical engraving patterns", () => {
+  it("turns transportation classes into durable physical engraving hierarchy", () => {
     const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
     const source = realSource(project);
     source.markings = [
@@ -282,14 +409,16 @@ describe("TopoStack geometry", () => {
       { id: "local", kind: "road", transportationClass: "local-road", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: 0 }, { x: 100, y: 0 }] },
       { id: "trail", kind: "trail", transportationClass: "trail", operation: "engrave", elevationM: source.elevation.min, points: [{ x: -100, y: 30 }, { x: 100, y: 30 }] },
     ];
-    const markings = generateGeometry(project, source).layers.flatMap((layer) => layer.markings);
+    const result = generateGeometry(project, source);
+    const markings = result.layers.flatMap((layer) => layer.markings);
     const major = markings.filter((marking) => marking.id.startsWith("major-") && marking.points.length > 1);
     expect(major.length).toBeGreaterThanOrEqual(2);
     expect(new Set(major.flatMap((marking) => marking.points.map((point) => point.y.toFixed(3))))).toEqual(new Set(["-30.400", "-29.600"]));
     expect(markings.filter((marking) => marking.id.startsWith("local-") && marking.points.length > 1).length).toBeGreaterThanOrEqual(1);
     const trail = markings.filter((marking) => marking.id.startsWith("trail-") && marking.points.length > 1);
-    expect(trail.length).toBeGreaterThan(20);
-    expect(trail.every((marking) => Math.hypot(marking.points.at(-1)!.x - marking.points[0]!.x, marking.points.at(-1)!.y - marking.points[0]!.y) <= 1.801)).toBe(true);
+    expect(trail.length).toBeGreaterThan(0);
+    expect(trail.some((marking) => Math.hypot(marking.points.at(-1)!.x - marking.points[0]!.x, marking.points.at(-1)!.y - marking.points[0]!.y) > 10)).toBe(true);
+    expect(masterToSvg(result)).toMatch(/ENGRAVE-trails[^>]+stroke-dasharray=/);
   });
 
   it("keeps roads continuous at exact terrain-layer transitions", () => {

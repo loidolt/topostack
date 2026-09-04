@@ -52,6 +52,39 @@ describe("TopoStack Svelte shell", () => {
     expect(target.querySelector(".layer-heading")?.textContent).toMatch(/Layer \d+ of 10/);
   });
 
+  it("switches to a flat engraving workflow with dedicated controls and preview", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const engraving = [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("Flat engraving"))!;
+    engraving.click();
+    await vi.waitFor(() => expect(engraving.getAttribute("aria-checked")).toBe("true"));
+    await vi.waitFor(() => expect(target.querySelector('svg[aria-label="Flat engraving preview"]')).not.toBeNull());
+    expect(target.querySelector<HTMLInputElement>('input[aria-label="Contour density"]')?.value).toBe("12");
+    expect(target.querySelector('button[role="switch"][aria-label="Engraved border"]')).not.toBeNull();
+    expect(target.querySelector('button[role="switch"][aria-label="Water depth"]')).toBeNull();
+    expect(target.querySelector(".layer-dock")).toBeNull();
+    expect(target.querySelector(".bar-meta")?.textContent).toContain("No cut paths");
+  });
+
+  it("applies linework presets and custom trail patterns to the engraving preview", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const bold = [...target.querySelectorAll<HTMLButtonElement>('.line-presets button[role="radio"]')].find((button) => button.textContent?.includes("Bold"))!;
+    bold.click();
+    await vi.waitFor(() => expect(bold.getAttribute("aria-checked")).toBe("true"));
+    [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("Flat engraving"))!.click();
+    await vi.waitFor(() => expect(target.querySelector('svg[aria-label="Flat engraving preview"]')).not.toBeNull());
+    await vi.waitFor(() => expect(target.querySelector('.engraving-contours path:not(.index-contour)')?.getAttribute("stroke-width")).toBe("0.24"));
+    target.querySelector<HTMLButtonElement>(".linework-customize")!.click();
+    await tick();
+    const dotted = [...target.querySelectorAll<HTMLButtonElement>('.trail-pattern-options button[role="radio"]')].find((button) => button.textContent?.includes("Dotted"))!;
+    dotted.click();
+    await vi.waitFor(() => expect(dotted.getAttribute("aria-checked")).toBe("true"));
+    await vi.waitFor(() => expect(target.querySelector('[data-transportation-class="trail"] path')?.getAttribute("stroke-dasharray")).toMatch(/^0\.01 /));
+  });
+
   it("lays out fabrication controls in full-width rows with a compact position pair", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });
@@ -197,6 +230,35 @@ describe("TopoStack Svelte shell", () => {
     expect(loadTerrainMock).not.toHaveBeenCalled();
   });
 
+  it("keeps the current preview visible and interactive during an expensive detail refresh", async () => {
+    const projectWithoutVectors = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false, showWaterDepth: false };
+    const source = { ...createSyntheticSource(projectWithoutVectors, 32), sourceKind: "real" as const, vectorStatus: "not-requested" as const };
+    loadTerrainMock.mockResolvedValue({ source, fallback: false });
+    loadVectorMarkingsMock.mockImplementation((_bounds, _zoom, _project, signal: AbortSignal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("Canceled", "AbortError")), { once: true });
+    }));
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    for (const label of ["Roads", "Trails", "Water outlines", "Water depth"]) {
+      target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!.click();
+      await vi.waitFor(() => expect(target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!.getAttribute("aria-checked")).toBe("false"));
+    }
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+
+    target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads"]')!.click();
+    await tick();
+    const stage = target.querySelector<HTMLElement>(".preview-stage")!;
+    const feedback = stage.querySelector<HTMLElement>(".preview-update-overlay")!;
+    expect(stage.getAttribute("aria-busy")).toBe("true");
+    expect(feedback.textContent).toContain("Refreshing preview");
+    expect(feedback.textContent).toContain("Updating map details");
+    expect(getComputedStyle(feedback).pointerEvents).toBe("none");
+    expect(stage.querySelector('[data-testid="three-preview"]')).not.toBeNull();
+    expect(target.querySelector(".status-line")?.classList.contains("status-loading")).toBe(true);
+  });
+
   it("renders named road engravings when transportation labels are enabled", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });
@@ -248,6 +310,50 @@ describe("TopoStack Svelte shell", () => {
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Map details updated"));
     await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
     expect(loadTerrainMock).toHaveBeenCalledOnce();
+  });
+
+  it("fetches and renders state and province boundaries on demand", async () => {
+    const projectWithoutVectors = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false, showBoundaries: false, showWaterDepth: false };
+    const source = { ...createSyntheticSource(projectWithoutVectors, 32), sourceKind: "real" as const, vectorStatus: "not-requested" as const };
+    loadTerrainMock.mockResolvedValue({ source, fallback: false });
+    loadVectorMarkingsMock.mockResolvedValue({
+      markings: [{ id: "fetched-boundary", kind: "boundary", operation: "engrave", points: [{ x: -100, y: -40 }, { x: 100, y: 40 }] }],
+      inland: [],
+      ocean: [],
+    });
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    for (const label of ["Roads", "Trails", "Water outlines", "Water depth"]) {
+      const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
+      input.click();
+      await vi.waitFor(() => expect(input.getAttribute("aria-checked")).toBe("false"));
+    }
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+
+    const boundaries = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="State and province boundaries"]')!;
+    boundaries.click();
+    await vi.waitFor(() => expect(loadVectorMarkingsMock).toHaveBeenCalledOnce());
+    expect(loadVectorMarkingsMock.mock.calls[0]?.[2]).toMatchObject({ showBoundaries: true, showRoads: false, showTrails: false, showWater: false });
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Map details updated"));
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Cut layers"))!.click();
+    await vi.waitFor(() => expect(target.querySelector('[data-marking-kind="boundary"]')).not.toBeNull());
+    expect(boundaries.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("generates and renders a coordinate grid locally without fetching vectors", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    const coordinateGrid = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Latitude and longitude grid"]')!;
+    coordinateGrid.click();
+    await vi.waitFor(() => expect(coordinateGrid.getAttribute("aria-checked")).toBe("true"));
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toMatch(/updated/i));
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Cut layers"))!.click();
+    await vi.waitFor(() => expect(target.querySelector('[data-marking-kind="grid"]')).not.toBeNull());
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
   });
 
   it("fetches lake metadata when water depth is enabled after generation", async () => {

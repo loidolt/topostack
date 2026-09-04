@@ -38,8 +38,6 @@ import type {
 } from "./types.js";
 
 const MAJOR_ROAD_OFFSET_MM = 0.4;
-const TRAIL_DASH_MM = 1.8;
-const TRAIL_GAP_MM = 1.2;
 const TRANSPORTATION_LABEL_LIMIT = 80;
 
 function boundary(config: ProjectConfigV1): Point2D[] {
@@ -237,42 +235,10 @@ function offsetPolyline(points: Point2D[], distanceMm: number): Point2D[] {
   });
 }
 
-function dashPolyline(points: Point2D[], dashMm = TRAIL_DASH_MM, gapMm = TRAIL_GAP_MM): Point2D[][] {
-  const result: Point2D[][] = [];
-  let drawing = true;
-  let remaining = dashMm;
-  let active: Point2D[] = [];
-  for (let index = 0; index < points.length - 1; index += 1) {
-    let start = points[index]!;
-    const end = points[index + 1]!;
-    let segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
-    while (segmentLength > 1e-9) {
-      const step = Math.min(remaining, segmentLength);
-      const next = pointAt(start, end, step / segmentLength);
-      if (drawing) {
-        if (!active.length) active.push(start);
-        active.push(next);
-      }
-      start = next;
-      segmentLength -= step;
-      remaining -= step;
-      if (remaining <= 1e-9) {
-        if (drawing && active.length > 1) result.push(active);
-        active = [];
-        drawing = !drawing;
-        remaining = drawing ? dashMm : gapMm;
-      }
-    }
-  }
-  if (drawing && active.length > 1) result.push(active);
-  return result;
-}
-
 function styledTransportationPaths(points: Point2D[], transportationClass: TransportationClass, polygons: Polygon2D[], excludedPolygons: Polygon2D[] = []): Point2D[][] {
   if (transportationClass === "major-road") {
     return [-MAJOR_ROAD_OFFSET_MM, MAJOR_ROAD_OFFSET_MM].flatMap((distance) => clipPolyline(offsetPolyline(points, distance), polygons, excludedPolygons));
   }
-  if (transportationClass === "trail") return dashPolyline(points).flatMap((dash) => clipPolyline(dash, polygons, excludedPolygons));
   return clipPolyline(points, polygons, excludedPolygons);
 }
 
@@ -591,6 +557,60 @@ function splitMarking(feature: MarkingFeature, thresholds: number[], grid: Eleva
   return result;
 }
 
+/** A readable, area-sensitive graticule interval chosen from 1/2/5 degree steps. */
+export function coordinateGridInterval(bounds: GeoBounds): number {
+  const target = Math.max(bounds.east - bounds.west, bounds.north - bounds.south) / 8;
+  if (!(target > 0) || !Number.isFinite(target)) return 1;
+  const magnitude = 10 ** Math.floor(Math.log10(target));
+  for (const multiplier of [1, 2, 5, 10]) {
+    const candidate = magnitude * multiplier;
+    if (candidate >= target - 1e-12) return candidate;
+  }
+  return magnitude * 10;
+}
+
+function coordinateGridValues(minimum: number, maximum: number, interval: number): number[] {
+  const epsilon = interval * 1e-7;
+  const values: number[] = [];
+  for (let value = Math.ceil((minimum + epsilon) / interval) * interval; value < maximum - epsilon && values.length < 1000; value += interval) {
+    values.push(Math.abs(value) < epsilon ? 0 : Number(value.toFixed(10)));
+  }
+  return values;
+}
+
+function mercatorWorldY(latitude: number): number {
+  const radians = clamp(latitude, -85.0511, 85.0511) * Math.PI / 180;
+  return (1 - Math.asinh(Math.tan(radians)) / Math.PI) / 2;
+}
+
+function coordinateGridMarkings(config: ProjectConfigV1, bounds: GeoBounds, grid: ElevationGrid): MarkingFeature[] {
+  const interval = coordinateGridInterval(bounds);
+  const longitudeSamples = Math.max(2, Math.min(256, grid.height));
+  const latitudeSamples = Math.max(2, Math.min(256, grid.width));
+  const northY = mercatorWorldY(bounds.north);
+  const southY = mercatorWorldY(bounds.south);
+  const markings: MarkingFeature[] = [];
+  coordinateGridValues(bounds.west, bounds.east, interval).forEach((longitude) => {
+    const x = ((longitude - bounds.west) / (bounds.east - bounds.west) - 0.5) * config.widthMm;
+    markings.push({
+      id: `coordinate-longitude-${Math.round(longitude * 1e7)}`,
+      kind: "grid",
+      operation: "engrave",
+      points: Array.from({ length: longitudeSamples }, (_, index) => ({ x, y: (index / (longitudeSamples - 1) - 0.5) * config.heightMm })),
+    });
+  });
+  coordinateGridValues(bounds.south, bounds.north, interval).forEach((latitude) => {
+    const y = ((mercatorWorldY(latitude) - northY) / (southY - northY) - 0.5) * config.heightMm;
+    markings.push({
+      id: `coordinate-latitude-${Math.round(latitude * 1e7)}`,
+      kind: "grid",
+      operation: "engrave",
+      points: Array.from({ length: latitudeSamples }, (_, index) => ({ x: (index / (latitudeSamples - 1) - 0.5) * config.widthMm, y })),
+    });
+  });
+  return markings;
+}
+
 export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1): GeometryIRV1 {
   validateProject(config);
   if (source.schemaVersion !== 1) throw new Error("Unsupported source-data schema version.");
@@ -601,14 +621,16 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   if (![source.bounds.west, source.bounds.south, source.bounds.east, source.bounds.north].every(Number.isFinite) || source.bounds.west >= source.bounds.east || source.bounds.south >= source.bounds.north) throw new Error("Source geographic bounds are invalid.");
 
   const warnings: GeometryIRV1["warnings"] = [];
-  if (source.vectorStatus !== "available" && (config.showRoads || config.showTrails || config.showWater || config.showWaterDepth)) warnings.push({
+  const flatEngraving = config.outputMode === "engraving";
+  const usesWaterDepth = !flatEngraving && config.showWaterDepth;
+  if (source.vectorStatus !== "available" && (config.showRoads || config.showTrails || config.showWater || config.showBoundaries || usesWaterDepth)) warnings.push({
     code: "VECTOR_DATA_UNAVAILABLE",
-    message: "Transportation and water data is unavailable. This project cannot be exported until the map data is restored or those details are disabled.",
+    message: "Map detail data is unavailable. This project cannot be exported until the map data is restored or those details are disabled.",
   });
   // Carve modeled lake beds into the grid before anything reads it. Everything
   // downstream then produces the recess on its own: the contour rings become
   // holes, and holes are already honoured by clipping, nesting, and labelling.
-  const waterAreas: WaterAreaV1[] = config.showWaterDepth
+  const waterAreas: WaterAreaV1[] = usesWaterDepth
     ? (source.waterAreas ?? []).map((area) => {
         const override = area.hylakId === undefined ? undefined : config.waterDepthOverrides[String(area.hylakId)];
         return override && override > 0 ? { ...area, maxDepthM: override, depthSource: "user" as const } : area;
@@ -639,32 +661,35 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   }
   const landRelief = landMax - landMin;
   const depthBelowLandM = Math.max(0, landMin - carved.grid.min);
-  if (landRelief < 20) warnings.push({ code: "LOW_RELIEF", message: "This area has very little elevation change; the layers may look nearly identical." });
+  if (landRelief < 20) warnings.push({ code: "LOW_RELIEF", message: flatEngraving ? "This area has very little elevation change; contour lines may be sparse." : "This area has very little elevation change; the layers may look nearly identical." });
 
   const clip = boundary(config);
   const stack = planTerrainStack(config, landRelief, source.bounds, depthBelowLandM);
-  const hasOcean = waterAreas.some((area) => area.kind === "ocean");
+  const hasOcean = !flatEngraving && waterAreas.some((area) => area.kind === "ocean");
 
   // The ladder runs at one uniform step, extended below the land minimum by the
   // depth sheets the budget allowed. When there is an ocean it is shifted so sea
   // level falls exactly on a step, which is what makes a coastline cut as a
   // clean sheet edge instead of a ragged one.
-  let ladderBase = landMin - stack.depthLayerCount * stack.metersPerLayer;
+  let ladderBase = flatEngraving ? landMin : landMin - stack.depthLayerCount * stack.metersPerLayer;
   if (hasOcean && stack.metersPerLayer > 0) {
     ladderBase = SEA_LEVEL_M - Math.ceil((SEA_LEVEL_M - ladderBase) / stack.metersPerLayer) * stack.metersPerLayer;
   }
   // Snapping to sea level slides the whole ladder down by up to a full step, so
   // the sheet count is taken from the span the ladder actually has to cover.
   // Keeping the planned count instead would drop the summit off the top.
-  const ladderLayerCount = stack.metersPerLayer > 0
-    ? clamp(Math.round((landMax - ladderBase) / stack.metersPerLayer), MIN_LAYER_COUNT, MAX_LAYER_COUNT)
-    : stack.layerCount;
-  const thresholds = Array.from({ length: ladderLayerCount }, (_, index) => ladderBase + stack.metersPerLayer * index);
+  const ladderLayerCount = flatEngraving
+    ? config.engravingContourCount + 1
+    : stack.metersPerLayer > 0
+      ? clamp(Math.round((landMax - ladderBase) / stack.metersPerLayer), MIN_LAYER_COUNT, MAX_LAYER_COUNT)
+      : stack.layerCount;
+  const contourStepM = flatEngraving ? landRelief / (config.engravingContourCount + 1) : stack.metersPerLayer;
+  const thresholds = Array.from({ length: ladderLayerCount }, (_, index) => ladderBase + contourStepM * index);
 
   // Water deeper than the ladder reaches is flattened at its floor rather than
   // silently punching through the base sheet.
   const { grid: modelGrid, clamped } = clampCarveToLadder(carved.grid, ladderBase);
-  if (clamped) warnings.push({
+  if (clamped && !flatEngraving) warnings.push({
     code: "WATER_DEPTH_CLAMPED",
     message: `Water here is deeper than the ${stack.depthLayerCount} sheet${stack.depthLayerCount === 1 ? "" : "s"} below the shoreline can hold, so its floor is flattened. Lower the water depth exaggeration, or use thinner material to buy more sheets.`,
   });
@@ -714,22 +739,57 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     return [{ ...surface, polygons, layerIndex: layerForElevation(surface.surfaceElevationM, thresholds) }];
   });
 
-  const fabricationNests = addMaterialNests(config, layers);
+  const fabricationNests = flatEngraving ? [] : addMaterialNests(config, layers);
 
   const transportationLabels = new Map<string, Array<{ layer: LayerIR; paths: Point2D[][]; transportationClass: TransportationClass; excludedPolygons: Polygon2D[] }>>();
-  for (const feature of source.markings) {
+  const baseLayer = layers[0];
+  const mapMarkings = config.showCoordinateGrid ? [...source.markings, ...coordinateGridMarkings(config, source.bounds, modelGrid)] : source.markings;
+  const sourceIdCounts = new Map<string, number>();
+  mapMarkings.forEach((feature) => sourceIdCounts.set(feature.id, (sourceIdCounts.get(feature.id) ?? 0) + 1));
+  const sourceIdOccurrences = new Map<string, number>();
+  for (const feature of mapMarkings) {
+    const sourceOccurrence = sourceIdOccurrences.get(feature.id) ?? 0;
+    sourceIdOccurrences.set(feature.id, sourceOccurrence + 1);
+    const featureId = (sourceIdCounts.get(feature.id) ?? 0) > 1 ? `${feature.id}-source-${sourceOccurrence}` : feature.id;
     const transportationClass = feature.transportationClass ?? (feature.kind === "trail" ? "trail" : feature.kind === "road" ? "local-road" : undefined);
     const enabled = (transportationClass === "trail" && config.showTrails) ||
       (transportationClass !== undefined && transportationClass !== "trail" && config.showRoads) ||
       (feature.kind === "water" && config.showWater) ||
+      (feature.kind === "boundary" && config.showBoundaries) ||
+      (feature.kind === "grid" && config.showCoordinateGrid) ||
       feature.kind === "contour" || feature.kind === "label" || feature.kind === "guide";
     if (!enabled) continue;
+    // A flat engraving has one physical face. Routing every feature through
+    // every elevation band only explodes one road into dozens of DOM/SVG paths
+    // before reassembling it visually. Clip it to the crop once instead.
+    if (flatEngraving && baseLayer) {
+      if (transportationClass) {
+        const clipped = clipPolyline(feature.points, baseLayer.polygons);
+        styledTransportationPaths(feature.points, transportationClass, baseLayer.polygons).forEach((points, styleIndex) => baseLayer.markings.push({
+          id: `${featureId}-flat-transport-${styleIndex}`,
+          operation: "engrave",
+          kind: transportationClass === "trail" ? "trail" : "road",
+          transportationClass,
+          points,
+        }));
+        const label = feature.label && config.showTransportationLabels ? fabricationLabel(feature.label) : undefined;
+        if (label && clipped.length) transportationLabels.set(label, [...(transportationLabels.get(label) ?? []), { layer: baseLayer, paths: clipped, transportationClass, excludedPolygons: [] }]);
+      } else {
+        if (feature.label && feature.points[0] && baseLayer.polygons.some((polygon) => pointInPolygon(feature.points[0]!, polygon))) {
+          baseLayer.markings.push({ id: `${featureId}-flat-label`, operation: feature.operation, kind: feature.kind, points: [feature.points[0]], label: feature.label, textStyle: config.textStyle });
+        }
+        clipPolyline(feature.points, baseLayer.polygons)
+          .filter((points) => feature.kind !== "water" || polylineLength(points) >= config.minimumFeatureMm)
+          .forEach((points, clipIndex) => baseLayer.markings.push({ id: `${featureId}-flat-${clipIndex}`, operation: feature.operation, kind: feature.kind, points }));
+      }
+      continue;
+    }
     if (transportationClass) {
       layers.forEach((layer, layerIndex) => {
         const excludedPolygons = coveringPolygons(layers, layerIndex);
         const clipped = clipPolyline(feature.points, layer.polygons, excludedPolygons);
         styledTransportationPaths(feature.points, transportationClass, layer.polygons, excludedPolygons).forEach((points, styleIndex) => layer.markings.push({
-          id: `${feature.id}-${layer.index}-transport-${styleIndex}`,
+          id: `${featureId}-${layer.index}-transport-${styleIndex}`,
           operation: "engrave",
           kind: transportationClass === "trail" ? "trail" : "road",
           transportationClass,
@@ -745,10 +805,10 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       if (!layer) continue;
       const clipped = clipPolyline(segment.points, layer.polygons);
       if (feature.label && segment.points[0] && layer.polygons.some((polygon) => pointInPolygon(segment.points[0]!, polygon))) {
-        layer.markings.push({ id: `${feature.id}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label, textStyle: config.textStyle });
+        layer.markings.push({ id: `${featureId}-${layer.index}-${segmentIndex}-label`, operation: feature.operation, kind: feature.kind, points: [segment.points[0]], label: feature.label, textStyle: config.textStyle });
       }
       clipped.filter((points) => feature.kind !== "water" || polylineLength(points) >= config.minimumFeatureMm).forEach((points, clipIndex) => layer.markings.push({
-        id: `${feature.id}-${layer.index}-${segmentIndex}-${clipIndex}`,
+        id: `${featureId}-${layer.index}-${segmentIndex}-${clipIndex}`,
         operation: feature.operation,
         kind: feature.kind,
         points,
@@ -759,8 +819,8 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   const enabledRoadFeatures = source.markings.filter((feature) => feature.kind === "road" && config.showRoads);
   transportationJunctions(enabledRoadFeatures).forEach((junction, junctionIndex) => {
     const ring = junctionRing(junction.point);
-    layers.forEach((layer, layerIndex) => {
-      const excludedPolygons = coveringPolygons(layers, layerIndex);
+    (flatEngraving && baseLayer ? [baseLayer] : layers).forEach((layer, layerIndex) => {
+      const excludedPolygons = flatEngraving ? [] : coveringPolygons(layers, layerIndex);
       clipPolyline(ring, layer.polygons, excludedPolygons).forEach((points, clipIndex) => layer.markings.push({
         id: `road-junction-${junctionIndex}-${layer.index}-${clipIndex}`,
         operation: "engrave",
@@ -771,7 +831,6 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     });
   });
 
-  const baseLayer = layers[0];
   if (baseLayer && config.showNorthArrow) {
     baseLayer.markings.push(...northArrowMarkings(config));
   }
@@ -794,7 +853,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     );
   }
 
-  if (config.showAlignmentGuides) addAlignmentGuides(config, layers);
+  if (!flatEngraving && config.showAlignmentGuides) addAlignmentGuides(config, layers);
 
   let transportationLabelIndex = 0;
   const labelEntries = [...transportationLabels].sort((left, right) => {
@@ -829,6 +888,10 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     });
     const placements = placeElevationLabelStack(labelsByLayer, config, layers);
     layers.forEach((layer, layerIndex) => {
+      // A flat map labels only its emphasized index contours. Labelling every
+      // minor line overwhelms the engraving and implies a label on the base
+      // crop boundary, which is not itself a contour.
+      if (flatEngraving && (layer.index === 0 || layer.index % config.engravingIndexInterval !== 0)) return;
       const placed = placements[layerIndex];
       if (!placed) {
         omittedLayers.push(String(layer.index + 1));
@@ -850,6 +913,24 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     });
   }
 
+  // External vector archives are allowed to repeat source IDs. Preserve stable
+  // human-readable prefixes while guaranteeing valid keyed previews and unique
+  // SVG element IDs even when an upstream tile contains a duplicate feature.
+  const markingIds = new Set<string>();
+  const duplicateCounts = new Map<string, number>();
+  layers.forEach((layer) => layer.markings.forEach((marking) => {
+    const original = marking.id;
+    let occurrence = duplicateCounts.get(original) ?? 0;
+    let candidate = occurrence === 0 ? original : `${original}-duplicate-${occurrence}`;
+    while (markingIds.has(candidate)) {
+      occurrence += 1;
+      candidate = `${original}-duplicate-${occurrence}`;
+    }
+    duplicateCounts.set(original, occurrence + 1);
+    marking.id = candidate;
+    markingIds.add(candidate);
+  }));
+
   return {
     schemaVersion: 1,
     projectId: config.id,
@@ -865,6 +946,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     widthMm: config.widthMm,
     heightMm: config.heightMm,
     laserKerfMm: config.laserKerfMm,
+    lineStyle: { ...config.lineStyle },
     verticalExaggeration: stack.verticalExaggeration,
     minElevationM: modelGrid.min,
     maxElevationM: modelGrid.max,
@@ -882,11 +964,13 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
 export function validateProject(config: ProjectConfigV1): void {
   if (config.schemaVersion !== 1) throw new Error("Unsupported project schema version.");
   if (config.units !== "metric" && config.units !== "imperial") throw new Error("Project units must be metric or imperial.");
+  if (config.outputMode !== "stack" && config.outputMode !== "engraving") throw new Error("Project output mode must be stack or engraving.");
   if (config.cropShape !== "rectangle" && config.cropShape !== "circle") throw new Error("Crop shape must be rectangle or circle.");
   if (!config.elevationLabelPosition || typeof config.elevationLabelPosition !== "object") throw new Error("Elevation label position is required.");
   if (!config.textStyle || typeof config.textStyle !== "object") throw new Error("Text style is required.");
+  if (!config.lineStyle || typeof config.lineStyle !== "object") throw new Error("Line style is required.");
   if (!config.northArrowPlacement || typeof config.northArrowPlacement !== "object" || !config.northArrowPlacement.offset || typeof config.northArrowPlacement.offset !== "object") throw new Error("North arrow placement is required.");
-  for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showWaterDepth: config.showWaterDepth, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar })) {
+  for (const [label, value] of Object.entries({ showRoads: config.showRoads, showTrails: config.showTrails, showTransportationLabels: config.showTransportationLabels, showWater: config.showWater, showBoundaries: config.showBoundaries, showCoordinateGrid: config.showCoordinateGrid, showWaterDepth: config.showWaterDepth, showAlignmentGuides: config.showAlignmentGuides, optimizeMaterialUse: config.optimizeMaterialUse, showElevationLabels: config.showElevationLabels, showNorthArrow: config.showNorthArrow, showScaleBar: config.showScaleBar, showEngravingBorder: config.showEngravingBorder })) {
     if (typeof value !== "boolean") throw new Error(`${label} must be true or false.`);
   }
   if (config.widthMm <= 0) throw new Error("Project width must be greater than zero.");
@@ -896,7 +980,12 @@ export function validateProject(config: ProjectConfigV1): void {
   if (config.materialThicknessMm < 0.5 || config.materialThicknessMm > 25) throw new Error("Material thickness must be between 0.5 and 25 mm.");
   if (config.location.lat < -85.0511 || config.location.lat > 85.0511) throw new Error("This version supports Web Mercator latitudes only.");
   if (config.location.lon < -180 || config.location.lon > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
-  if (![config.widthMm, config.heightMm, config.verticalExaggeration, config.materialThicknessMm, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  const lineWidths = [config.lineStyle.contourMm, config.lineStyle.indexContourMm, config.lineStyle.majorRoadMm, config.lineStyle.localRoadMm, config.lineStyle.trailMm, config.lineStyle.waterMm, config.lineStyle.boundaryMm, config.lineStyle.coordinateGridMm, config.lineStyle.annotationMm, config.lineStyle.borderMm];
+  if (![config.widthMm, config.heightMm, config.verticalExaggeration, config.materialThicknessMm, config.engravingContourCount, config.engravingIndexInterval, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y, ...lineWidths].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
+  if (lineWidths.some((width) => width < 0.05 || width > 1.5)) throw new Error("Line widths must be between 0.05 and 1.5 mm.");
+  if (config.lineStyle.trailPattern !== "solid" && config.lineStyle.trailPattern !== "dashed" && config.lineStyle.trailPattern !== "dotted") throw new Error("Trail pattern must be solid, dashed, or dotted.");
+  if (!Number.isInteger(config.engravingContourCount) || config.engravingContourCount < 4 || config.engravingContourCount > 40) throw new Error("Engraving contour count must be an integer between 4 and 40.");
+  if (!Number.isInteger(config.engravingIndexInterval) || config.engravingIndexInterval < 2 || config.engravingIndexInterval > 10) throw new Error("Engraving index interval must be an integer between 2 and 10.");
   if (config.minimumFeatureMm < 0.2 || config.minimumFeatureMm > 5) throw new Error("Minimum feature must be between 0.2 and 5 mm.");
   if (config.glueMarginMm < 2 || config.glueMarginMm > 25) throw new Error("Glue margin must be between 2 and 25 mm.");
   if (config.laserKerfMm < 0 || config.laserKerfMm > 1) throw new Error("Laser kerf must be between 0 and 1 mm.");

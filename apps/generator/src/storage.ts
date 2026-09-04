@@ -13,9 +13,18 @@ function unitValue(value: unknown): ProjectConfigV1["units"] {
   if (value === "metric" || value === "imperial") return value;
   throw new Error("Project units must be metric or imperial.");
 }
+function outputModeValue(value: unknown): ProjectConfigV1["outputMode"] {
+  if (value === undefined) return DEFAULT_PROJECT.outputMode;
+  if (value === "stack" || value === "engraving") return value;
+  throw new Error("Project output mode must be stack or engraving.");
+}
 function textFontValue(value: unknown): ProjectConfigV1["textStyle"]["font"] {
   if (value === "technical" || value === "rounded" || value === "stencil") return value;
   throw new Error("Text font must be technical, rounded, or stencil.");
+}
+function trailPatternValue(value: unknown): ProjectConfigV1["lineStyle"]["trailPattern"] {
+  if (value === "solid" || value === "dashed" || value === "dotted") return value;
+  throw new Error("Trail pattern must be solid, dashed, or dotted.");
 }
 function northArrowStyleValue(value: unknown): NorthArrowStyle {
   if (value === "minimal" || value === "classic" || value === "mariner") return value;
@@ -59,6 +68,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
   const labelPositionRecord = record.elevationLabelPosition as Record<string, unknown> | undefined;
   if (record.textStyle !== undefined && (!record.textStyle || typeof record.textStyle !== "object")) throw new Error("Text style is invalid.");
   const textStyleRecord = record.textStyle as Record<string, unknown> | undefined;
+  if (record.lineStyle !== undefined && (!record.lineStyle || typeof record.lineStyle !== "object")) throw new Error("Line style is invalid.");
+  const lineStyleRecord = record.lineStyle as Record<string, unknown> | undefined;
   if (record.northArrowPlacement !== undefined && (!record.northArrowPlacement || typeof record.northArrowPlacement !== "object")) throw new Error("North arrow placement is invalid.");
   const northArrowPlacementRecord = record.northArrowPlacement as Record<string, unknown> | undefined;
   const northArrowOffsetRecord = northArrowPlacementRecord?.offset && typeof northArrowPlacementRecord.offset === "object" ? northArrowPlacementRecord.offset as Record<string, unknown> : undefined;
@@ -74,7 +85,24 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     },
     cropShape: record.cropShape === "circle" ? "circle" : record.cropShape === "rectangle" ? "rectangle" : DEFAULT_PROJECT.cropShape,
     units: unitValue(record.units),
+    outputMode: outputModeValue(record.outputMode),
     widthMm: numberValue(record.widthMm), heightMm: numberValue(record.heightMm), materialThicknessMm: numberValue(record.materialThicknessMm),
+    engravingContourCount: record.engravingContourCount === undefined ? DEFAULT_PROJECT.engravingContourCount : numberValue(record.engravingContourCount),
+    engravingIndexInterval: record.engravingIndexInterval === undefined ? DEFAULT_PROJECT.engravingIndexInterval : numberValue(record.engravingIndexInterval),
+    showEngravingBorder: record.showEngravingBorder === undefined ? DEFAULT_PROJECT.showEngravingBorder : booleanValue(record.showEngravingBorder, "showEngravingBorder"),
+    lineStyle: lineStyleRecord ? {
+      contourMm: numberValue(lineStyleRecord.contourMm),
+      indexContourMm: numberValue(lineStyleRecord.indexContourMm),
+      majorRoadMm: numberValue(lineStyleRecord.majorRoadMm),
+      localRoadMm: numberValue(lineStyleRecord.localRoadMm),
+      trailMm: numberValue(lineStyleRecord.trailMm),
+      waterMm: numberValue(lineStyleRecord.waterMm),
+      boundaryMm: lineStyleRecord.boundaryMm === undefined ? DEFAULT_PROJECT.lineStyle.boundaryMm : numberValue(lineStyleRecord.boundaryMm),
+      coordinateGridMm: lineStyleRecord.coordinateGridMm === undefined ? DEFAULT_PROJECT.lineStyle.coordinateGridMm : numberValue(lineStyleRecord.coordinateGridMm),
+      annotationMm: numberValue(lineStyleRecord.annotationMm),
+      borderMm: numberValue(lineStyleRecord.borderMm),
+      trailPattern: trailPatternValue(lineStyleRecord.trailPattern),
+    } : { ...DEFAULT_PROJECT.lineStyle },
     verticalExaggeration: record.verticalExaggeration === undefined ? DEFAULT_PROJECT.verticalExaggeration : numberValue(record.verticalExaggeration),
     minimumFeatureMm: record.minimumFeatureMm === undefined ? DEFAULT_PROJECT.minimumFeatureMm : numberValue(record.minimumFeatureMm),
     smoothing: record.smoothing === undefined ? DEFAULT_PROJECT.smoothing : numberValue(record.smoothing),
@@ -82,6 +110,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     showTrails: record.showTrails === undefined ? booleanValue(record.showRoads, "showRoads") : booleanValue(record.showTrails, "showTrails"),
     showTransportationLabels: record.showTransportationLabels === undefined ? false : booleanValue(record.showTransportationLabels, "showTransportationLabels"),
     showWater: booleanValue(record.showWater, "showWater"),
+    showBoundaries: record.showBoundaries === undefined ? DEFAULT_PROJECT.showBoundaries : booleanValue(record.showBoundaries, "showBoundaries"),
+    showCoordinateGrid: record.showCoordinateGrid === undefined ? DEFAULT_PROJECT.showCoordinateGrid : booleanValue(record.showCoordinateGrid, "showCoordinateGrid"),
     showWaterDepth: record.showWaterDepth === undefined ? DEFAULT_PROJECT.showWaterDepth : booleanValue(record.showWaterDepth, "showWaterDepth"),
     waterDepthExaggeration: record.waterDepthExaggeration === undefined ? DEFAULT_PROJECT.waterDepthExaggeration : numberValue(record.waterDepthExaggeration),
     waterDepthOverrides: waterDepthOverridesValue(record.waterDepthOverrides),

@@ -1,4 +1,6 @@
 export type CropShape = "rectangle" | "circle";
+export type OutputMode = "stack" | "engraving";
+export type TrailPattern = "solid" | "dashed" | "dotted";
 export type Operation = "cut" | "score" | "engrave";
 export type UnitSystem = "metric" | "imperial";
 export type TextFont = "technical" | "rounded" | "stencil";
@@ -23,6 +25,35 @@ export interface TextStyleV1 {
   /** Physical cap height of fabrication text in millimeters. */
   sizeMm: number;
 }
+
+/** Physical stroke hierarchy shared by previews and machine SVGs. */
+export interface LineStyleV1 {
+  contourMm: number;
+  indexContourMm: number;
+  majorRoadMm: number;
+  localRoadMm: number;
+  trailMm: number;
+  waterMm: number;
+  boundaryMm: number;
+  coordinateGridMm: number;
+  annotationMm: number;
+  borderMm: number;
+  trailPattern: TrailPattern;
+}
+
+export const DEFAULT_LINE_STYLE: LineStyleV1 = {
+  contourMm: 0.16,
+  indexContourMm: 0.32,
+  majorRoadMm: 0.38,
+  localRoadMm: 0.26,
+  trailMm: 0.22,
+  waterMm: 0.3,
+  boundaryMm: 0.24,
+  coordinateGridMm: 0.16,
+  annotationMm: 0.2,
+  borderMm: 0.34,
+  trailPattern: "dashed",
+};
 
 export const TEXT_FONTS: readonly TextFont[] = ["technical", "rounded", "stencil"];
 export const DEFAULT_TEXT_STYLE: TextStyleV1 = { font: "technical", sizeMm: 3.1 };
@@ -107,8 +138,17 @@ export interface ProjectConfigV1 {
   location: GeoPoint & { label: string; zoom: number; bounds?: GeoBounds };
   cropShape: CropShape;
   units: UnitSystem;
+  /** Physical result: a layered cut model or one flat engrave-only graphic. */
+  outputMode: OutputMode;
   widthMm: number;
   heightMm: number;
+  /** Number of elevation contour lines in a flat engraving. */
+  engravingContourCount: number;
+  /** Every nth contour is emitted as a heavier index contour. */
+  engravingIndexInterval: number;
+  /** Adds an engraved outline around the selected crop. Never a cut path. */
+  showEngravingBorder: boolean;
+  lineStyle: LineStyleV1;
   materialThicknessMm: number;
   verticalExaggeration: number;
   minimumFeatureMm: number;
@@ -117,6 +157,8 @@ export interface ProjectConfigV1 {
   showTrails: boolean;
   showTransportationLabels: boolean;
   showWater: boolean;
+  showBoundaries: boolean;
+  showCoordinateGrid: boolean;
   showWaterDepth: boolean;
   /** Depth multiplier relative to the terrain's vertical scale; 1 matches it. */
   waterDepthExaggeration: number;
@@ -153,7 +195,7 @@ export interface SourceAttribution {
 
 export interface MarkingFeature {
   id: string;
-  kind: "road" | "trail" | "water" | "contour" | "label" | "guide";
+  kind: "road" | "trail" | "water" | "boundary" | "grid" | "contour" | "label" | "guide";
   operation: Exclude<Operation, "cut">;
   points: Point2D[];
   label?: string;
@@ -296,6 +338,7 @@ export interface GeometryIRV1 {
   widthMm: number;
   heightMm: number;
   laserKerfMm: number;
+  lineStyle: LineStyleV1;
   verticalExaggeration: number;
   minElevationM: number;
   maxElevationM: number;
@@ -334,8 +377,13 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   location: { lat: 42.9446, lon: -122.109, label: "Crater Lake, Oregon", zoom: 11 },
   cropShape: "rectangle",
   units: "metric",
+  outputMode: "stack",
   widthMm: 300,
   heightMm: 200,
+  engravingContourCount: 12,
+  engravingIndexInterval: 5,
+  showEngravingBorder: true,
+  lineStyle: { ...DEFAULT_LINE_STYLE },
   materialThicknessMm: 3,
   verticalExaggeration: 2,
   minimumFeatureMm: 0.8,
@@ -344,6 +392,8 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showTrails: true,
   showTransportationLabels: false,
   showWater: true,
+  showBoundaries: false,
+  showCoordinateGrid: false,
   showWaterDepth: true,
   waterDepthExaggeration: 1,
   waterDepthOverrides: {},
