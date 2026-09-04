@@ -26,6 +26,16 @@ function trailPatternValue(value: unknown): ProjectConfigV1["lineStyle"]["trailP
   if (value === "solid" || value === "dashed" || value === "dotted") return value;
   throw new Error("Trail pattern must be solid, dashed, or dotted.");
 }
+function roadStyleValue(value: unknown): ProjectConfigV1["lineStyle"]["roadStyle"] {
+  if (value === undefined) return DEFAULT_PROJECT.lineStyle.roadStyle;
+  if (value === "centerline" || value === "outlined") return value;
+  throw new Error("Road style must be centerline or outlined.");
+}
+function roadCapValue(value: unknown): ProjectConfigV1["lineStyle"]["roadCap"] {
+  if (value === undefined) return DEFAULT_PROJECT.lineStyle.roadCap;
+  if (value === "round" || value === "square") return value;
+  throw new Error("Road cap must be round or square.");
+}
 function northArrowStyleValue(value: unknown): NorthArrowStyle {
   if (value === "minimal" || value === "classic" || value === "mariner") return value;
   throw new Error("North arrow style must be minimal, classic, or mariner.");
@@ -143,6 +153,9 @@ export function parseProject(value: unknown): ProjectConfigV1 {
       annotationMm: numberValue(lineStyleRecord.annotationMm),
       borderMm: numberValue(lineStyleRecord.borderMm),
       trailPattern: trailPatternValue(lineStyleRecord.trailPattern),
+      roadStyle: roadStyleValue(lineStyleRecord.roadStyle),
+      majorRoadSpacingMm: lineStyleRecord.majorRoadSpacingMm === undefined ? DEFAULT_PROJECT.lineStyle.majorRoadSpacingMm : numberValue(lineStyleRecord.majorRoadSpacingMm),
+      roadCap: roadCapValue(lineStyleRecord.roadCap),
     } : { ...DEFAULT_PROJECT.lineStyle },
     verticalExaggeration: record.verticalExaggeration === undefined ? DEFAULT_PROJECT.verticalExaggeration : numberValue(record.verticalExaggeration),
     minimumFeatureMm: record.minimumFeatureMm === undefined ? DEFAULT_PROJECT.minimumFeatureMm : numberValue(record.minimumFeatureMm),

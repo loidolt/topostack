@@ -38,7 +38,6 @@ import type {
   WaterSurfaceIR,
 } from "./types.js";
 
-const MAJOR_ROAD_OFFSET_MM = 0.4;
 const TRANSPORTATION_LABEL_LIMIT = 80;
 
 function boundary(config: ProjectConfigV1): Point2D[] {
@@ -236,9 +235,10 @@ function offsetPolyline(points: Point2D[], distanceMm: number): Point2D[] {
   });
 }
 
-function styledTransportationPaths(points: Point2D[], transportationClass: TransportationClass, polygons: Polygon2D[], excludedPolygons: Polygon2D[] = []): Point2D[][] {
-  if (transportationClass === "major-road") {
-    return [-MAJOR_ROAD_OFFSET_MM, MAJOR_ROAD_OFFSET_MM].flatMap((distance) => clipPolyline(offsetPolyline(points, distance), polygons, excludedPolygons));
+function styledTransportationPaths(points: Point2D[], transportationClass: TransportationClass, config: ProjectConfigV1, polygons: Polygon2D[], excludedPolygons: Polygon2D[] = []): Point2D[][] {
+  if (transportationClass === "major-road" && config.lineStyle.roadStyle === "outlined") {
+    const offsetMm = config.lineStyle.majorRoadSpacingMm / 2;
+    return [-offsetMm, offsetMm].flatMap((distance) => clipPolyline(offsetPolyline(points, distance), polygons, excludedPolygons));
   }
   return clipPolyline(points, polygons, excludedPolygons);
 }
@@ -275,10 +275,10 @@ function transportationJunctions(features: MarkingFeature[]): TransportationJunc
     .sort((left, right) => left.point.y - right.point.y || left.point.x - right.point.x);
 }
 
-function junctionRing(center: Point2D): Point2D[] {
+function junctionRing(center: Point2D, radiusMm: number): Point2D[] {
   const points = Array.from({ length: 20 }, (_, index) => {
     const angle = index / 20 * Math.PI * 2;
-    return { x: center.x + Math.cos(angle) * MAJOR_ROAD_OFFSET_MM, y: center.y + Math.sin(angle) * MAJOR_ROAD_OFFSET_MM };
+    return { x: center.x + Math.cos(angle) * radiusMm, y: center.y + Math.sin(angle) * radiusMm };
   });
   return [...points, { ...points[0]! }];
 }
@@ -779,7 +779,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     if (flatEngraving && baseLayer) {
       if (transportationClass) {
         const clipped = clipPolyline(feature.points, baseLayer.polygons);
-        styledTransportationPaths(feature.points, transportationClass, baseLayer.polygons).forEach((points, styleIndex) => baseLayer.markings.push({
+        styledTransportationPaths(feature.points, transportationClass, config, baseLayer.polygons).forEach((points, styleIndex) => baseLayer.markings.push({
           id: `${featureId}-flat-transport-${styleIndex}`,
           operation: "engrave",
           kind: transportationClass === "trail" ? "trail" : "road",
@@ -802,7 +802,7 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
       layers.forEach((layer, layerIndex) => {
         const excludedPolygons = coveringPolygons(layers, layerIndex);
         const clipped = clipPolyline(feature.points, layer.polygons, excludedPolygons);
-        styledTransportationPaths(feature.points, transportationClass, layer.polygons, excludedPolygons).forEach((points, styleIndex) => layer.markings.push({
+        styledTransportationPaths(feature.points, transportationClass, config, layer.polygons, excludedPolygons).forEach((points, styleIndex) => layer.markings.push({
           id: `${featureId}-${layer.index}-transport-${styleIndex}`,
           operation: "engrave",
           kind: transportationClass === "trail" ? "trail" : "road",
@@ -831,8 +831,9 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
   }
 
   const enabledRoadFeatures = source.markings.filter((feature) => feature.kind === "road" && config.showRoads);
-  transportationJunctions(enabledRoadFeatures).forEach((junction, junctionIndex) => {
-    const ring = junctionRing(junction.point);
+  const roadJunctions = config.lineStyle.roadStyle === "outlined" ? transportationJunctions(enabledRoadFeatures) : [];
+  roadJunctions.forEach((junction, junctionIndex) => {
+    const ring = junctionRing(junction.point, config.lineStyle.majorRoadSpacingMm / 2);
     (flatEngraving && baseLayer ? [baseLayer] : layers).forEach((layer, layerIndex) => {
       const excludedPolygons = flatEngraving ? [] : coveringPolygons(layers, layerIndex);
       clipPolyline(ring, layer.polygons, excludedPolygons).forEach((points, clipIndex) => layer.markings.push({
@@ -1054,6 +1055,9 @@ export function validateProject(config: ProjectConfigV1): void {
   const lineWidths = [config.lineStyle.contourMm, config.lineStyle.indexContourMm, config.lineStyle.majorRoadMm, config.lineStyle.localRoadMm, config.lineStyle.trailMm, config.lineStyle.waterMm, config.lineStyle.boundaryMm, config.lineStyle.coordinateGridMm, config.lineStyle.annotationMm, config.lineStyle.borderMm];
   if (![config.widthMm, config.heightMm, config.verticalExaggeration, config.materialThicknessMm, config.engravingContourCount, config.engravingIndexInterval, config.minimumFeatureMm, config.glueMarginMm, config.laserKerfMm, config.smoothing, config.location.lat, config.location.lon, config.location.zoom, config.elevationLabelPosition.x, config.elevationLabelPosition.y, config.textStyle.sizeMm, config.northArrowSizeMm, config.northArrowPlacement.offset.x, config.northArrowPlacement.offset.y, ...lineWidths].every(Number.isFinite)) throw new Error("Project values must be finite numbers.");
   if (lineWidths.some((width) => width < 0.05 || width > 1.5)) throw new Error("Line widths must be between 0.05 and 1.5 mm.");
+  if (!Number.isFinite(config.lineStyle.majorRoadSpacingMm) || config.lineStyle.majorRoadSpacingMm < 0.2 || config.lineStyle.majorRoadSpacingMm > 4) throw new Error("Major road spacing must be between 0.2 and 4 mm.");
+  if (config.lineStyle.roadStyle !== "centerline" && config.lineStyle.roadStyle !== "outlined") throw new Error("Road style must be centerline or outlined.");
+  if (config.lineStyle.roadCap !== "round" && config.lineStyle.roadCap !== "square") throw new Error("Road cap must be round or square.");
   if (config.lineStyle.trailPattern !== "solid" && config.lineStyle.trailPattern !== "dashed" && config.lineStyle.trailPattern !== "dotted") throw new Error("Trail pattern must be solid, dashed, or dotted.");
   if (!Number.isInteger(config.engravingContourCount) || config.engravingContourCount < 4 || config.engravingContourCount > 40) throw new Error("Engraving contour count must be an integer between 4 and 40.");
   if (!Number.isInteger(config.engravingIndexInterval) || config.engravingIndexInterval < 2 || config.engravingIndexInterval > 10) throw new Error("Engraving index interval must be an integer between 2 and 10.");

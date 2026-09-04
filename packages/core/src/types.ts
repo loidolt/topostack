@@ -1,6 +1,8 @@
 export type CropShape = "rectangle" | "circle";
 export type OutputMode = "stack" | "engraving";
 export type TrailPattern = "solid" | "dashed" | "dotted";
+export type RoadStyle = "centerline" | "outlined";
+export type RoadCap = "round" | "square";
 export type Operation = "cut" | "score" | "engrave";
 export type UnitSystem = "metric" | "imperial";
 export type TextFont = "technical" | "rounded" | "stencil";
@@ -57,6 +59,11 @@ export interface LineStyleV1 {
   annotationMm: number;
   borderMm: number;
   trailPattern: TrailPattern;
+  /** Major roads can be a single continuous stroke or two parallel edge strokes. */
+  roadStyle: RoadStyle;
+  /** Center-to-center spacing between the two strokes used by outlined major roads. */
+  majorRoadSpacingMm: number;
+  roadCap: RoadCap;
 }
 
 export const DEFAULT_LINE_STYLE: LineStyleV1 = {
@@ -71,6 +78,9 @@ export const DEFAULT_LINE_STYLE: LineStyleV1 = {
   annotationMm: 0.2,
   borderMm: 0.34,
   trailPattern: "dashed",
+  roadStyle: "centerline",
+  majorRoadSpacingMm: 0.8,
+  roadCap: "round",
 };
 
 export const TEXT_FONTS: readonly TextFont[] = ["technical", "rounded", "stencil"];

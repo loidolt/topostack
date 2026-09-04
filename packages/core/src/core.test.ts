@@ -403,6 +403,9 @@ describe("TopoStack geometry", () => {
     expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, trailPattern: "railroad" as never } })).toThrow(/trail pattern/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, boundaryMm: 0.01 } })).toThrow(/line widths/i);
     expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, coordinateGridMm: 0.01 } })).toThrow(/line widths/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, majorRoadSpacingMm: 4.1 } })).toThrow(/road spacing/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, roadStyle: "bordered" as never } })).toThrow(/road style/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, roadCap: "butt" as never } })).toThrow(/road cap/i);
   });
 
   it("records unavailable requested vector data as a geometry warning", () => {
@@ -458,8 +461,8 @@ describe("TopoStack geometry", () => {
     const result = generateGeometry(project, source);
     const markings = result.layers.flatMap((layer) => layer.markings);
     const major = markings.filter((marking) => marking.id.startsWith("major-") && marking.points.length > 1);
-    expect(major.length).toBeGreaterThanOrEqual(2);
-    expect(new Set(major.flatMap((marking) => marking.points.map((point) => point.y.toFixed(3))))).toEqual(new Set(["-30.400", "-29.600"]));
+    expect(major.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(major.flatMap((marking) => marking.points.map((point) => point.y.toFixed(3))))).toEqual(new Set(["-30.000"]));
     expect(markings.filter((marking) => marking.id.startsWith("local-") && marking.points.length > 1).length).toBeGreaterThanOrEqual(1);
     const trail = markings.filter((marking) => marking.id.startsWith("trail-") && marking.points.length > 1);
     expect(trail.length).toBeGreaterThan(0);
@@ -479,7 +482,7 @@ describe("TopoStack geometry", () => {
   });
 
   it("joins double-line major roads cleanly at forks", () => {
-    const project = { ...DEFAULT_PROJECT, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const project = { ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, roadStyle: "outlined" as const, majorRoadSpacingMm: 1.2 }, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
     const source = realSource(project);
     source.markings = [
       { id: "fork-main", kind: "road", transportationClass: "major-road", operation: "engrave", points: [{ x: -80, y: 0 }, { x: 0, y: 0 }, { x: 80, y: 0 }] },
@@ -487,7 +490,21 @@ describe("TopoStack geometry", () => {
     ];
     const joins = generateGeometry(project, source).layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("road-junction-"));
     expect(joins.length).toBeGreaterThan(0);
-    expect(joins.flatMap((marking) => marking.points).every((point) => Math.abs(Math.hypot(point.x, point.y) - 0.4) < 1e-6)).toBe(true);
+    expect(joins.flatMap((marking) => marking.points).every((point) => Math.abs(Math.hypot(point.x, point.y) - 0.6) < 1e-6)).toBe(true);
+  });
+
+  it("supports configurable outlined major roads without affecting local-road centerlines", () => {
+    const project = { ...DEFAULT_PROJECT, lineStyle: { ...DEFAULT_PROJECT.lineStyle, roadStyle: "outlined" as const, majorRoadSpacingMm: 1.2 }, optimizeMaterialUse: false, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const source = realSource(project);
+    source.markings = [
+      { id: "major", kind: "road", transportationClass: "major-road", operation: "engrave", points: [{ x: -80, y: -10 }, { x: 80, y: -10 }] },
+      { id: "local", kind: "road", transportationClass: "local-road", operation: "engrave", points: [{ x: -80, y: 10 }, { x: 80, y: 10 }] },
+    ];
+    const markings = generateGeometry(project, source).layers.flatMap((layer) => layer.markings);
+    const majorY = new Set(markings.filter((marking) => marking.id.startsWith("major-")).flatMap((marking) => marking.points.map((point) => point.y.toFixed(3))));
+    const localY = new Set(markings.filter((marking) => marking.id.startsWith("local-")).flatMap((marking) => marking.points.map((point) => point.y.toFixed(3))));
+    expect(majorY).toEqual(new Set(["-10.600", "-9.400"]));
+    expect(localY).toEqual(new Set(["10.000"]));
   });
 
   it("independently controls trails and deduplicated transportation labels", () => {

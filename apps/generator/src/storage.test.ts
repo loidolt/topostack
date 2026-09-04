@@ -49,6 +49,15 @@ describe("project import validation", () => {
       boundaryMm: DEFAULT_PROJECT.lineStyle.boundaryMm,
       coordinateGridMm: DEFAULT_PROJECT.lineStyle.coordinateGridMm,
     });
+    const { roadStyle: _legacyRoadStyle, majorRoadSpacingMm: _legacyRoadSpacing, roadCap: _legacyRoadCap, ...legacyRoadStyle } = DEFAULT_PROJECT.lineStyle;
+    expect(parseProject({ ...DEFAULT_PROJECT, lineStyle: legacyRoadStyle }).lineStyle).toMatchObject({
+      roadStyle: "centerline",
+      majorRoadSpacingMm: 0.8,
+      roadCap: "round",
+    });
+    expect(() => parseProject({ ...DEFAULT_PROJECT, lineStyle: { ...lineStyle, majorRoadSpacingMm: 5 } })).toThrow(/road spacing/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, lineStyle: { ...lineStyle, roadStyle: "bordered" } })).toThrow(/road style/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, lineStyle: { ...lineStyle, roadCap: "butt" } })).toThrow(/road cap/i);
   });
   it("rejects non-finite and out-of-range values", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, widthMm: "not-a-number" })).toThrow(/finite/i);

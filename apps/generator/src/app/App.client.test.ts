@@ -29,6 +29,12 @@ describe("TopoStack Svelte shell", () => {
   // in the real WebGL component.
   beforeAll(async () => {
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorageStub });
+    Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element): void { this.callback([{ target, contentRect: { width: 500, height: 500 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect(): void {}
+      unobserve(): void {}
+    } });
     await import("./ThreePreview.svelte");
   });
   afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); loadLakeAreasMock.mockReset(); theme.preference = "system"; localStorage.removeItem("topostack-theme"); localStorage.removeItem("topostack-menu-sections-v1"); delete window.atomm; });
@@ -65,6 +71,49 @@ describe("TopoStack Svelte shell", () => {
     expect(target.querySelector('button[role="switch"][aria-label="Water depth"]')).toBeNull();
     expect(target.querySelector(".layer-dock")).toBeNull();
     expect(target.querySelector(".bar-meta")?.textContent).toContain("No cut paths");
+    const viewport = target.querySelector<HTMLElement>("[data-engraving-viewport]")!;
+    const artwork = target.querySelector<SVGSVGElement>('svg[aria-label="Flat engraving preview"]')!;
+    const initialViewBox = artwork.getAttribute("viewBox");
+    expect(viewport.dataset.zoom).toBe("1.00");
+    target.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')!.click();
+    await vi.waitFor(() => expect(viewport.dataset.zoom).toBe("1.50"));
+    expect(viewport.dataset.rendering).toBe("preview");
+    expect(artwork.getAttribute("viewBox")).toBe(initialViewBox);
+    await vi.waitFor(() => expect(viewport.dataset.rendering).toBe("sharp"));
+    expect(viewport.dataset.renderZoom).toBe("1.50");
+    expect(artwork.getAttribute("viewBox")).not.toBe(initialViewBox);
+    expect(Number(artwork.getAttribute("viewBox")!.split(" ")[2])).toBeLessThan(Number(initialViewBox!.split(" ")[2]));
+    expect(target.querySelector(".engraving-zoom-value")?.textContent).toBe("150%");
+    target.querySelector<HTMLButtonElement>('button[aria-label="Reset engraving view"]')!.click();
+    await vi.waitFor(() => expect(viewport.dataset.zoom).toBe("1.00"));
+    expect(artwork.getAttribute("viewBox")).toBe(initialViewBox);
+    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -80, bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(Number(viewport.dataset.zoom)).toBeGreaterThan(1));
+    expect(viewport.dataset.rendering).toBe("preview");
+    expect(viewport.dataset.renderZoom).toBe("1.00");
+    expect(artwork.getAttribute("viewBox")).toBe(initialViewBox);
+    expect(target.querySelector<HTMLElement>(".engraving-canvas")?.style.transform).toMatch(/scale\(1\./);
+    await vi.waitFor(() => expect(viewport.dataset.rendering).toBe("sharp"));
+    expect(viewport.dataset.renderZoom).toBe(viewport.dataset.zoom);
+    expect(artwork.getAttribute("viewBox")).not.toBe(initialViewBox);
+    expect(target.querySelector<HTMLElement>(".engraving-canvas")?.style.transform).toContain("scale(1)");
+    const settledViewBox = artwork.getAttribute("viewBox");
+    viewport.setPointerCapture = vi.fn();
+    viewport.hasPointerCapture = vi.fn(() => true);
+    viewport.releasePointerCapture = vi.fn();
+    const pointerEvent = (type: string, clientX: number, clientY: number): MouseEvent => {
+      const event = new MouseEvent(type, { bubbles: true, button: 0, clientX, clientY });
+      Object.defineProperty(event, "pointerId", { value: 1 });
+      return event;
+    };
+    viewport.dispatchEvent(pointerEvent("pointerdown", 100, 100));
+    viewport.dispatchEvent(pointerEvent("pointermove", 150, 125));
+    const panLayer = target.querySelector<HTMLElement>(".engraving-pan-layer")!;
+    await vi.waitFor(() => expect(panLayer.style.transform).toContain("50px, 25px"));
+    expect(artwork.getAttribute("viewBox")).toBe(settledViewBox);
+    viewport.dispatchEvent(pointerEvent("pointerup", 150, 125));
+    await vi.waitFor(() => expect(panLayer.style.transform).toBe("translate3d(0, 0, 0)"));
+    expect(artwork.getAttribute("viewBox")).not.toBe(settledViewBox);
   });
 
   it("applies linework presets and custom trail patterns to the engraving preview", async () => {
@@ -83,6 +132,13 @@ describe("TopoStack Svelte shell", () => {
     dotted.click();
     await vi.waitFor(() => expect(dotted.getAttribute("aria-checked")).toBe("true"));
     await vi.waitFor(() => expect(target.querySelector('[data-transportation-class="trail"] path')?.getAttribute("stroke-dasharray")).toMatch(/^0\.01 /));
+    const outlined = [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("Outlined"))!;
+    outlined.click();
+    await vi.waitFor(() => expect(outlined.getAttribute("aria-checked")).toBe("true"));
+    expect(target.querySelector('input[aria-label="Major road outline spacing"]')).not.toBeNull();
+    const square = [...target.querySelectorAll<HTMLButtonElement>('button[role="radio"]')].find((button) => button.textContent?.includes("Square"))!;
+    square.click();
+    await vi.waitFor(() => expect(target.querySelector('[data-transportation-class="major-road"] path')?.getAttribute("stroke-linecap")).toBe("square"));
   });
 
   it("lays out fabrication controls in full-width rows with a compact position pair", async () => {

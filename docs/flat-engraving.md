@@ -48,6 +48,8 @@ Linework settings are shared with layered projects and are stored as physical
 millimeter widths. Flat projects expose independent minor contour, index
 contour, major-road, local-road, trail, water, boundary, coordinate-grid,
 annotation, and border widths.
+Roads default to continuous centerlines with round joins. Major roads may use
+a two-line outline instead, with configurable spacing and round or square endpoints.
 Trails may be solid, dashed, or dotted. The same hierarchy appears in the flat
 preview, layered 2D preview, layered engraving companions, and 3D surface
 markings where the browser's WebGL line implementation supports it.

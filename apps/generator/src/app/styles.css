@@ -1326,22 +1326,83 @@ body {
 
 .engraving-stage {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: min(90%, 1040px);
-  height: min(84%, 760px);
-  display: flex;
-  flex-direction: column;
+  inset: 0;
+  padding: 24px 32px 34px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
 }
 
-.engraving-stage svg {
+.engraving-viewport {
   width: 100%;
+  height: 100%;
   min-height: 0;
-  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: initial;
+}
+
+.engraving-viewport:focus-visible {
+  outline: 2px solid var(--loidolt-accent);
+  outline-offset: -2px;
+}
+
+.engraving-pan-layer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+  contain: layout paint;
+}
+
+.engraving-canvas {
+  width: min(90%, 1040px);
+  height: min(100%, 760px);
+  margin: auto;
+  display: flex;
+  transform-origin: center;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.engraving-canvas svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   overflow: visible;
+  pointer-events: none;
+}
+
+.engraving-zoom-controls {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: color-mix(in srgb, var(--loidolt-surface) 90%, transparent);
+  border: var(--loidolt-border-width) solid var(--loidolt-border);
+  box-shadow: var(--loidolt-shadow-popover);
+}
+
+.engraving-zoom-value {
+  min-width: 48px;
+  height: 28px;
+  color: var(--loidolt-text-muted);
+  font: 9px var(--loidolt-font-utility);
+  display: grid;
+  place-items: center;
 }
 
 .engraving-surface {
@@ -1838,6 +1899,15 @@ body {
 
   .preview-toolbar {
     padding: 0 10px;
+  }
+
+  .engraving-stage {
+    padding: 14px 14px 34px;
+  }
+
+  .engraving-zoom-controls {
+    top: 8px;
+    right: 8px;
   }
 
   .explode-control {

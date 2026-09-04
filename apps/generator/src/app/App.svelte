@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Box, ChevronDown, Circle, Compass, Download, Grid3X3, Layers3, Map as MapIcon, MapPin, Minus, Mountain, PenTool, Plus, Route, Search, Sparkles, Square, Trash2, Undo2, Redo2, Upload, Waves, X } from "@lucide/svelte";
   import { AppShell, Brand, Button, ContextBar, Field, IconButton, Input, NumberField, Section, Sidebar, Switch, ThemeToggle, Topbar, Workspace } from "@loidolt/theme-svelte";
-  import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, markerSymbolPaths, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type CustomLineFeatureV1, type CustomLineKind, type GeoBounds, type GeoPoint, type GeometryIRV1, type LineStyleV1, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type SourceBundleV1, type TextFont, type TrailPattern } from "@topostack/core";
+  import { buildProjectPackage, createSyntheticSource, DEFAULT_PROJECT, displayElevation, displayLength, elevationUnit, generateGeometry, labelPathData, lengthUnit, markerSymbolPaths, MAX_VERTICAL_EXAGGERATION, MAX_WATER_DEPTH_EXAGGERATION, millimetersFromDisplay, MIN_VERTICAL_EXAGGERATION, MIN_WATER_DEPTH_EXAGGERATION, NORTH_ARROW_MAX_MAP_FRACTION, NORTH_ARROW_MAX_SIZE_MM, NORTH_ARROW_MIN_SIZE_MM, northArrowMarkings, planTerrainStack, validateProject, type CustomLineFeatureV1, type CustomLineKind, type GeoBounds, type GeoPoint, type GeometryIRV1, type LineStyleV1, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type OperationPath, type Point2D, type ProjectConfigV1, type RoadCap, type RoadStyle, type SourceBundleV1, type TextFont, type TrailPattern } from "@topostack/core";
   import { boundsForProject, combineWaterAreas, loadLakeAreas, loadTerrain, loadVectorMarkings, type PlaceResult } from "../data-provider";
   import { theme } from "../lib/theme";
   import { MAP_DATA_ATTRIBUTION } from "../map-attribution";
@@ -32,11 +32,13 @@
   const ENGRAVING_MODE_OPTIONS = [{ value: "map", label: "Map" }, { value: "engraving", label: "Engraving" }];
   const FONT_OPTIONS: Array<{ value: TextFont; label: string }> = [{ value: "technical", label: "Technical" }, { value: "rounded", label: "Rounded" }, { value: "stencil", label: "Stencil" }];
   const LINE_PRESETS: Array<{ value: string; label: string; description: string; style: LineStyleV1 }> = [
-    { value: "fine", label: "Fine", description: "Dense detail", style: { contourMm: 0.1, indexContourMm: 0.22, majorRoadMm: 0.3, localRoadMm: 0.18, trailMm: 0.14, waterMm: 0.22, boundaryMm: 0.16, coordinateGridMm: 0.1, annotationMm: 0.14, borderMm: 0.26, trailPattern: "dotted" } },
+    { value: "fine", label: "Fine", description: "Dense detail", style: { contourMm: 0.1, indexContourMm: 0.22, majorRoadMm: 0.3, localRoadMm: 0.18, trailMm: 0.14, waterMm: 0.22, boundaryMm: 0.16, coordinateGridMm: 0.1, annotationMm: 0.14, borderMm: 0.26, trailPattern: "dotted", roadStyle: "centerline", majorRoadSpacingMm: 0.65, roadCap: "round" } },
     { value: "balanced", label: "Balanced", description: "Clear hierarchy", style: { ...DEFAULT_PROJECT.lineStyle } },
-    { value: "bold", label: "Bold", description: "Strong contrast", style: { contourMm: 0.24, indexContourMm: 0.48, majorRoadMm: 0.56, localRoadMm: 0.36, trailMm: 0.3, waterMm: 0.44, boundaryMm: 0.34, coordinateGridMm: 0.24, annotationMm: 0.28, borderMm: 0.52, trailPattern: "dashed" } },
+    { value: "bold", label: "Bold", description: "Strong contrast", style: { contourMm: 0.24, indexContourMm: 0.48, majorRoadMm: 0.56, localRoadMm: 0.36, trailMm: 0.3, waterMm: 0.44, boundaryMm: 0.34, coordinateGridMm: 0.24, annotationMm: 0.28, borderMm: 0.52, trailPattern: "dashed", roadStyle: "centerline", majorRoadSpacingMm: 1, roadCap: "round" } },
   ];
   const TRAIL_PATTERNS: Array<{ value: TrailPattern; label: string }> = [{ value: "solid", label: "Solid" }, { value: "dashed", label: "Dashed" }, { value: "dotted", label: "Dotted" }];
+  const ROAD_STYLES: Array<{ value: RoadStyle; label: string }> = [{ value: "centerline", label: "Centerline" }, { value: "outlined", label: "Outlined" }];
+  const ROAD_CAPS: Array<{ value: RoadCap; label: string }> = [{ value: "round", label: "Round" }, { value: "square", label: "Square" }];
   const NORTH_ARROW_CHOICES: Array<{ value: NorthArrowStyle; label: string }> = [
     { value: "minimal", label: "Minimal" }, { value: "classic", label: "Classic" }, { value: "mariner", label: "Mariner" },
   ];
@@ -239,7 +241,7 @@
     return Number(displayLength(valueMm, project.units).toFixed(project.units === "imperial" ? 4 : 2));
   }
 
-  type LineWidthKey = Exclude<keyof LineStyleV1, "trailPattern">;
+  type LineWidthKey = Exclude<keyof LineStyleV1, "trailPattern" | "roadStyle" | "roadCap">;
   function setLineWidth(key: LineWidthKey, shown: number): Promise<void> | undefined {
     if (!Number.isFinite(shown)) return undefined;
     return updateFabrication({ lineStyle: { ...project.lineStyle, [key]: storedLength(shown) } });
@@ -1032,6 +1034,22 @@
                 <Field label="Water" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Water line width" value={shownLineWidth(project.lineStyle.waterMm)} min={displayLength(0.05, project.units)} max={displayLength(1.5, project.units)} step={project.units === "imperial" ? 0.001 : 0.01} onValueChange={(value) => void setLineWidth("waterMm", value)} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
                 <Field label="Boundaries" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Boundary line width" value={shownLineWidth(project.lineStyle.boundaryMm)} min={displayLength(0.05, project.units)} max={displayLength(1.5, project.units)} step={project.units === "imperial" ? 0.001 : 0.01} onValueChange={(value) => void setLineWidth("boundaryMm", value)} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
                 <Field label="Lat / long grid" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Coordinate grid line width" value={shownLineWidth(project.lineStyle.coordinateGridMm)} min={displayLength(0.05, project.units)} max={displayLength(1.5, project.units)} step={project.units === "imperial" ? 0.001 : 0.01} onValueChange={(value) => void setLineWidth("coordinateGridMm", value)} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+              </div>
+              <p class="subgroup-heading">Road appearance</p>
+              <div class="ldt-toggle-group trail-pattern-options" role="radiogroup" aria-label="Major road style">
+                {#each ROAD_STYLES as option}
+                  <button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.lineStyle.roadStyle === option.value} data-state={project.lineStyle.roadStyle === option.value ? "on" : "off"} tabindex={project.lineStyle.roadStyle === option.value ? 0 : -1} onclick={() => void updateFabrication({ lineStyle: { ...project.lineStyle, roadStyle: option.value } })} onkeydown={navigateChoice}>{option.label}</button>
+                {/each}
+              </div>
+              {#if project.lineStyle.roadStyle === "outlined"}
+                <div class="field-stack">
+                  <Field label="Outline spacing" class="field-row">{#snippet children({ id })}<span class="number-input"><NumberField {id} label="Major road outline spacing" value={shownLineWidth(project.lineStyle.majorRoadSpacingMm)} min={displayLength(0.2, project.units)} max={displayLength(4, project.units)} step={project.units === "imperial" ? 0.005 : 0.05} onValueChange={(value) => void setLineWidth("majorRoadSpacingMm", value)} /><em>{shownLengthUnit}</em></span>{/snippet}</Field>
+                </div>
+              {/if}
+              <div class="ldt-toggle-group trail-pattern-options" role="radiogroup" aria-label="Road endpoint shape">
+                {#each ROAD_CAPS as option}
+                  <button type="button" class="ldt-toggle-group__item" role="radio" aria-checked={project.lineStyle.roadCap === option.value} data-state={project.lineStyle.roadCap === option.value ? "on" : "off"} tabindex={project.lineStyle.roadCap === option.value ? 0 : -1} onclick={() => void updateFabrication({ lineStyle: { ...project.lineStyle, roadCap: option.value } })} onkeydown={navigateChoice}>{option.label}</button>
+                {/each}
               </div>
               <p class="subgroup-heading">Trail pattern</p>
               <div class="ldt-toggle-group trail-pattern-options" role="radiogroup" aria-label="Trail pattern">
