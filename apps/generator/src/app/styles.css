@@ -375,6 +375,57 @@ body {
   letter-spacing: var(--loidolt-font-tracking-wide);
 }
 
+.subsection-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.subsection-label-row .subsection-label {
+  margin-bottom: 0;
+}
+
+.terrain-data-badge {
+  flex: 0 0 auto;
+  border: var(--loidolt-border-width) solid var(--loidolt-border);
+  padding: 3px 5px;
+  color: var(--loidolt-text-muted);
+  font: 7px var(--loidolt-font-utility);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.terrain-data-badge.pending {
+  border-color: color-mix(in srgb, var(--loidolt-accent) 45%, var(--loidolt-border));
+  background: color-mix(in srgb, var(--loidolt-accent) 8%, transparent);
+  color: var(--loidolt-accent);
+}
+
+.terrain-data-note {
+  margin: 10px 0 0;
+  color: var(--loidolt-text-muted);
+  font-size: var(--panel-font-micro);
+  line-height: 1.45;
+}
+
+.terrain-data-note strong,
+.terrain-data-note span {
+  display: block;
+}
+
+.terrain-data-note.pending strong {
+  color: var(--loidolt-accent);
+}
+
+.vertical-exaggeration-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .section-kicker {
   display: flex;
   align-items: center;

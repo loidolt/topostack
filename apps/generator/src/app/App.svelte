@@ -168,6 +168,9 @@
   const previewBusyLabel = $derived(generationState === "loading" ? "Building your terrain" : "Refreshing preview");
   const contourInterval = $derived(geometry.landReliefM / (project.engravingContourCount + 1));
   const fabricationPanelCount = $derived(geometry.layers.length - geometry.fabricationNests.length);
+  const terrainDataStale = $derived(!sameMapArea(sourceProject, project));
+  const verticalExaggerationStale = $derived(project.outputMode === "stack" && sourceProject.verticalExaggeration !== project.verticalExaggeration);
+  const terrainDataAction = $derived(geometry.sourceKind === "real" ? "regenerate" : "generate");
   const exportReady = $derived(!exportBlockReason(geometry, project));
   const platformExportAvailable = $derived(atommReady && embeddedInPlatform);
   const expectedExportFileCount = $derived(project.outputMode === "engraving" ? 4 : fabricationPanelCount * 2 + 5);
@@ -474,15 +477,23 @@
     pushHistory(Object.keys(patch));
     project = { ...project, ...patch };
   }
+  function updateVerticalExaggeration(verticalExaggeration: number): void {
+    if (!Number.isFinite(verticalExaggeration) || verticalExaggeration === project.verticalExaggeration) return;
+    updateProject({ verticalExaggeration });
+    status = "Vertical exaggeration changed · regenerate terrain";
+  }
+
   function updateLocation(patch: Partial<ProjectConfigV1["location"]>): void {
     invalidatePendingPreview();
     pushHistory(["location"]);
     project = { ...project, location: { ...project.location, ...patch, ...(("lat" in patch || "lon" in patch || "zoom" in patch) && !("bounds" in patch) ? { bounds: undefined } : {}) } };
+    status = "Map area changed · regenerate terrain data";
   }
   function choosePlace(place: PlaceResult): void {
     invalidatePendingPreview();
     pushHistoryEntry();
     project = { ...project, name: place.label.split(",")[0] ?? "Terrain project", location: { ...project.location, lat: place.lat, lon: place.lon, label: place.label, zoom: 11, bounds: undefined } };
+    status = "Map area changed · regenerate terrain data";
     searchOpen = false;
   }
   function undo(): void { const previous = history.at(-1); if (!previous) return; invalidatePendingPreview(); lastEditSignature = ""; future = [...future, project]; history = history.slice(0, -1); project = previous; }
@@ -504,6 +515,12 @@
   function sameMapArea(left: ProjectConfigV1, right: ProjectConfigV1): boolean {
     return left.location.lat === right.location.lat && left.location.lon === right.location.lon && left.location.zoom === right.location.zoom &&
       JSON.stringify(left.location.bounds) === JSON.stringify(right.location.bounds);
+  }
+
+  function projectForPreview(config: ProjectConfigV1): ProjectConfigV1 {
+    return config.outputMode === "stack" && sourceProject.verticalExaggeration !== config.verticalExaggeration
+      ? { ...config, verticalExaggeration: sourceProject.verticalExaggeration }
+      : config;
   }
 
   function resizeSource(source: SourceBundleV1, from: ProjectConfigV1, to: ProjectConfigV1): SourceBundleV1 {
@@ -534,6 +551,7 @@
   async function updateMapDetails(patch: Partial<ProjectConfigV1>): Promise<void> {
     updateProject(patch);
     const nextProject = project;
+    const previewProject = projectForPreview(nextProject);
     const revision = operationRevision;
     if (!sameMapArea(sourceProject, nextProject)) {
       status = "Map details changed · generate to refresh this area";
@@ -542,7 +560,7 @@
     const controller = new AbortController(); detailAbort = controller; detailsUpdating = true;
     status = "Updating map details…";
     try {
-      let source = resizeSource(activeSource, sourceProject, nextProject);
+      let source = resizeSource(activeSource, sourceProject, previewProject);
       const usesWaterDepth = nextProject.outputMode === "stack" && nextProject.showWaterDepth;
       const needsVectors = nextProject.showRoads || nextProject.showTrails || nextProject.showWater || nextProject.showBoundaries || usesWaterDepth;
       if (needsVectors && source.sourceKind !== "synthetic" && source.vectorStatus !== "available") {
@@ -568,10 +586,10 @@
         const ocean = (source.waterAreas ?? []).filter((area) => area.kind === "ocean").map((area) => area.polygon);
         source = { ...source, waterAreas: combineWaterAreas(lakes, ocean, nextProject.minimumFeatureMm) };
       }
-      const next = await runGeometryWorker(nextProject, source);
+      const next = await runGeometryWorker(previewProject, source);
       if (controller.signal.aborted || revision !== operationRevision) return;
       addPreviewWarning(next, source);
-      geometry = next; activeSource = source; sourceProject = nextProject;
+      geometry = next; activeSource = source; sourceProject = previewProject;
       if (generationState === "error") generationState = "ready";
       selectedLayer = layerForEnabledDetail(next, patch) ?? Math.min(selectedLayer, Math.max(0, next.layers.length - 1));
       status = source.vectorStatus === "unavailable" && needsVectors ? "Map details updated · source data unavailable" : source.sourceKind === "preview" ? "Real-data sample preview updated" : source.sourceKind === "real" ? "Map details updated" : "Sample preview updated · generate for real map data";
@@ -596,16 +614,17 @@
     }
     updateProject(patch);
     const nextProject = project;
+    const previewProject = projectForPreview(nextProject);
     const revision = operationRevision;
     if (!sameMapArea(sourceProject, nextProject)) { status = `${nextProject.outputMode === "engraving" ? "Artwork" : "Cut"} size changed · generate to refresh terrain`; return; }
     const controller = new AbortController(); detailAbort = controller; detailsUpdating = true;
     status = updatesCustomData ? "Updating custom data…" : nextProject.outputMode === "engraving" ? "Updating engraving artwork…" : "Resizing cut geometry…";
     try {
-      const source = resizeSource(activeSource, sourceProject, nextProject);
-      const next = await runGeometryWorker(nextProject, source);
+      const source = resizeSource(activeSource, sourceProject, previewProject);
+      const next = await runGeometryWorker(previewProject, source);
       if (controller.signal.aborted || revision !== operationRevision) return;
       addPreviewWarning(next, source);
-      geometry = next; activeSource = source; sourceProject = nextProject;
+      geometry = next; activeSource = source; sourceProject = previewProject;
       if (generationState === "error") generationState = "ready";
       selectedLayer = Math.min(selectedLayer, Math.max(0, next.layers.length - 1));
       status = updatesCustomData ? "Custom data updated" : source.sourceKind === "preview" ? "Real-data sample updated" : source.sourceKind === "real" ? nextProject.outputMode === "engraving" ? "Engraving artwork updated" : "Fabrication geometry updated" : "Sample preview updated · generate for real map data";
@@ -751,7 +770,10 @@
             <ChevronDown size={16} class={openSections.setup ? "kicker-chevron kicker-chevron--open" : "kicker-chevron"} />
           </button>
           <div id="section-setup" class="section-content" hidden={!openSections.setup}>
-            <div class="subsection-label">Location</div>
+            <div class="subsection-label-row">
+              <div class="subsection-label">Location</div>
+              <span class:pending={terrainDataStale} class="terrain-data-badge">{terrainDataStale ? "Regeneration pending" : "Requires regeneration"}</span>
+            </div>
           <button class="location-card" onclick={() => searchOpen = true}>
             <span class="location-icon"><MapIcon size={18} /></span>
             <span>
@@ -765,6 +787,10 @@
               <button onclick={() => choosePlace(preset)}>{preset.label.split(",")[0].replace("Mount ", "Mt. ")}</button>
             {/each}
           </div>
+          <p class:pending={terrainDataStale} class="terrain-data-note" aria-live="polite">
+            {#if terrainDataStale}<strong>Terrain data is from the previous map area.</strong> Generate it before export.{:else}Changing the location or map area requires terrain regeneration.{/if}
+            <span>Size, map details, and linework update automatically. Vertical exaggeration requires regenerating the layer geometry.</span>
+          </p>
           </div>
         </Section>
 
@@ -820,10 +846,10 @@
             </div>
           {:else}
           <div class="range-field">
-            <span class="range-field__label"><b>Vertical exaggeration</b></span>
+            <span class="range-field__label vertical-exaggeration-heading"><b>Vertical exaggeration</b><span class:pending={verticalExaggerationStale} class="terrain-data-badge">{verticalExaggerationStale ? "Regeneration pending" : "Requires regeneration"}</span></span>
             <div class="range-field__row">
-              <input type="range" aria-label="Vertical exaggeration slider" min={MIN_VERTICAL_EXAGGERATION} max={MAX_VERTICAL_EXAGGERATION} step="0.5" value={project.verticalExaggeration} oninput={(event) => void updateFabrication({ verticalExaggeration: Number(event.currentTarget.value) })} />
-              <span class="number-input number-input--compact"><NumberField label="Vertical exaggeration" value={project.verticalExaggeration} min={MIN_VERTICAL_EXAGGERATION} max={MAX_VERTICAL_EXAGGERATION} step={0.5} oninput={(event) => event.currentTarget.value !== "" && void updateFabrication({ verticalExaggeration: event.currentTarget.valueAsNumber })} onValueChange={(value) => value !== project.verticalExaggeration && void updateFabrication({ verticalExaggeration: value })} /><em>×</em></span>
+              <input type="range" aria-label="Vertical exaggeration slider" min={MIN_VERTICAL_EXAGGERATION} max={MAX_VERTICAL_EXAGGERATION} step="0.5" value={project.verticalExaggeration} oninput={(event) => updateVerticalExaggeration(Number(event.currentTarget.value))} />
+              <span class="number-input number-input--compact"><NumberField label="Vertical exaggeration" value={project.verticalExaggeration} min={MIN_VERTICAL_EXAGGERATION} max={MAX_VERTICAL_EXAGGERATION} step={0.5} oninput={(event) => event.currentTarget.value !== "" && updateVerticalExaggeration(event.currentTarget.valueAsNumber)} onValueChange={updateVerticalExaggeration} /><em>×</em></span>
             </div>
             <small><span>{MIN_VERTICAL_EXAGGERATION}×</span><span>{MAX_VERTICAL_EXAGGERATION}×</span></small>
           </div>
@@ -1179,8 +1205,8 @@
         </Section>
       </div>
       <div class="generate-dock">
-        <div class={`status-line status-${previewBusy ? "loading" : generationState}`} role="status" aria-live="polite"><span></span>{!detailsUpdating && !exportReady && geometry.sourceKind === "real" ? "Settings changed · regenerate before export" : status}</div>
-        <Button variant="primary" class="generate-button" onclick={() => generationState === "loading" ? cancelGeneration() : void generate()}>{#if generationState === "loading"}<X size={18} /> Cancel generation{:else}<Sparkles size={18} /> {geometry.sourceKind === "real" ? "Regenerate terrain" : "Generate terrain"}{/if}</Button>
+        <div class={`status-line status-${previewBusy ? "loading" : generationState}`} role="status" aria-live="polite"><span></span>{generationState === "loading" ? status : !detailsUpdating && terrainDataStale ? terrainDataAction === "regenerate" ? "Map area changed · regenerate terrain data before export" : "Map area changed · generate terrain data before export" : !detailsUpdating && verticalExaggerationStale ? "Vertical exaggeration changed · regenerate terrain before export" : !detailsUpdating && !exportReady && geometry.sourceKind === "real" ? "Design changed · refresh before export" : status}</div>
+        <Button variant="primary" class="generate-button" onclick={() => generationState === "loading" ? cancelGeneration() : void generate()}>{#if generationState === "loading"}<X size={18} /> Cancel generation{:else}<Sparkles size={18} /> {geometry.sourceKind === "real" ? terrainDataStale ? "Regenerate terrain data" : "Regenerate terrain" : "Generate terrain"}{/if}</Button>
       </div>
     </Sidebar>
     {/snippet}

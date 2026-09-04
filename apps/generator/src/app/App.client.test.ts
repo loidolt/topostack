@@ -225,6 +225,65 @@ describe("TopoStack Svelte shell", () => {
     expect(saved.size).toBe(true);
   });
 
+  it("marks vertical exaggeration stale until terrain is regenerated", async () => {
+    const source = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const };
+    loadTerrainMock.mockResolvedValue({ source, fallback: false });
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+    const initialLayers = target.querySelector(".layer-heading")?.textContent;
+    const exaggeration = target.querySelector<HTMLInputElement>('input[aria-label="Vertical exaggeration"]')!;
+    exaggeration.value = "4";
+    exaggeration.dispatchEvent(new Event("input", { bubbles: true }));
+
+    await vi.waitFor(() => expect(exaggeration.value).toBe("4"));
+    expect(target.querySelector(".layer-heading")?.textContent).toBe(initialLayers);
+    expect(target.querySelector(".vertical-exaggeration-heading .terrain-data-badge")?.textContent).toBe("Regeneration pending");
+    expect(target.querySelector(".status-line")?.textContent).toContain("Vertical exaggeration changed · regenerate terrain before export");
+    expect(target.querySelector(".generate-button")?.textContent).toContain("Regenerate terrain");
+
+    const stencil = [...target.querySelectorAll<HTMLButtonElement>('.swatch-options[aria-label="Engraving font"] button[role="radio"]')].find((button) => button.textContent?.includes("Stencil"))!;
+    stencil.click();
+    await vi.waitFor(() => expect(stencil.getAttribute("aria-checked")).toBe("true"));
+    expect(target.querySelector(".layer-heading")?.textContent).toBe(initialLayers);
+    expect(target.querySelector(".vertical-exaggeration-heading .terrain-data-badge")?.textContent).toBe("Regeneration pending");
+
+    target.querySelector<HTMLButtonElement>(".generate-button")!.click();
+    await vi.waitFor(() => expect(loadTerrainMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+    expect(target.querySelector(".layer-heading")?.textContent).not.toBe(initialLayers);
+    expect(target.querySelector(".vertical-exaggeration-heading .terrain-data-badge")?.textContent).toBe("Requires regeneration");
+  });
+
+  it("identifies the controls that require terrain-data regeneration", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+
+    const badge = target.querySelector<HTMLElement>(".terrain-data-badge")!;
+    const note = target.querySelector<HTMLElement>(".terrain-data-note")!;
+    expect(badge.textContent).toBe("Requires regeneration");
+    expect(note.textContent).toContain("Changing the location or map area requires terrain regeneration.");
+    expect(note.textContent).toContain("Size, map details, and linework update automatically.");
+    expect(note.textContent).toContain("Vertical exaggeration requires regenerating the layer geometry.");
+
+    const width = target.querySelector<HTMLInputElement>('input[aria-label="Width"]')!;
+    width.value = "250";
+    width.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(width.value).toBe("250"));
+    expect(badge.textContent).toBe("Requires regeneration");
+
+    [...target.querySelectorAll<HTMLButtonElement>(".preset-row button")].find((button) => button.textContent === "Grand Teton and Jenny Lake")!.click();
+    await tick();
+    expect(badge.textContent).toBe("Regeneration pending");
+    expect(note.textContent).toContain("Terrain data is from the previous map area.");
+    expect(target.querySelector(".status-line")?.textContent).toContain("Map area changed · generate terrain data before export");
+    expect(target.querySelector(".generate-button")?.textContent).toContain("Generate terrain");
+  });
+
   it("applies and persists an explicit color scheme", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });
