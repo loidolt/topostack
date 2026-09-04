@@ -12,12 +12,16 @@ permissions:
 
 env:
   NODE_VERSION: "22"
+  PRODUCTION_URL: https://topostack.echofoxtrot.works
 
 jobs:
-  validate:
-    name: Validate
+  quality:
+    name: Quality
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    concurrency:
+      group: quality-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     env:
       VITE_MAP_API_URL: https://ci.invalid
     steps:
@@ -39,14 +43,30 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
+      - name: Test unit and component suites
         run: npm test
 
-      - name: Install browser for end-to-end tests
-        run: npx playwright install --with-deps chromium
+  build-and-budget:
+    name: Build and budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: build-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      VITE_MAP_API_URL: https://ci.invalid
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
 
-      - name: Test browser generation and export
-        run: npm run test:e2e
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
         run: npm run build
@@ -54,15 +74,52 @@ jobs:
       - name: Enforce web performance budgets
         run: npm run budget:web
 
-      # The validate build intentionally embeds the hermetic https://ci.invalid
-      # sentinel (so tests cannot reach real services), which the endpoint scan
-      # would reject. Packaging and release runs always execute the full scan.
+      # This build intentionally embeds the hermetic https://ci.invalid
+      # sentinel, which the endpoint scan would reject. Packaging and release
+      # runs always execute the full endpoint scan.
       - name: Verify Atomm static artifact
         run: node scripts/verify-atomm-dist.mjs --skip-endpoint-scan
 
+  browser-e2e:
+    name: Browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: browser-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      VITE_MAP_API_URL: https://ci.invalid
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Test browser generation and export
+        run: npm run test:e2e
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   deploy-worker:
     name: Deploy Worker
-    needs: validate
+    needs: [quality, build-and-budget, browser-e2e]
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref_name == 'dev' || github.ref_name == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -106,17 +163,37 @@ jobs:
         run: node scripts/verify-worker-deployment.mjs
         env:
           WORKER_URL: ${{ steps.deploy.outputs.deployment-url }}
-          PUBLIC_APP_URL: ${{ github.ref_name == 'main' && 'https://topostack.loidolt.space' || steps.deploy.outputs.deployment-url }}
+          PUBLIC_APP_URL: ${{ github.ref_name == 'main' && env.PRODUCTION_URL || steps.deploy.outputs.deployment-url }}
           EXPECTED_WORKER_ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'development' }}
 
+  package-atomm:
+    name: Package Atomm release
+    needs: deploy-worker
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: atomm-release-production
+      cancel-in-progress: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Build production Atomm release
-        if: github.ref_name == 'main'
         run: npm run release:atomm
         env:
-          VITE_MAP_API_URL: https://topostack.loidolt.space
+          VITE_MAP_API_URL: ${{ env.PRODUCTION_URL }}
 
       - name: Upload production Atomm release
-        if: github.ref_name == 'main'
         uses: actions/upload-artifact@v7
         with:
           name: topostack-atomm-${{ github.sha }}
