@@ -468,23 +468,44 @@ function simplify(points: Point2D[], tolerance: number): Point2D[] {
   return close(points.filter((_, index) => keep[index] === 1));
 }
 
-// One Chaikin corner-cutting pass per ring, applied before clipping so the
-// crop boundary keeps its sharp corners. Rounds the 90°/45° stair corners
-// marching squares leaves behind without measurably shrinking features.
-function chaikinRing(ring: Pair[]): Pair[] {
+// Replace only visibly sharp turns with a short quadratic arc. Both smoothing
+// modes begin with the same simplified iso-line; the enabled mode therefore
+// changes corner shape rather than exposing more source-grid detail. Limiting
+// the trim to one grid cell prevents broad terrain features from shrinking.
+function roundContourRing(ring: Pair[], maximumTrimMm: number): Pair[] {
   if (ring.length < 5) return ring;
   const open = ring.slice(0, -1);
-  const result: Ring = [];
+  const rounded: Ring = [];
   for (let index = 0; index < open.length; index += 1) {
+    const previous = open[(index - 1 + open.length) % open.length]!;
     const current = open[index]!;
     const next = open[(index + 1) % open.length]!;
-    result.push(
-      [current[0] * 0.75 + next[0] * 0.25, current[1] * 0.75 + next[1] * 0.25],
-      [current[0] * 0.25 + next[0] * 0.75, current[1] * 0.25 + next[1] * 0.75],
+    const incomingX = current[0] - previous[0];
+    const incomingY = current[1] - previous[1];
+    const outgoingX = next[0] - current[0];
+    const outgoingY = next[1] - current[1];
+    const incomingLength = Math.hypot(incomingX, incomingY);
+    const outgoingLength = Math.hypot(outgoingX, outgoingY);
+    if (incomingLength <= 1e-9 || outgoingLength <= 1e-9) {
+      rounded.push([current[0], current[1]]);
+      continue;
+    }
+    const dot = clamp((incomingX * outgoingX + incomingY * outgoingY) / (incomingLength * outgoingLength), -1, 1);
+    if (Math.acos(dot) < Math.PI / 15) {
+      rounded.push([current[0], current[1]]);
+      continue;
+    }
+    const trim = Math.min(maximumTrimMm, incomingLength * 0.4, outgoingLength * 0.4);
+    const start: Pair = [current[0] - incomingX * trim / incomingLength, current[1] - incomingY * trim / incomingLength];
+    const end: Pair = [current[0] + outgoingX * trim / outgoingLength, current[1] + outgoingY * trim / outgoingLength];
+    rounded.push(
+      start,
+      [start[0] * 0.25 + current[0] * 0.5 + end[0] * 0.25, start[1] * 0.25 + current[1] * 0.5 + end[1] * 0.25],
+      end,
     );
   }
-  result.push([result[0]![0], result[0]![1]]);
-  return result;
+  rounded.push([rounded[0]![0], rounded[0]![1]]);
+  return rounded;
 }
 
 // d3-contour emits ring coordinates in cell space where sample (i, j) sits at
@@ -500,14 +521,15 @@ function contourToMm(point: [number, number], grid: ElevationGrid, config: Proje
 function clipContours(raw: MultiPolygon, clip: Point2D[], minimumFeatureMm: number): Polygon2D[] {
   const result = polygonClipping.intersection(raw, [[toRing(clip)]]) as MultiPolygon;
   const polygons: Polygon2D[] = [];
+  const simplificationTolerance = minimumFeatureMm * 0.18;
   for (const polygon of result) {
     const [outerRing, ...holeRings] = polygon;
     if (!outerRing) continue;
-    let outer = simplify(close(outerRing.map(toPoint)), minimumFeatureMm * 0.18);
+    let outer = simplify(close(outerRing.map(toPoint)), simplificationTolerance);
     if (removeTinyRing(outer, minimumFeatureMm)) continue;
     if (signedArea(outer) < 0) outer = [...outer].reverse();
     const holes = holeRings
-      .map((ring) => simplify(close(ring.map(toPoint)), minimumFeatureMm * 0.18))
+      .map((ring) => simplify(close(ring.map(toPoint)), simplificationTolerance))
       .filter((ring) => !removeTinyRing(ring, minimumFeatureMm))
       .map((ring) => (signedArea(ring) > 0 ? [...ring].reverse() : ring));
     polygons.push({ outer, holes });
@@ -713,7 +735,10 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
     message: `Water here is deeper than the ${stack.depthLayerCount} sheet${stack.depthLayerCount === 1 ? "" : "s"} below the shoreline can hold, so its floor is flattened. Lower the water depth exaggeration, or use thinner material to buy more sheets.`,
   });
 
-  const contourGenerator = contours().size([modelGrid.width, modelGrid.height]).smooth(config.smoothing > 0).thresholds(thresholds.slice(1));
+  // Grid-edge interpolation keeps threshold locations accurate; the user-facing
+  // smoothing option is applied separately to the resulting geometry below.
+  const contourGenerator = contours().size([modelGrid.width, modelGrid.height]).smooth(true).thresholds(thresholds.slice(1));
+  const maximumCornerTrimMm = Math.max(config.widthMm / (modelGrid.width - 1), config.heightMm / (modelGrid.height - 1));
   const generated = contourGenerator(Array.from(modelGrid.values));
 
   const layers: LayerIR[] = [{
@@ -731,7 +756,9 @@ export function generateGeometry(config: ProjectConfigV1, source: SourceBundleV1
         const point2d = contourToMm([point[0] ?? 0, point[1] ?? 0], modelGrid, config);
         return [point2d.x, point2d.y] as Pair;
       });
-      return config.smoothing > 0 ? chaikinRing(mapped) : mapped;
+      const baseline = simplify(close(mapped.map(toPoint)), config.minimumFeatureMm * 0.18)
+        .map(({ x, y }) => [x, y] as Pair);
+      return config.smoothing > 0 ? roundContourRing(baseline, maximumCornerTrimMm) : baseline;
     }));
     const polygons = clipContours(raw, clip, config.minimumFeatureMm);
     const index = generatedIndex + 1;

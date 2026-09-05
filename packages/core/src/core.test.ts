@@ -170,6 +170,25 @@ describe("TopoStack geometry", () => {
     expect(deviation(ring)).toBeLessThanOrEqual(deviation(stepped.layers[2]?.polygons[0]?.outer ?? []));
   });
 
+  it("rounds contour corners instead of simplifying them into chamfers", () => {
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, minimumFeatureMm: 1, smoothing: 1 };
+    const squareHill = (nx: number, ny: number) => 1000 - 500 * Math.max(Math.abs(nx), Math.abs(ny));
+    const [project, source] = scaledForLayers(base, gridSource(base, 33, squareHill), 4);
+    const smoothed = generateGeometry(project, source).layers[2]?.polygons[0]?.outer ?? [];
+    const standard = generateGeometry({ ...project, smoothing: 0 }, source).layers[2]?.polygons[0]?.outer ?? [];
+    const largestTurn = (ring: Array<{ x: number; y: number }>) => Math.max(...ring.slice(0, -1).map((point, index) => {
+      const previous = ring[(index - 1 + ring.length - 1) % (ring.length - 1)]!;
+      const next = ring[(index + 1) % (ring.length - 1)]!;
+      const incoming = Math.atan2(point.y - previous.y, point.x - previous.x);
+      const outgoing = Math.atan2(next.y - point.y, next.x - point.x);
+      const difference = Math.abs(outgoing - incoming);
+      return Math.min(difference, Math.PI * 2 - difference);
+    }));
+
+    expect(smoothed.length).toBeGreaterThanOrEqual(standard.length);
+    expect(largestTurn(smoothed)).toBeLessThan(largestTurn(standard) * 0.75);
+  });
+
   it("accepts any positive finite fabrication size", () => {
     expect(() => validateProject({ ...DEFAULT_PROJECT, widthMm: 2_400, heightMm: 1_200 })).not.toThrow();
     expect(() => validateProject({ ...DEFAULT_PROJECT, widthMm: 0 })).toThrow(/greater than zero/i);
