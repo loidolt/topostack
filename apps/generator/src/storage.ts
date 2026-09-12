@@ -1,5 +1,5 @@
 import { del, get, set } from "idb-keyval";
-import { DEFAULT_PROJECT, validateProject, type CustomLineFeatureV1, type CustomLineKind, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type ProjectConfigV1 } from "@topostack/core";
+import { DEFAULT_PROJECT, MAX_CUSTOM_DATA_POINTS, MAX_CUSTOM_LINE_POINTS, MAX_CUSTOM_LINES, MAX_MAP_MARKERS, MAX_PROJECT_NAME_LENGTH, validateProject, type CustomLineFeatureV1, type CustomLineKind, type MapMarkerV1, type MarkerSymbol, type NorthArrowAnchor, type NorthArrowStyle, type ProjectConfigV1 } from "@topostack/core";
 
 const PROJECT_KEY = "topostack:project:v1";
 
@@ -58,6 +58,7 @@ function markerSymbolValue(value: unknown): MarkerSymbol {
 function markersValue(value: unknown): MapMarkerV1[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Project markers must be a list.");
+  if (value.length > MAX_MAP_MARKERS) throw new Error("Project contains too many markers.");
   return value.map((item) => {
     if (!item || typeof item !== "object") throw new Error("Each marker must be an object.");
     const marker = item as Record<string, unknown>;
@@ -74,11 +75,16 @@ function customLineKindValue(value: unknown): CustomLineKind {
 function customLinesValue(value: unknown): CustomLineFeatureV1[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Custom lines must be a list.");
+  if (value.length > MAX_CUSTOM_LINES) throw new Error("Project contains too many custom lines.");
+  let pointCount = 0;
   return value.map((item) => {
     if (!item || typeof item !== "object") throw new Error("Each custom line must be an object.");
     const line = item as Record<string, unknown>;
     if (typeof line.id !== "string") throw new Error("Each custom line must have an id.");
     if (!Array.isArray(line.points)) throw new Error("Each custom line must contain a point list.");
+    if (line.points.length > MAX_CUSTOM_LINE_POINTS) throw new Error("A custom line contains too many points.");
+    pointCount += line.points.length;
+    if (pointCount > MAX_CUSTOM_DATA_POINTS) throw new Error("Project contains too many custom line points.");
     return {
       id: line.id,
       kind: customLineKindValue(line.kind),
@@ -119,6 +125,8 @@ export function parseProject(value: unknown): ProjectConfigV1 {
   const location = record.location;
   if (!location || typeof location !== "object") throw new Error("Project location is missing.");
   const locationRecord = location as Record<string, unknown>;
+  if (typeof record.name === "string" && record.name.trim() && record.name.length > MAX_PROJECT_NAME_LENGTH) throw new Error("Project name must contain at most 120 characters.");
+  if (typeof locationRecord.label === "string" && locationRecord.label.length > 240) throw new Error("Project location label must contain at most 240 characters.");
   const boundsRecord = locationRecord.bounds && typeof locationRecord.bounds === "object" ? locationRecord.bounds as Record<string, unknown> : undefined;
   if (record.elevationLabelPosition !== undefined && (!record.elevationLabelPosition || typeof record.elevationLabelPosition !== "object")) throw new Error("Elevation label position is invalid.");
   const labelPositionRecord = record.elevationLabelPosition as Record<string, unknown> | undefined;
@@ -133,7 +141,7 @@ export function parseProject(value: unknown): ProjectConfigV1 {
     ...DEFAULT_PROJECT,
     schemaVersion: 1,
     id: typeof record.id === "string" && record.id.trim() ? record.id : crypto.randomUUID(),
-    name: typeof record.name === "string" && record.name.trim() ? record.name.slice(0, 120) : "Terrain project",
+    name: typeof record.name === "string" && record.name.trim() && record.name.length <= MAX_PROJECT_NAME_LENGTH ? record.name : "Terrain project",
     location: {
       lat: numberValue(locationRecord.lat), lon: numberValue(locationRecord.lon), zoom: numberValue(locationRecord.zoom),
       label: typeof locationRecord.label === "string" ? locationRecord.label.slice(0, 240) : "Custom coordinates",

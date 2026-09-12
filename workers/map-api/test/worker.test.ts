@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env as workerEnv, exports } from "cloudflare:workers";
-import { geocodeLimit, isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, parseRangeHeader, validTile } from "../src/index";
+import mapWorker, { geocodeLimit, isAllowedOrigin, isGeocoderConfigured, normalizeGeoapify, parseRangeHeader, validTile } from "../src/index";
 
 const env = {
   ALLOWED_ORIGINS: "http://localhost:5273,http://127.0.0.1:5273,https://dev-topostack.echofoxtrot.works,https://www.atomm.com",
@@ -12,6 +12,11 @@ describe("map API validation", () => {
       headers: { origin: "http://localhost:5273" },
     });
     expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("strict-transport-security")).toContain("max-age=31536000");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("permissions-policy")).toContain("camera=()");
     expect(await response.json()).toMatchObject({ service: "topostack-map-api", status: "ok" });
   });
 
@@ -90,6 +95,9 @@ describe("map API validation", () => {
     expect(normalizeGeoapify({ results: [
       { place_id: "abc", formatted: "Mount Rainier, Washington", lat: 46.85, lon: -121.76, result_type: "natural" },
       { formatted: "Broken", lat: "invalid", lon: 1 },
+      { formatted: "Out of range", lat: 91, lon: 1 },
+      { formatted: "   ", lat: 1, lon: 1 },
+      { formatted: "Coerced", lat: "46.85", lon: -121.76 },
     ] })).toEqual([{ place_id: "abc", display_name: "Mount Rainier, Washington", lat: 46.85, lon: -121.76, type: "natural" }]);
   });
 
@@ -104,7 +112,7 @@ describe("map API validation", () => {
   });
 
   it("parses and validates byte ranges", () => {
-    expect(parseRangeHeader(null, 100)).toEqual({ kind: "full" });
+    expect(parseRangeHeader(null, 100)).toEqual({ kind: "missing" });
     expect(parseRangeHeader("bytes=0-9", 100)).toEqual({ kind: "partial", offset: 0, length: 10 });
     expect(parseRangeHeader("bytes=90-", 100)).toEqual({ kind: "partial", offset: 90, length: 10 });
     expect(parseRangeHeader("bytes=-27", 100)).toEqual({ kind: "partial", offset: 73, length: 27 });
@@ -113,11 +121,76 @@ describe("map API validation", () => {
     expect(parseRangeHeader("bytes=999999999999-", 100)).toEqual({ kind: "unsatisfiable" });
     expect(parseRangeHeader("bytes=0-1,5-6", 100)).toEqual({ kind: "unsatisfiable" });
     expect(parseRangeHeader("bytes=-0", 100)).toEqual({ kind: "unsatisfiable" });
-    expect(parseRangeHeader("bytes=abc", 100)).toEqual({ kind: "full" });
-    expect(parseRangeHeader("bytes=9-1", 100)).toEqual({ kind: "full" });
+    expect(parseRangeHeader("bytes=abc", 100)).toEqual({ kind: "unsatisfiable" });
+    expect(parseRangeHeader("bytes=9-1", 100)).toEqual({ kind: "unsatisfiable" });
+    expect(parseRangeHeader("bytes=0-16777216", 20_000_000)).toEqual({ kind: "too_large" });
     expect(parseRangeHeader("bytes=0-", 0)).toEqual({ kind: "unsatisfiable" });
   });
 });
+
+describe("geocoder proxy", () => {
+  const origin = { origin: "http://localhost:5273" };
+  const configuredEnv = { ...workerEnv, GEOCODER_API_KEY: "test-provider-key" } as unknown as Env;
+  const context = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it("normalizes and returns a bounded provider response", async () => {
+    const upstream = vi.fn(async (_input: RequestInfo | URL) => jsonResponse({ results: [
+      { place_id: "crater", formatted: "Crater Lake, Oregon", lat: 42.9446, lon: -122.109 },
+      { formatted: "invalid", lat: "not-a-number", lon: -122 },
+    ] }));
+    vi.stubGlobal("fetch", upstream);
+    const response = await mapWorker.fetch(new Request("http://example.com/v1/geocode?q=Crater%20Lake&limit=2", { headers: origin }), configuredEnv, context);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-topostack-cache")).toBe("MISS");
+    expect(await response.json()).toEqual([
+      { place_id: "crater", display_name: "Crater Lake, Oregon", lat: 42.9446, lon: -122.109 },
+    ]);
+    const requested = new URL(String(upstream.mock.calls[0]?.[0]));
+    expect(requested.searchParams.get("apiKey")).toBe("test-provider-key");
+    expect(requested.searchParams.get("limit")).toBe("2");
+  });
+
+  it("refreshes expired cached results and limits browser freshness to the remaining age", async () => {
+    const keyHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("cache age regression|5"));
+    const key = `geocode/${Array.from(new Uint8Array(keyHash)).map((byte) => byte.toString(16).padStart(2, "0")).join("")}.json`;
+    await workerEnv.MAP_CACHE.put(key, "[]");
+    const cached = await workerEnv.MAP_CACHE.head(key);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(cached!.uploaded.getTime() + 23 * 3600 * 1000);
+    const upstream = vi.fn(async () => jsonResponse({ results: [{ formatted: "Fresh place", lat: 42, lon: -122 }] }));
+    vi.stubGlobal("fetch", upstream);
+    const request = () => new Request("http://example.com/v1/geocode?q=cache%20age%20regression", { headers: origin });
+    const hit = await mapWorker.fetch(request(), configuredEnv, context);
+    expect(hit.headers.get("x-topostack-cache")).toBe("HIT");
+    expect(hit.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(await hit.json()).toEqual([]);
+    expect(upstream).not.toHaveBeenCalled();
+    clock.mockReturnValue(cached!.uploaded.getTime() + 25 * 3600 * 1000);
+    const miss = await mapWorker.fetch(request(), configuredEnv, context);
+    expect(miss.headers.get("x-topostack-cache")).toBe("MISS");
+    expect(await miss.json()).toMatchObject([{ display_name: "Fresh place" }]);
+    expect(upstream).toHaveBeenCalledOnce();
+    await Promise.all(vi.mocked(context.waitUntil).mock.calls.map(([promise]) => promise));
+  });
+
+  it("returns a gateway timeout when the provider stalls", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new DOMException("Timed out", "TimeoutError");
+    }));
+    const response = await mapWorker.fetch(new Request("http://example.com/v1/geocode?q=Mount%20Mazama", { headers: origin }), configuredEnv, context);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ error: "Geocoder timed out" });
+  });
+});
+
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+}
 
 describe("terrain proxy", () => {
   const origin = { origin: "http://localhost:5273" };
@@ -133,7 +206,7 @@ describe("terrain proxy", () => {
 
   it("fetches, labels, and stores an uncached terrain tile under the dataset-versioned key", async () => {
     const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-    const upstream = vi.fn(async (input: RequestInfo | URL) => new Response(png.slice(), {
+    const upstream = vi.fn(async (_input: RequestInfo | URL) => new Response(png.slice(), {
       headers: { "content-type": "image/png", "x-imagery-sources": "mapzen/test-source" },
     }));
     vi.stubGlobal("fetch", upstream);
@@ -170,6 +243,24 @@ describe("terrain proxy", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
     expect(upstream).not.toHaveBeenCalled();
   });
+
+  it("returns a gateway timeout when the terrain origin stalls", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new DOMException("Timed out", "TimeoutError");
+    }));
+    const response = await exports.default.fetch("http://example.com/v1/terrain/11/321/704.png", { headers: origin });
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ error: "Terrain origin timed out" });
+  });
+
+  it("rejects non-PNG terrain responses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not a tile", {
+      headers: { "content-type": "text/html" },
+    })));
+    const response = await exports.default.fetch("http://example.com/v1/terrain/11/321/705.png", { headers: origin });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: "Terrain origin returned an invalid tile" });
+  });
 });
 
 describe("vector archive", () => {
@@ -180,20 +271,25 @@ describe("vector archive", () => {
     await workerEnv.VECTOR_DATA.put("osm/current.pmtiles", archive.slice());
   }
 
-  it("serves full reads with a short revalidating cache policy", async () => {
+  it("allows metadata reads but rejects unbounded archive downloads", async () => {
     await seedArchive();
-    const response = await exports.default.fetch("http://example.com/v1/osm.pmtiles", { headers: origin });
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("public, max-age=3600");
-    expect(response.headers.get("cache-control")).not.toContain("immutable");
-    expect(response.headers.get("accept-ranges")).toBe("bytes");
-    expect(response.headers.get("etag")).toBeTruthy();
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(archive);
+    const head = await exports.default.fetch("http://example.com/v1/osm.pmtiles", { method: "HEAD", headers: origin });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe("256");
+    expect(head.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(head.headers.get("cache-control")).not.toContain("immutable");
+    expect(head.headers.get("accept-ranges")).toBe("bytes");
+    expect(head.headers.get("etag")).toBeTruthy();
+
+    const full = await exports.default.fetch("http://example.com/v1/osm.pmtiles", { headers: origin });
+    expect(full.status).toBe(400);
+    expect(full.headers.get("accept-ranges")).toBe("bytes");
+    expect(await full.json()).toMatchObject({ error: "A bounded Range header is required for PMTiles archives." });
   });
 
   it("revalidates by etag with 304", async () => {
     await seedArchive();
-    const first = await exports.default.fetch("http://example.com/v1/osm.pmtiles", { headers: origin });
+    const first = await exports.default.fetch("http://example.com/v1/osm.pmtiles", { method: "HEAD", headers: origin });
     const etag = first.headers.get("etag") ?? "";
     await first.body?.cancel();
     const revalidated = await exports.default.fetch("http://example.com/v1/osm.pmtiles", {
@@ -229,8 +325,8 @@ describe("vector archive", () => {
     expect(multipart.headers.get("content-range")).toBe("bytes */256");
 
     const malformed = await exports.default.fetch("http://example.com/v1/osm.pmtiles", { headers: { ...origin, range: "bytes=abc" } });
-    expect(malformed.status).toBe(200);
-    await malformed.body?.cancel();
+    expect(malformed.status).toBe(416);
+    expect(malformed.headers.get("content-range")).toBe("bytes */256");
   });
 });
 
@@ -242,9 +338,9 @@ describe("lake bathymetry archive", () => {
     await workerEnv.VECTOR_DATA.put("lakes/current.pmtiles", archive.slice());
 
     const full = await exports.default.fetch("http://example.com/v1/lakes.pmtiles", { headers: origin });
-    expect(full.status).toBe(200);
+    expect(full.status).toBe(400);
     expect(full.headers.get("accept-ranges")).toBe("bytes");
-    expect(new Uint8Array(await full.arrayBuffer())).toEqual(archive);
+    expect(await full.json()).toMatchObject({ error: "A bounded Range header is required for PMTiles archives." });
 
     // The browser never downloads the whole archive - it range-reads the header,
     // then the directory, then the handful of tiles the map window covers.
@@ -254,16 +350,23 @@ describe("lake bathymetry archive", () => {
     expect(new Uint8Array(await ranged.arrayBuffer())).toEqual(archive.slice(0, 17));
   });
 
-  it("reports a missing archive as 404 so lake depth degrades to flat water", async () => {
+  it("reports a missing lake archive as 404 instead of fabricating depth data", async () => {
     await workerEnv.VECTOR_DATA.delete("lakes/current.pmtiles");
     const response = await exports.default.fetch("http://example.com/v1/lakes.pmtiles", { headers: origin });
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ error: "Lake bathymetry archive has not been provisioned." });
   });
 
-  it("reports lake data in readiness without making it a requirement", async () => {
+  it("requires lake data for default-project readiness", async () => {
+    await workerEnv.VECTOR_DATA.put("osm/current.pmtiles", archive.slice());
     await workerEnv.VECTOR_DATA.delete("lakes/current.pmtiles");
-    const response = await exports.default.fetch("http://example.com/ready", { headers: origin });
+    const configured = { ...workerEnv, GEOCODER_API_KEY: "test-provider-key" } as unknown as Env;
+    const context = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
+    const response = await mapWorker.fetch(new Request("http://example.com/ready", { headers: origin }), configured, context);
+    expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ dependencies: { lakeData: { status: "missing", key: "lakes/current.pmtiles" } } });
+    await workerEnv.VECTOR_DATA.put("lakes/current.pmtiles", archive.slice());
+    const ready = await mapWorker.fetch(new Request("http://example.com/ready", { headers: origin }), configured, context);
+    expect(ready.status).toBe(200);
   });
 });

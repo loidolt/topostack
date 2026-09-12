@@ -8,6 +8,8 @@ const skipEndpointScan = process.argv.includes("--skip-endpoint-scan");
 
 const indexPath = new URL("../apps/generator/dist/index.html", import.meta.url);
 const index = await readFile(indexPath, "utf8");
+const headers = await readFile(new URL("../apps/generator/dist/_headers", import.meta.url), "utf8");
+if (headers.includes("__TOPOSTACK_SCRIPT_HASHES__") || /script-src[^;]*unsafe-inline/.test(headers) || !/script-src[^;]*sha256-/.test(headers)) throw new Error("Production security headers do not contain finalized inline-script hashes.");
 if (!index.includes("https://static-res.makextool.com/scripts/js/generator-sdk/platform-sdk.js")) throw new Error("Atomm SDK is missing from the production entry page.");
 const distDirectory = new URL("../apps/generator/dist/", import.meta.url);
 async function filesBelow(directory) {

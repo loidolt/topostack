@@ -52,10 +52,9 @@ describe("TopoStack Svelte shell", () => {
     await tick();
     expect(name.value).toBe(DEFAULT_PROJECT.name);
     [...target.querySelectorAll("button")].find((button) => button.textContent?.includes("Cut layers"))!.click();
-    await tick();
-    expect(target.querySelector('svg[aria-label^="Cut preview for layer"]')).not.toBeNull();
-    expect(target.querySelector('[data-marking-kind="road"]')).not.toBeNull();
-    expect(target.querySelector(".layer-heading")?.textContent).toMatch(/Layer \d+ of 10/);
+    await vi.waitFor(() => expect(target.querySelector('svg[aria-label^="Cut preview for layer"]')).not.toBeNull());
+    await vi.waitFor(() => expect(target.querySelector('[data-marking-kind="road"]')).not.toBeNull());
+    expect(target.querySelector(".layer-heading")?.textContent).toMatch(/Layer \d+ of 13/);
   });
 
   it("switches to a flat engraving workflow with dedicated controls and preview", async () => {
@@ -307,7 +306,7 @@ describe("TopoStack Svelte shell", () => {
     component = mount(App, { target });
     await tick();
     const width = target.querySelector<HTMLInputElement>('input[type="number"]')!;
-    expect(width.max).toBe("");
+    expect(width.max).toBe("10000");
     width.value = "1200";
     width.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toMatch(/updated/i));
@@ -340,6 +339,39 @@ describe("TopoStack Svelte shell", () => {
     generate.click();
     await tick(); await Promise.resolve();
     expect(target.querySelector(".status-line")?.textContent).toContain("Generation canceled");
+  });
+
+  it("preserves cosmetic edits made while terrain generation is in flight", async () => {
+    let finishTerrain: (() => void) | undefined;
+    loadTerrainMock.mockImplementation((requested: typeof DEFAULT_PROJECT) => new Promise((resolve) => {
+      finishTerrain = () => resolve({
+        source: {
+          ...createSyntheticSource(requested, 32),
+          sourceKind: "real" as const,
+          vectorStatus: "available" as const,
+        },
+        fallback: false,
+      });
+    }));
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    const generate = [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!;
+    generate.click();
+    await vi.waitFor(() => expect(loadTerrainMock).toHaveBeenCalledOnce());
+
+    const name = target.querySelector<HTMLInputElement>('input[aria-label="Project name"]')!;
+    name.value = "Renamed while loading";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    const exploded = target.querySelector<HTMLInputElement>(".explode-control input")!;
+    exploded.value = "0.75";
+    exploded.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    finishTerrain?.();
+
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+    expect(name.value).toBe("Renamed while loading");
+    expect(target.querySelector<HTMLInputElement>(".explode-control input")?.value).toBe("0.75");
   });
 
   it("does not let an unresolved platform toast block generation", async () => {
@@ -416,6 +448,21 @@ describe("TopoStack Svelte shell", () => {
     expect(target.querySelector(".status-line")?.classList.contains("status-loading")).toBe(true);
   });
 
+  it("enables labels after a real generation without refetching retained names", async () => {
+    const source = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const, markings: [{ id: "named-road", kind: "road" as const, operation: "engrave" as const, transportationClass: "major-road" as const, label: "Rim Drive", points: [{ x: -130, y: 0 }, { x: 130, y: 0 }] }] };
+    loadTerrainMock.mockResolvedValue({ source, fallback: false });
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+    const stage = target.querySelector<HTMLElement>(".preview-stage")!;
+    expect(stage.dataset.transportationLabelMarkings).toBe("0");
+    target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Transportation labels"]')!.click();
+    await vi.waitFor(() => expect(Number(stage.dataset.transportationLabelMarkings)).toBeGreaterThan(0));
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+  });
+
   it("renders named road engravings when transportation labels are enabled", async () => {
     const target = document.createElement("div");
     component = mount(App, { target });
@@ -467,6 +514,26 @@ describe("TopoStack Svelte shell", () => {
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Map details updated"));
     await vi.waitFor(() => expect(Number(stage.dataset.roadMarkings)).toBeGreaterThan(0));
     expect(loadTerrainMock).toHaveBeenCalledOnce();
+  });
+
+
+  it("refetches newly enabled vector categories after a complete generation", async () => {
+    const generated = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const, vectorStatus: "available" as const };
+    loadTerrainMock.mockResolvedValue({ source: generated, fallback: false });
+    loadVectorMarkingsMock.mockResolvedValue({
+      markings: [{ id: "fetched-boundary", kind: "boundary", operation: "engrave", points: [{ x: -100, y: -40 }, { x: 100, y: 40 }] }],
+      inland: [],
+      ocean: [],
+      truncated: false,
+    });
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
+    target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="State and province boundaries"]')!.click();
+    await vi.waitFor(() => expect(loadVectorMarkingsMock).toHaveBeenCalledOnce());
+    expect(loadVectorMarkingsMock.mock.calls[0]?.[2]).toMatchObject({ showBoundaries: true });
   });
 
   it("fetches and renders state and province boundaries on demand", async () => {
@@ -556,12 +623,32 @@ describe("TopoStack Svelte shell", () => {
     await vi.waitFor(() => expect(target.querySelector<HTMLElement>(".preview-stage")?.dataset.customLineMarkings).toBe("0"));
   });
 
+
+  it("loads lake metadata when switching a generated engraving back to layered relief", async () => {
+    loadTerrainMock.mockImplementation(async (requested: typeof DEFAULT_PROJECT) => ({
+      source: { ...createSyntheticSource(requested, 32), sourceKind: "real" as const, vectorStatus: "available" as const, lakeDataStatus: "not-requested" as const },
+      fallback: false,
+    }));
+    loadLakeAreasMock.mockResolvedValue([]);
+    const target = document.createElement("div");
+    component = mount(App, { target });
+    await tick();
+    target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!.click();
+    await vi.waitFor(() => expect(target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!.getAttribute("aria-checked")).toBe("true"));
+    [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
+    await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Engraving ready"));
+    target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Layered relief"]')!.click();
+    await vi.waitFor(() => expect(loadLakeAreasMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Layered relief"]')!.getAttribute("aria-checked")).toBe("true"));
+  });
+
   it("fetches lake metadata when water depth is enabled after generation", async () => {
     const projectWithoutDepth = { ...DEFAULT_PROJECT, showWaterDepth: false };
     const source = {
       ...createSyntheticSource(projectWithoutDepth, 32),
       sourceKind: "real" as const,
       vectorStatus: "available" as const,
+      lakeDataStatus: "not-requested" as const,
       waterAreas: [],
     };
     loadTerrainMock.mockResolvedValue({ source, fallback: false });

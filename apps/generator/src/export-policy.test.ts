@@ -17,6 +17,11 @@ describe("Atomm export policy", () => {
     const result = geometry();
     result.vectorStatus = "unavailable";
     expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/map detail data is unavailable/i);
+    result.vectorStatus = "partial";
+    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/safe feature limit/i);
+    result.vectorStatus = "available";
+    result.lakeDataStatus = "unavailable";
+    expect(exportBlockReason(result, DEFAULT_PROJECT)).toMatch(/lake depth data is unavailable/i);
     const depthOnly = { ...DEFAULT_PROJECT, showRoads: false, showTrails: false, showWater: false };
     const missingOceanMask = generateGeometry(depthOnly, { ...createSyntheticSource(depthOnly, 32), sourceKind: "real", vectorStatus: "not-requested" });
     expect(exportBlockReason(missingOceanMask, depthOnly)).toMatch(/map detail data is unavailable/i);

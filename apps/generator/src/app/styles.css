@@ -1335,7 +1335,6 @@ body {
 .crop-guide {
   position: absolute;
   width: min(54%, 630px);
-  max-height: 70%;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
@@ -1346,8 +1345,8 @@ body {
 }
 
 .crop-circle {
-  border-radius: 50%;
-  width: min(43%, 480px);
+  border: 0;
+  box-shadow: none;
 }
 
 .crop-corner {

@@ -1,5 +1,6 @@
-import { createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type Polygon2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass, type WaterAreaV1 } from "@topostack/core";
-import { PMTiles } from "pmtiles";
+import { createFeatureBudget, yieldForCancellation } from "./feature-budget";
+import { sourceRequirements, createSyntheticSource, type GeoBounds, type MarkingFeature, type Point2D, type Polygon2D, type ProjectConfigV1, type SourceBundleV1, type TransportationClass, type WaterAreaV1 } from "@topostack/core";
+import { createArchive, networkSignal } from "./archive";
 import { classifyRings, VectorTile } from "@mapbox/vector-tile";
 import { PbfReader } from "pbf";
 import polygonClipping, { type MultiPolygon, type Pair } from "polygon-clipping";
@@ -7,7 +8,16 @@ import { MAP_DATA_ATTRIBUTION } from "./map-attribution";
 
 export interface PlaceResult { id: string; label: string; lat: number; lon: number; type?: string }
 
-const configuredApiBase = (import.meta.env.VITE_MAP_API_URL as string | undefined)?.replace(/\/$/, "");
+function normalizeApiBase(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  const url = new URL(value);
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) {
+    throw new Error("VITE_MAP_API_URL must be an HTTP(S) origin without credentials, a path, query, or fragment.");
+  }
+  return url.origin;
+}
+
+const configuredApiBase = normalizeApiBase(import.meta.env.VITE_MAP_API_URL as string | undefined);
 // Wrangler's default 8787 is often taken, so `npm run dev` (and a standalone
 // `npm run dev:web`) can retarget the local API with VITE_MAP_API_PORT.
 const developmentApiPort = (import.meta.env.VITE_MAP_API_PORT as string | undefined) || "8787";
@@ -15,11 +25,10 @@ const developmentApiBase = import.meta.env.DEV ? `http://localhost:${development
 // Standalone deployments serve the app and API from the same Worker. Atomm
 // packages still inject an explicit API URL during their build.
 const apiBase = configuredApiBase ?? developmentApiBase ?? "";
-const vectorArchive = new PMTiles(`${apiBase}/v1/osm.pmtiles`);
-const lakeArchive = new PMTiles(`${apiBase}/v1/lakes.pmtiles`);
 const TILE_SIZE = 256;
 const MAX_DATA_TILES = 24;
 const MAX_VECTOR_MARKINGS = 1800;
+const RAW_VECTOR_MARKING_BUDGET_MULTIPLIER = 4;
 const MAJOR_ROAD_DETAILS = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"]);
 const LOCAL_ROAD_DETAILS = new Set(["tertiary", "tertiary_link", "residential", "service", "unclassified", "road", "raceway", "driveway", "parking_aisle", "alley", "drive-through", "emergency_access"]);
 const TRAIL_DETAILS = new Set(["pedestrian", "track", "path", "cycleway", "bridleway", "steps", "corridor", "sidewalk", "crossing"]);
@@ -38,27 +47,36 @@ function worldYToLat(y: number, zoom: number): number {
 export function boundsForProject(config: ProjectConfigV1): GeoBounds {
   if (config.location.bounds) return config.location.bounds;
   const zoom = Math.max(0, Math.min(15, Math.round(config.location.zoom)));
+  const size = worldSize(zoom);
   const centerX = lonToWorldX(config.location.lon, zoom);
   const centerY = latToWorldY(config.location.lat, zoom);
-  const widthPx = 420;
-  const heightPx = 280;
-  return { west: worldXToLon(centerX - widthPx / 2, zoom), east: worldXToLon(centerX + widthPx / 2, zoom), north: worldYToLat(centerY - heightPx / 2, zoom), south: worldYToLat(centerY + heightPx / 2, zoom) };
+  const widthPx = Math.min(420, size);
+  const heightPx = Math.min(280, size);
+  const northY = Math.max(0, Math.min(size - heightPx, centerY - heightPx / 2));
+  return { west: worldXToLon(centerX - widthPx / 2, zoom), east: worldXToLon(centerX + widthPx / 2, zoom), north: worldYToLat(northY, zoom), south: worldYToLat(northY + heightPx, zoom) };
 }
 
-interface TileWindow { zoom: number; westX: number; eastX: number; northY: number; southY: number; tiles: Array<{ x: number; y: number; z: number }> }
+interface DataTile { x: number; worldX: number; y: number; z: number }
+interface TileWindow { zoom: number; westX: number; eastX: number; northY: number; southY: number; tiles: DataTile[] }
 function tileWindow(bounds: GeoBounds, zoom: number): TileWindow {
   const westX = lonToWorldX(bounds.west, zoom);
   const eastX = lonToWorldX(bounds.east, zoom);
   const northY = latToWorldY(bounds.north, zoom);
   const southY = latToWorldY(bounds.south, zoom);
   const scale = 2 ** zoom;
-  const minX = Math.max(0, Math.floor(westX / TILE_SIZE));
-  const maxX = Math.min(scale - 1, Math.floor((eastX - 1e-6) / TILE_SIZE));
+  const minWorldX = Math.floor(westX / TILE_SIZE);
+  const maxWorldX = Math.floor((eastX - 1e-6) / TILE_SIZE);
   const minY = Math.max(0, Math.floor(northY / TILE_SIZE));
   const maxY = Math.min(scale - 1, Math.floor((southY - 1e-6) / TILE_SIZE));
+  const count = (maxWorldX - minWorldX + 1) * (maxY - minY + 1);
+  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_DATA_TILES) throw new Error("The selected area is too large at this zoom. Zoom in and try again.");
   const tiles: TileWindow["tiles"] = [];
-  for (let y = minY; y <= maxY; y += 1) for (let x = minX; x <= maxX; x += 1) tiles.push({ x, y, z: zoom });
-  if (!tiles.length || tiles.length > MAX_DATA_TILES) throw new Error("The selected area is too large at this zoom. Zoom in and try again.");
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let worldX = minWorldX; worldX <= maxWorldX; worldX += 1) {
+      const x = ((worldX % scale) + scale) % scale;
+      tiles.push({ x, worldX, y, z: zoom });
+    }
+  }
   return { zoom, westX, eastX, northY, southY, tiles };
 }
 
@@ -390,13 +408,13 @@ export function stitchTransportationMarkings(markings: MarkingFeature[]): Markin
 // combination produced false contour walls along every tile seam.
 async function loadElevation(window: TileWindow, signal?: AbortSignal): Promise<{ elevation: SourceBundleV1["elevation"]; imagerySources: string[]; datasetVersion: string }> {
   const responses = await Promise.all(window.tiles.map(async (tile) => {
-    const response = await fetch(`${apiBase}/v1/terrain/${tile.z}/${tile.x}/${tile.y}.png`, { signal });
+    const response = await fetch(`${apiBase}/v1/terrain/${tile.z}/${tile.x}/${tile.y}.png`, { signal: networkSignal(signal) });
     if (!response.ok) throw new Error(`Terrain service returned ${response.status}.`);
     return { tile, response, bitmap: await createImageBitmap(await response.blob()) };
   }));
-  const minTileX = Math.min(...window.tiles.map((tile) => tile.x));
+  const minTileX = Math.min(...window.tiles.map((tile) => tile.worldX));
   const minTileY = Math.min(...window.tiles.map((tile) => tile.y));
-  const mosaicWidth = (Math.max(...window.tiles.map((tile) => tile.x)) - minTileX + 1) * TILE_SIZE;
+  const mosaicWidth = (Math.max(...window.tiles.map((tile) => tile.worldX)) - minTileX + 1) * TILE_SIZE;
   const mosaicHeight = (Math.max(...window.tiles.map((tile) => tile.y)) - minTileY + 1) * TILE_SIZE;
   const canvas = new OffscreenCanvas(mosaicWidth, mosaicHeight);
   const context = canvas.getContext("2d", { willReadFrequently: true });
@@ -408,7 +426,7 @@ async function loadElevation(window: TileWindow, signal?: AbortSignal): Promise<
     const datasetVersion = response.headers.get("x-topostack-dataset");
     if (datasetVersion) datasetVersions.add(datasetVersion);
     response.headers.get("x-topostack-imagery-sources")?.split(",").map((value) => value.trim()).filter(Boolean).forEach((value) => imagerySources.add(value));
-    context.drawImage(bitmap, (tile.x - minTileX) * TILE_SIZE, (tile.y - minTileY) * TILE_SIZE);
+    context.drawImage(bitmap, (tile.worldX - minTileX) * TILE_SIZE, (tile.y - minTileY) * TILE_SIZE);
     bitmap.close();
   }
   if (datasetVersions.size > 1) throw new Error("Terrain tiles came from inconsistent dataset versions. Try again shortly.");
@@ -452,7 +470,7 @@ async function loadElevation(window: TileWindow, signal?: AbortSignal): Promise<
       max = Math.max(max, elevation);
     }
   }
-  return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+protomaps-20260819-z12-v1" };
+  return { elevation: { width: outputWidth, height: outputHeight, values, min, max }, imagerySources: [...imagerySources].sort(), datasetVersion: [...datasetVersions][0] ?? "mapzen-terrarium+protomaps-20260905-z12-v1" };
 }
 
 export interface VectorData {
@@ -461,9 +479,30 @@ export interface VectorData {
   inland: Polygon2D[];
   /** Dissolved ocean, whose depth the DEM already carries. */
   ocean: Polygon2D[];
+  /** True when enabled linework exceeded the bounded decoding/export budget. */
+  truncated: boolean;
+}
+
+export function limitVectorMarkingGroups(groups: MarkingFeature[][], maximum = MAX_VECTOR_MARKINGS): { markings: MarkingFeature[]; truncated: boolean } {
+  const nonempty = groups.filter((group) => group.length > 0);
+  const markings: MarkingFeature[] = [];
+  for (let index = 0; markings.length < maximum; index += 1) {
+    let added = false;
+    for (const group of nonempty) {
+      const marking = group[index];
+      if (!marking) continue;
+      markings.push(marking);
+      added = true;
+      if (markings.length >= maximum) break;
+    }
+    if (!added) break;
+  }
+  return { markings, truncated: groups.reduce((total, group) => total + group.length, 0) > markings.length };
 }
 
 export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<VectorData> {
+  signal?.throwIfAborted();
+  const vectorArchive = createArchive(`${apiBase}/v1/osm.pmtiles`, signal);
   const header = await vectorArchive.getHeader();
   signal?.throwIfAborted();
   let vectorZoom = Math.max(header.minZoom, Math.min(header.maxZoom, Math.round(requestedZoom) + 1));
@@ -475,20 +514,23 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
       vectorZoom -= 1;
     }
   }
-  const projectPoint = (tile: { x: number; y: number }, extent: number, point: Point2D): Point2D => ({
-    x: (((tile.x + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
+  const projectPoint = (tile: DataTile, extent: number, point: Point2D): Point2D => ({
+    x: (((tile.worldX + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
     y: (((tile.y + point.y / extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
   });
-  // Keep the amount of geometry decoded and stitched bounded across the whole
-  // selected area. A per-tile maximum makes a statewide request do up to 24x
-  // the work before the final slice can discard it.
-  const markingBudgetPerTile = Math.max(1, Math.ceil(MAX_VECTOR_MARKINGS / window.tiles.length));
-  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<{ markings: MarkingFeature[]; waterPolygons: Polygon2D[]; oceanPolygons: Polygon2D[] }> => {
+  const { lakes: usesWaterDepth } = sourceRequirements(config);
+  // Share cleanup headroom across the selection. Fixed per-tile/category
+  // quotas can discard a dense tile while empty neighbors leave room unused.
+  let rawMarkingCount = 0;
+  type TileVectors = { markings: MarkingFeature[]; waterPolygons: Polygon2D[]; oceanPolygons: Polygon2D[]; truncated: boolean };
+  const consumeGeometry = createFeatureBudget();
+  const perTile = await Promise.all(window.tiles.map(async (tile): Promise<TileVectors> => {
     const markings: MarkingFeature[] = [];
     const waterPolygons: Polygon2D[] = [];
     const oceanPolygons: Polygon2D[] = [];
+    let truncated = false;
     const response = await vectorArchive.getZxy(tile.z, tile.x, tile.y, signal);
-    if (!response) return { markings, waterPolygons, oceanPolygons };
+    if (!response) return { markings, waterPolygons, oceanPolygons, truncated };
     const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
     for (const [layerName, layer] of Object.entries(vectorTile.layers)) {
       const lowered = layerName.toLowerCase();
@@ -497,15 +539,15 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
       const isBoundary = lowered === "boundaries" || lowered.includes("boundary");
       if (!isRoad && !isWater && !isBoundary) continue;
       for (let featureIndex = 0; featureIndex < layer.length; featureIndex += 1) {
+        if (featureIndex % 64 === 0) await yieldForCancellation(signal);
         const feature = layer.feature(featureIndex);
         if (feature.type !== 2 && !(isWater && feature.type === 3)) continue;
-        if (isBoundary && !isStateProvinceBoundary(feature.properties as Record<string, unknown>)) continue;
-        const transportationClass = isRoad ? classifyTransportation(feature.properties as Record<string, unknown>) : undefined;
-        if (isRoad && !transportationClass) continue;
-        const label = isRoad ? transportationLabel(feature.properties as Record<string, unknown>) : undefined;
-        const geometry = feature.loadGeometry();
+        const properties = feature.properties as Record<string, unknown>;
         if (isWater && feature.type === 3) {
-          const isOcean = (feature.properties as Record<string, unknown>).kind === "ocean";
+          if (!config.showWater && !usesWaterDepth) continue;
+          const isOcean = properties.kind === "ocean";
+          const geometry = feature.loadGeometry();
+          consumeGeometry(geometry, true);
           classifyRings(geometry).forEach((polygon) => {
             const [outer, ...holes] = polygon;
             if (!outer) return;
@@ -514,34 +556,70 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
           });
           continue;
         }
-        // Keep scanning after the marking budget is full: polygon layers may
-        // follow transportation in the archive, and their ocean mask is still
-        // required to plan coastal stacks correctly.
-        if (markings.length >= markingBudgetPerTile && !isBoundary) continue;
+        let kind: "boundary" | "road" | "trail" | "water";
+        let transportationClass: TransportationClass | undefined;
+        if (isBoundary) {
+          if (!config.showBoundaries || !isStateProvinceBoundary(properties)) continue;
+          kind = "boundary";
+        } else if (isRoad) {
+          transportationClass = classifyTransportation(properties);
+          if (!transportationClass) continue;
+          kind = transportationClass === "trail" ? "trail" : "road";
+          if ((kind === "trail" && !config.showTrails) || (kind === "road" && !config.showRoads)) continue;
+        } else {
+          if (!config.showWater) continue;
+          kind = "water";
+        }
+        // Retain names so enabling labels after generation needs no reload.
+        const label = isRoad ? transportationLabel(properties) : undefined;
+        const geometry = feature.loadGeometry();
+        consumeGeometry(geometry);
         geometry.forEach((line, lineIndex) => {
-          const lines = clipVectorTileLine(line, feature.extent);
-          lines.forEach((clippedLine, clippedIndex) => {
-            if (clippedLine.length < 2 || (markings.length >= markingBudgetPerTile && !isBoundary)) return;
-            markings.push({ id: `${tile.z}-${tile.x}-${tile.y}-${layerName}-${feature.id ?? featureIndex}-${lineIndex}-${clippedIndex}`, kind: isBoundary ? "boundary" : transportationClass === "trail" ? "trail" : isRoad ? "road" : "water", operation: isWater ? "score" : "engrave", ...(transportationClass ? { transportationClass } : {}), ...(label ? { label } : {}), points: clippedLine.map((point) => ({
-              ...projectPoint(tile, feature.extent, point),
-            })) });
+          clipVectorTileLine(line, feature.extent).forEach((clippedLine, clippedIndex) => {
+            if (clippedLine.length < 2) return;
+            // Tile coverage exceeds the crop, especially at the archive's max
+            // zoom. Off-crop roads must not consume the fabrication budget.
+            // Keep a styling margin so road end caps stay outside the artwork.
+            const width = config.widthMm + 8;
+            const height = config.heightMm + 8;
+            const normalized = clippedLine.map((point) => {
+              const projected = projectPoint(tile, feature.extent, point);
+              return { x: projected.x / width + 0.5, y: projected.y / height + 0.5 };
+            });
+            clipVectorTileLine(normalized, 1).forEach((line, cropIndex) => {
+              if (rawMarkingCount >= MAX_VECTOR_MARKINGS * RAW_VECTOR_MARKING_BUDGET_MULTIPLIER) { truncated = true; return; }
+              rawMarkingCount += 1;
+              markings.push({
+                id: [tile.z, tile.worldX, tile.y, layerName, feature.id ?? featureIndex, lineIndex, clippedIndex, cropIndex].join("-"),
+                kind,
+                operation: kind === "water" ? "score" : "engrave",
+                ...(transportationClass ? { transportationClass } : {}),
+                ...(label ? { label } : {}),
+                points: line.map((point) => ({ x: (point.x - 0.5) * width, y: (point.y - 0.5) * height })),
+              });
+            });
           });
         });
       }
     }
-    return { markings, waterPolygons, oceanPolygons };
+    return { markings, waterPolygons, oceanPolygons, truncated };
   }));
+  await yieldForCancellation(signal);
   const rawMarkings = perTile.flatMap((tile) => tile.markings);
   const boundaries = cleanBoundaryMarkings(rawMarkings.filter((marking) => marking.kind === "boundary"), config.minimumFeatureMm);
   const transportation = stitchTransportationMarkings(rawMarkings.filter((marking) => marking.kind === "road" || marking.kind === "trail"));
+  const roads = transportation.filter((marking) => marking.kind === "road");
+  const trails = transportation.filter((marking) => marking.kind === "trail");
   const waterways = cleanWaterwayMarkings(rawMarkings.filter((marking) => marking.kind === "water"), config.minimumFeatureMm);
   const inland = dissolveWaterAreas(perTile.flatMap((tile) => tile.waterPolygons), config.minimumFeatureMm);
   const ocean = dissolveWaterAreas(perTile.flatMap((tile) => tile.oceanPolygons), config.minimumFeatureMm);
-  const shorelines = shorelineMarkings([...ocean, ...inland]);
+  const shorelines = config.showWater ? shorelineMarkings([...ocean, ...inland]) : [];
+  const limited = limitVectorMarkingGroups([boundaries, roads, trails, shorelines, waterways]);
   return {
-    markings: [...boundaries, ...transportation, ...shorelines, ...waterways].slice(0, MAX_VECTOR_MARKINGS),
+    markings: limited.markings,
     inland,
     ocean,
+    truncated: limited.truncated || perTile.some((tile) => tile.truncated),
   };
 }
 
@@ -554,6 +632,8 @@ export async function loadVectorMarkings(bounds: GeoBounds, requestedZoom: numbe
  * handed a false shoreline running straight down the margin.
  */
 export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, config: ProjectConfigV1, signal?: AbortSignal): Promise<WaterAreaV1[]> {
+  signal?.throwIfAborted();
+  const lakeArchive = createArchive(`${apiBase}/v1/lakes.pmtiles`, signal);
   const header = await lakeArchive.getHeader();
   signal?.throwIfAborted();
   let zoom = Math.max(header.minZoom, Math.min(header.maxZoom, Math.round(requestedZoom)));
@@ -565,8 +645,8 @@ export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, co
       zoom -= 1;
     }
   }
-  const projectPoint = (tile: { x: number; y: number }, extent: number, point: Point2D): Point2D => ({
-    x: (((tile.x + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
+  const projectPoint = (tile: DataTile, extent: number, point: Point2D): Point2D => ({
+    x: (((tile.worldX + point.x / extent) * TILE_SIZE - window.westX) / (window.eastX - window.westX) - 0.5) * config.widthMm,
     y: (((tile.y + point.y / extent) * TILE_SIZE - window.northY) / (window.southY - window.northY) - 0.5) * config.heightMm,
   });
   const numberProperty = (properties: Record<string, unknown>, key: string): number | undefined => {
@@ -582,6 +662,7 @@ export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, co
   const minimumAreaKm2 = ((config.minimumFeatureMm * 2 / mmPerMeter) / 1000) ** 2;
 
   // One lake spans many tiles, so its pieces are gathered by id and unioned.
+  const consumeGeometry = createFeatureBudget();
   const byLake = new Map<number, { properties: Record<string, unknown>; polygons: Polygon2D[] }>();
   await Promise.all(window.tiles.map(async (tile) => {
     const response = await lakeArchive.getZxy(tile.z, tile.x, tile.y, signal);
@@ -589,6 +670,7 @@ export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, co
     const vectorTile = new VectorTile(new PbfReader(new Uint8Array(response.data)));
     for (const layer of Object.values(vectorTile.layers)) {
       for (let featureIndex = 0; featureIndex < layer.length; featureIndex += 1) {
+        if (featureIndex % 64 === 0) await yieldForCancellation(signal);
         const feature = layer.feature(featureIndex);
         if (feature.type !== 3) continue;
         const properties = feature.properties as Record<string, unknown>;
@@ -597,7 +679,9 @@ export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, co
         const areaKm2 = numberProperty(properties, "area_km2");
         if (areaKm2 !== undefined && areaKm2 < minimumAreaKm2) continue;
         const entry = byLake.get(hylakId) ?? { properties, polygons: [] };
-        classifyRings(feature.loadGeometry()).forEach((polygon) => {
+        const geometry = feature.loadGeometry();
+        consumeGeometry(geometry, true);
+        classifyRings(geometry).forEach((polygon) => {
           const [outer, ...holes] = polygon;
           if (!outer) return;
           entry.polygons.push({
@@ -614,6 +698,7 @@ export async function loadLakeAreas(bounds: GeoBounds, requestedZoom: number, co
   const halfHeight = config.heightMm / 2;
   const areas: WaterAreaV1[] = [];
   for (const [hylakId, entry] of byLake) {
+    await yieldForCancellation(signal);
     for (const [index, polygon] of dissolveWaterAreas(entry.polygons, config.minimumFeatureMm).entries()) {
       const name = typeof entry.properties.name === "string" && entry.properties.name.trim() ? entry.properties.name.trim() : undefined;
       areas.push({
@@ -687,49 +772,49 @@ export async function loadTerrain(config: ProjectConfigV1, signal?: AbortSignal)
     const window = fittingTileWindow(bounds, zoom);
     // Ocean polygons are how geometry separates bathymetry from land relief,
     // so depth modeling needs vectors even when shoreline scoring is hidden.
-    const usesWaterDepth = config.outputMode === "stack" && config.showWaterDepth;
-    const vectorRequested = config.showRoads || config.showTrails || config.showWater || config.showBoundaries || usesWaterDepth;
+    const { lakes: usesWaterDepth } = sourceRequirements(config);
+    const vectorRequested = sourceRequirements(config).vectors;
     const [{ elevation, imagerySources, datasetVersion }, vector, lakes] = await Promise.all([
       loadElevation(window, signal),
       vectorRequested
         ? loadVectorMarkings(bounds, zoom, config, signal)
-          .then((vectorData) => ({ ...vectorData, status: "available" as const }))
+          .then((vectorData) => ({ ...vectorData, status: vectorData.truncated ? "partial" as const : "available" as const }))
           .catch((error) => {
             if (signal?.aborted) throw error;
-            return { markings: [], inland: [], ocean: [], status: "unavailable" as const };
+            return { markings: [], inland: [], ocean: [], truncated: false, status: "unavailable" as const };
           })
-        : Promise.resolve({ markings: [], inland: [], ocean: [], status: "not-requested" as const }),
-      // Depth data is an enhancement: a missing or unprovisioned archive leaves
-      // the water flat rather than failing the whole generation.
+        : Promise.resolve({ markings: [], inland: [], ocean: [], truncated: false, status: "not-requested" as const }),
       usesWaterDepth
-        ? loadLakeAreas(bounds, zoom, config, signal).catch((error) => {
+        ? loadLakeAreas(bounds, zoom, config, signal)
+          .then((areas) => ({ areas, status: "available" as const }))
+          .catch((error) => {
             if (signal?.aborted) throw error;
-            return [] as WaterAreaV1[];
+            return { areas: [] as WaterAreaV1[], status: "unavailable" as const };
           })
-        : Promise.resolve([] as WaterAreaV1[]),
+        : Promise.resolve({ areas: [] as WaterAreaV1[], status: "not-requested" as const }),
     ]);
-    const waterAreas = combineWaterAreas(lakes, vector.ocean, config.minimumFeatureMm);
-    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, waterAreas, waterPatternAreas: [...vector.ocean, ...vector.inland], vectorStatus: vector.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: MAP_DATA_ATTRIBUTION } };
+    const waterAreas = combineWaterAreas(lakes.areas, vector.ocean, config.minimumFeatureMm);
+    return { fallback: false, source: { schemaVersion: 1, elevation, markings: vector.markings, waterAreas, waterPatternAreas: [...vector.ocean, ...vector.inland], vectorStatus: vector.status, lakeDataStatus: lakes.status, datasetVersion, sourceKind: "real", bounds, imagerySources, resolutionM: groundWidthM(bounds) / elevation.width, attribution: MAP_DATA_ATTRIBUTION } };
   } catch (error) {
     if (signal?.aborted) throw error;
     const source = createSyntheticSource({ ...config, location: { ...config.location, bounds } });
-    return { source: { ...source, vectorStatus: config.showRoads || config.showTrails || config.showWater || config.showBoundaries || (config.outputMode === "stack" && config.showWaterDepth) ? "unavailable" : "not-requested" }, fallback: true };
+    return { source: { ...source, vectorStatus: sourceRequirements(config).vectors ? "unavailable" : "not-requested", lakeDataStatus: config.outputMode === "stack" && config.showWaterDepth ? "unavailable" : "not-requested" }, fallback: true };
   }
 }
 
 export async function searchPlaces(query: string, signal?: AbortSignal): Promise<PlaceResult[]> {
   if (query.trim().length < 2) return [];
-  const response = await fetch(`${apiBase}/v1/geocode?q=${encodeURIComponent(query.trim())}&limit=5`, { signal });
+  const response = await fetch(`${apiBase}/v1/geocode?q=${encodeURIComponent(query.trim())}&limit=5`, { signal: networkSignal(signal) });
   if (!response.ok) throw new Error("Place search is temporarily unavailable.");
   const value: unknown = await response.json();
   if (!Array.isArray(value)) throw new Error("Place search returned an unexpected response.");
   return value.flatMap((item): PlaceResult[] => {
     if (!item || typeof item !== "object") return [];
     const record = item as Record<string, unknown>;
-    const lat = Number(record.lat);
-    const lon = Number(record.lon);
-    const label = typeof record.display_name === "string" ? record.display_name : "Unnamed location";
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
-    return [{ id: String(record.place_id ?? `${lat},${lon}`), label, lat, lon, type: typeof record.type === "string" ? record.type : undefined }];
+    const lat = record.lat;
+    const lon = record.lon;
+    const label = typeof record.display_name === "string" ? record.display_name.trim() : "";
+    if (typeof lat !== "number" || !Number.isFinite(lat) || lat < -85.0511 || lat > 85.0511 || typeof lon !== "number" || !Number.isFinite(lon) || lon < -180 || lon > 180 || !label) return [];
+    return [{ id: String(record.place_id ?? (String(lat) + "," + String(lon))), label, lat, lon, type: typeof record.type === "string" ? record.type : undefined }];
   });
 }

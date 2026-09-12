@@ -16,7 +16,7 @@ test("generates deterministic real terrain and downloads the complete fabricatio
   await expect(page.getByText("Generate before export")).toBeVisible();
   await expect(page.getByRole("button", { name: "Download files" })).toBeDisabled();
   await page.getByRole("radio", { name: /Cut layers/ }).click();
-  await expect(page.locator(".layer-heading")).toContainText(/Layer \d+.*of 10/);
+  await expect(page.locator(".layer-heading")).toContainText(/Layer \d+.*of 13/);
   await expect(page.locator('[data-marking-kind="road"]')).not.toHaveCount(0);
   await page.getByRole("radio", { name: /3D stack/ }).click();
   const preview = page.locator(".preview-stage");

@@ -152,7 +152,7 @@ export interface ElevationLabelPlacement {
   rotationRad: number;
 }
 
-export interface LinearLabelPlacement extends ElevationLabelPlacement {}
+export type LinearLabelPlacement = ElevationLabelPlacement;
 
 function pointAlongPolyline(points: Point2D[], cumulative: number[], distance: number): Point2D {
   const total = cumulative.at(-1) ?? 0;

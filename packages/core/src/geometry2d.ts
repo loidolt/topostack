@@ -144,7 +144,7 @@ export function ringFitsInsidePolygon(ring: Point2D[], polygon: Polygon2D, margi
       for (let edge = 0; edge < boundary.length - 1; edge += 1) {
         const boundaryStart = boundary[edge];
         const boundaryEnd = boundary[edge + 1];
-        if (boundaryStart && boundaryEnd && segmentDistance(start, end, boundaryStart, boundaryEnd) < marginMm - 1e-7) return false;
+        if (boundaryStart && boundaryEnd && (segmentsIntersect(start, end, boundaryStart, boundaryEnd) || segmentDistance(start, end, boundaryStart, boundaryEnd) < marginMm - 1e-7)) return false;
       }
     }
   }

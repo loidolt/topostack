@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { LocateFixed } from "@lucide/svelte";
-  import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from "maplibre-gl";
-  import { markerSymbolCenterForAnchor, markerSymbolPaths, type CustomLineFeatureV1, type GeoBounds, type MapMarkerV1, type MarkerSymbol, type ProjectConfigV1 } from "@topostack/core";
+  import * as maplibregl from "maplibre-gl";
+  import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
+  import { markerSymbolCenterForAnchor, markerSymbolPaths, unwrapLongitude, type CustomLineFeatureV1, type GeoBounds, type MapMarkerV1, type MarkerSymbol, type ProjectConfigV1 } from "@topostack/core";
+  import { boundsForProject } from "../data-provider";
   let { project, onLocationChange }: { project: ProjectConfigV1; onLocationChange: (lat: number, lon: number, zoom: number, bounds: GeoBounds) => void } = $props();
   let container: HTMLDivElement;
   let guide: HTMLDivElement;
@@ -40,22 +42,33 @@
     return element;
   }
 
-  function mapAreaAspect(): number {
-    const bounds = project.location.bounds;
-    if (!bounds) return 1.5;
+  function fitSelection(): void {
+    if (!map || !guide) return;
+    const bounds = boundsForProject(project);
     const radians = Math.PI / 180;
     const northY = Math.asinh(Math.tan(bounds.north * radians));
     const southY = Math.asinh(Math.tan(bounds.south * radians));
-    return Math.max(0.1, Math.min(10, ((bounds.east - bounds.west) * radians) / Math.abs(northY - southY)));
+    const aspect = ((bounds.east - bounds.west) * radians) / (northY - southY);
+    const width = Math.min(container.clientWidth * 0.54, 630, container.clientHeight * 0.7 * aspect);
+    const height = width / aspect;
+    if (!(width > 0 && height > 0)) return;
+    guide.style.width = `${width}px`;
+    guide.style.height = `${height}px`;
+    map.resize({ topostackProgrammatic: true });
+    map.fitBounds([[bounds.west, bounds.south], [bounds.east, bounds.north]], {
+      padding: { left: (container.clientWidth - width) / 2, right: (container.clientWidth - width) / 2, top: (container.clientHeight - height) / 2, bottom: (container.clientHeight - height) / 2 },
+      duration: 0, bearing: 0, pitch: 0,
+    }, { topostackProgrammatic: true });
   }
 
   function customLineData(lines: CustomLineFeatureV1[]) {
+    const longitudeBounds = project.location.bounds ?? { west: project.location.lon - 180, east: project.location.lon + 180, south: -85.0511, north: 85.0511 };
     return {
       type: "FeatureCollection" as const,
       features: lines.map((line) => ({
         type: "Feature" as const,
         properties: { id: line.id, kind: line.kind },
-        geometry: { type: "LineString" as const, coordinates: line.points.map((point) => [point.lon, point.lat] as [number, number]) },
+        geometry: { type: "LineString" as const, coordinates: line.points.map((point) => [unwrapLongitude(point.lon, longitudeBounds), point.lat] as [number, number]) },
       })),
     };
   }
@@ -88,7 +101,8 @@
   }
 
   onMount(() => {
-    map = new maplibregl.Map({ container, style: "https://tiles.openfreemap.org/styles/liberty", center: [project.location.lon, project.location.lat], zoom: project.location.zoom, attributionControl: false, cooperativeGestures: true });
+    map = new maplibregl.Map({ container, style: "https://tiles.openfreemap.org/styles/liberty", center: [project.location.lon, project.location.lat], zoom: project.location.zoom, attributionControl: false, cooperativeGestures: true, dragRotate: false, touchPitch: false, trackResize: false });
+    map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");
     map.on("load", () => syncCustomLines(project.customLines));
@@ -99,20 +113,26 @@
       const guideRect = guide.getBoundingClientRect();
       const northWest = map.unproject([guideRect.left - containerRect.left, guideRect.top - containerRect.top]);
       const southEast = map.unproject([guideRect.right - containerRect.left, guideRect.bottom - containerRect.top]);
-      onLocationChange(center.lat, center.lng, map.getZoom(), { west: northWest.lng, north: northWest.lat, east: southEast.lng, south: southEast.lat });
+      const longitude = ((center.lng + 180) % 360 + 360) % 360 - 180;
+      const worldShift = longitude - center.lng;
+      onLocationChange(center.lat, longitude, map.getZoom(), { west: northWest.lng + worldShift, north: northWest.lat, east: southEast.lng + worldShift, south: southEast.lat });
     };
     // Only commit selections for movement the user caused. Programmatic camera
     // moves (initial load, flyTo from external location edits) must not
     // overwrite the stored place label or bounds.
     map.on("moveend", (event) => { if ((event as unknown as { topostackProgrammatic?: boolean }).topostackProgrammatic) return; emitSelection(); });
-    return () => { mapMarkers.forEach((marker) => marker.remove()); mapMarkers.clear(); map?.remove(); map = undefined; };
+    const resizeObserver = new ResizeObserver(() => fitSelection());
+    resizeObserver.observe(container);
+    fitSelection();
+    return () => { resizeObserver.disconnect(); mapMarkers.forEach((marker) => marker.remove()); mapMarkers.clear(); map?.remove(); map = undefined; };
   });
 
   $effect(() => {
-    const lat = project.location.lat; const lon = project.location.lon; const zoom = project.location.zoom;
-    if (!map) return;
-    const center = map.getCenter();
-    if (Math.abs(center.lat - lat) > 0.0001 || Math.abs(center.lng - lon) > 0.0001) map.flyTo({ center: [lon, lat], zoom, duration: 900 }, { topostackProgrammatic: true });
+    void project.location;
+    void project.cropShape;
+    void project.widthMm;
+    void project.heightMm;
+    untrack(fitSelection);
   });
 
   $effect(() => {
@@ -146,12 +166,21 @@
 
 <div class="map-wrap">
   <div bind:this={container} class="map-canvas"></div>
-  <div bind:this={guide} class="crop-guide" class:crop-circle={isCircle} style:aspect-ratio={isCircle ? "1" : mapAreaAspect()} aria-hidden="true"><span class="crop-corner crop-corner-a"></span><span class="crop-corner crop-corner-b"></span><span class="crop-corner crop-corner-c"></span><span class="crop-corner crop-corner-d"></span></div>
+  <div bind:this={guide} class="crop-guide" class:crop-circle={isCircle} aria-hidden="true">{#if isCircle}<div class="circle-outline" style:width={`${100 * Math.min(project.widthMm, project.heightMm) / project.widthMm}%`} style:height={`${100 * Math.min(project.widthMm, project.heightMm) / project.heightMm}%`}></div>{:else}<span class="crop-corner crop-corner-a"></span><span class="crop-corner crop-corner-b"></span><span class="crop-corner crop-corner-c"></span><span class="crop-corner crop-corner-d"></span>{/if}</div>
   <div class="map-crosshair"><span></span><span></span></div>
   <div class="map-caption"><LocateFixed size={14} /> Drag the map to choose your terrain</div>
 </div>
 
 <style>
+  .circle-outline {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    border: 2px solid white;
+    border-radius: 50%;
+    box-shadow: 0 0 0 9999px #20231d61;
+  }
+
   :global(.topostack-map-marker) {
     width: 30px;
     height: 30px;
