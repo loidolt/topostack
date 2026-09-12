@@ -1,7 +1,8 @@
 import { mount, tick, unmount } from "svelte";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSyntheticSource, DEFAULT_PROJECT } from "@topostack/core";
+import { createSyntheticSource, DEFAULT_PROJECT, generateGeometry, type GeometryIRV1 } from "@topostack/core";
 import { theme } from "../lib/theme";
+import { createSamplePreviewSource } from "../sample-preview";
 
 const loadTerrainMock = vi.hoisted(() => vi.fn());
 const loadVectorMarkingsMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ import App from "./App.svelte";
 
 describe("TopoStack Svelte shell", () => {
   let component: ReturnType<typeof mount> | undefined;
+  let initialPreview: GeometryIRV1;
   const stored = new Map<string, string>();
   const localStorageStub: Storage = {
     get length() { return stored.size; },
@@ -28,6 +30,9 @@ describe("TopoStack Svelte shell", () => {
   // so the first in-test dynamic import cannot race mock registration and pull
   // in the real WebGL component.
   beforeAll(async () => {
+    // Match the page's precomputed Worker result. Clone it at each mount so
+    // tests remain isolated without recalculating the same preview for every test.
+    initialPreview = generateGeometry(DEFAULT_PROJECT, createSamplePreviewSource());
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorageStub });
     Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: class {
       constructor(private callback: ResizeObserverCallback) {}
@@ -41,7 +46,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("edits and undoes the project name and switches preview modes", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const name = target.querySelector<HTMLInputElement>('input[aria-label="Project name"]')!;
     name.value = "Alpine study";
@@ -59,7 +64,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("switches to a flat engraving workflow with dedicated controls and preview", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const engraving = target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!;
     engraving.click();
@@ -124,7 +129,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("applies linework presets and custom trail patterns to the engraving preview", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const bold = [...target.querySelectorAll<HTMLButtonElement>('.line-presets button[role="radio"]')].find((button) => button.textContent?.includes("Bold"))!;
     bold.click();
@@ -149,7 +154,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("lays out fabrication controls in full-width rows with a compact position pair", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Fabrication settings"))!.click();
     await tick();
@@ -165,7 +170,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("changes engraving font and exact physical text size without refetching terrain", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const stencil = [...target.querySelectorAll<HTMLButtonElement>('.swatch-options[aria-label="Engraving font"] button[role="radio"]')].find((button) => button.textContent?.includes("Stencil"))!;
     stencil.click();
@@ -179,7 +184,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("customizes north-arrow design, physical size, and anchored placement without refetching terrain", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const designs = target.querySelectorAll<HTMLButtonElement>('.swatch-options[aria-label="North arrow design"] button[role="radio"]');
     expect(designs).toHaveLength(3);
@@ -203,7 +208,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("collapses, expands, and remembers configuration sections", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     const sections = [...target.querySelectorAll<HTMLButtonElement>(".section-disclosure")];
@@ -228,7 +233,7 @@ describe("TopoStack Svelte shell", () => {
     const source = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const };
     loadTerrainMock.mockResolvedValue({ source, fallback: false });
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
@@ -259,7 +264,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("identifies the controls that require terrain-data regeneration", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     const badge = target.querySelector<HTMLElement>(".terrain-data-badge")!;
@@ -285,7 +290,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("applies and persists an explicit color scheme", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const toggle = target.querySelector<HTMLButtonElement>('button[data-theme-preference="system"]')!;
     expect(toggle.getAttribute("aria-label")).toBe("Colour scheme: System");
@@ -303,7 +308,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("resizes cut geometry without changing or refetching the map area", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const width = target.querySelector<HTMLInputElement>('input[type="number"]')!;
     expect(width.max).toBe("10000");
@@ -312,9 +317,18 @@ describe("TopoStack Svelte shell", () => {
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toMatch(/updated/i));
     expect(target.querySelector(".preview-readout")?.textContent).toContain("1200 × 200 mm");
     expect(loadTerrainMock).not.toHaveBeenCalled();
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+    expect(loadLakeAreasMock).not.toHaveBeenCalled();
+  });
+
+  it("converts and resizes physical dimensions across unit systems without refetching map data", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
+    await tick();
+    const width = target.querySelector<HTMLInputElement>('input[type="number"]')!;
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Imperial"))!.click();
-    await vi.waitFor(() => expect(target.querySelector(".preview-readout")?.textContent).toContain("47.244 × 7.874 in"));
-    expect(width.value).toBe("47.244");
+    await vi.waitFor(() => expect(target.querySelector(".preview-readout")?.textContent).toContain("11.811 × 7.874 in"));
+    expect(width.value).toBe("11.811");
     expect(width.closest(".field-row")?.textContent).toContain("in");
     expect(target.querySelector(".layer-heading")?.textContent).toContain("ft");
     width.value = "10";
@@ -325,12 +339,14 @@ describe("TopoStack Svelte shell", () => {
     await vi.waitFor(() => expect(target.querySelector(".preview-readout")?.textContent).toContain("254 × 200 mm"));
     expect(width.value).toBe("254");
     expect(loadTerrainMock).not.toHaveBeenCalled();
+    expect(loadVectorMarkingsMock).not.toHaveBeenCalled();
+    expect(loadLakeAreasMock).not.toHaveBeenCalled();
   });
 
   it("cancels an in-flight terrain request and reports the outcome", async () => {
     loadTerrainMock.mockImplementation((_project, signal: AbortSignal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Canceled", "AbortError")), { once: true })));
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const generate = [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!;
     generate.click();
@@ -354,7 +370,7 @@ describe("TopoStack Svelte shell", () => {
       });
     }));
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const generate = [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!;
     generate.click();
@@ -382,7 +398,7 @@ describe("TopoStack Svelte shell", () => {
     };
     loadTerrainMock.mockImplementation(() => new Promise(() => undefined));
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
     await tick();
@@ -391,7 +407,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("updates every Map Details feature without pressing Generate", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const stage = target.querySelector<HTMLElement>(".preview-stage")!;
     const cases = [
@@ -427,7 +443,7 @@ describe("TopoStack Svelte shell", () => {
       signal.addEventListener("abort", () => reject(new DOMException("Canceled", "AbortError")), { once: true });
     }));
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     for (const label of ["Roads", "Trails", "Water outlines", "Water depth"]) {
       target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!.click();
@@ -452,7 +468,7 @@ describe("TopoStack Svelte shell", () => {
     const source = { ...createSyntheticSource(DEFAULT_PROJECT, 32), sourceKind: "real" as const, markings: [{ id: "named-road", kind: "road" as const, operation: "engrave" as const, transportationClass: "major-road" as const, label: "Rim Drive", points: [{ x: -130, y: 0 }, { x: 130, y: 0 }] }] };
     loadTerrainMock.mockResolvedValue({ source, fallback: false });
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
@@ -465,7 +481,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("renders named road engravings when transportation labels are enabled", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const stage = target.querySelector<HTMLElement>(".preview-stage")!;
     const labels = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Transportation labels"]')!;
@@ -478,7 +494,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("commits only the latest result when a detail is toggled rapidly", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     const roads = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Roads"]')!;
     roads.click(); roads.click();
@@ -497,7 +513,7 @@ describe("TopoStack Svelte shell", () => {
     });
     loadLakeAreasMock.mockResolvedValue([]);
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     for (const label of ["Roads", "Trails", "Water outlines", "Water depth"]) {
       const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
@@ -527,7 +543,7 @@ describe("TopoStack Svelte shell", () => {
       truncated: false,
     });
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Generate terrain"))!.click();
     await vi.waitFor(() => expect(target.querySelector(".status-line")?.textContent).toContain("Real terrain ready"));
@@ -546,7 +562,7 @@ describe("TopoStack Svelte shell", () => {
       ocean: [],
     });
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     for (const label of ["Roads", "Trails", "Water outlines", "Water depth"]) {
       const input = target.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
@@ -568,7 +584,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("generates and renders a coordinate grid locally without fetching vectors", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     const coordinateGrid = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Latitude and longitude grid"]')!;
@@ -582,7 +598,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("adds, edits, symbolizes, and removes an arbitrary marker list", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Add marker"))!.click();
@@ -602,7 +618,7 @@ describe("TopoStack Svelte shell", () => {
 
   it("adds custom trail and boundary paths with arbitrary coordinate points", async () => {
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     [...target.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Add path"))!.click();
@@ -631,7 +647,7 @@ describe("TopoStack Svelte shell", () => {
     }));
     loadLakeAreasMock.mockResolvedValue([]);
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
     target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!.click();
     await vi.waitFor(() => expect(target.querySelector<HTMLButtonElement>('button[role="radio"][aria-label="Flat engraving"]')!.getAttribute("aria-checked")).toBe("true"));
@@ -654,7 +670,7 @@ describe("TopoStack Svelte shell", () => {
     loadTerrainMock.mockResolvedValue({ source, fallback: false });
     loadLakeAreasMock.mockResolvedValue([]);
     const target = document.createElement("div");
-    component = mount(App, { target });
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
     await tick();
 
     const depth = target.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="Water depth"]')!;

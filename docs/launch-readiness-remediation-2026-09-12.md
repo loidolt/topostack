@@ -70,8 +70,20 @@ The candidate [Atomm ZIP](../apps/generator/topostack-atomm.zip) contains 36 ent
 
 ## Remaining release acceptance
 
-Firefox cannot launch in this local environment: its macOS graphics process fails before any application test runs. The Firefox job remains enabled in Linux CI and must pass there.
+The local macOS Firefox graphics process still cannot launch. A follow-up Linux container run on Node 22.22.2 passed all seven Firefox tests using an Xvfb display, including actual map rendering. The updated GitHub CI run must also pass for the release commit.
 
 The real Atomm host, Open in Studio interpretation, and physical xTool fabrication still require acceptance against the release ZIP. Account secrets, quotas, notification routing, the R2 `geocode/` cleanup lifecycle, and a coordinated rollback rehearsal are operator checks. Instructions and evidence requirements are in the runbook; this work did not change production account state or claim those checks were completed.
 
 Production client telemetry beyond the browser canary remains an operational integration decision. The changes improve failure recovery, browser diagnostics, and gateway observability without silently introducing a third-party telemetry service.
+
+## CI follow-up
+
+[The first CI run](https://github.com/loidolt/topostack/actions/runs/34716728384) passed audit, lint, type checks, build, size budgets, all 79 core tests, and all 57 frontend-helper tests. It exposed a component-test timeout under coverage and four Firefox failures that local Chromium/WebKit validation did not reveal.
+
+- Preview failures now have a separate notice, preserving generation status. Failed 3D initialization is remembered during automatic view changes; explicit user selection can retry it.
+- Map initialization catches unavailable WebGL2 and returns to the appropriate 2D view. Search/coordinate entry and export remain usable. The browser regression now exercises generation, a 3D retry, map failure in both output modes, and location-dialog access with WebGL disabled.
+- Firefox CI runs against Xvfb with software WebGL enabled. The actual map-alignment tests remain enabled.
+- Touch-target assertions allow 0.01 pixels of floating-point error; Firefox reported a 44-pixel target as 43.999996 pixels.
+- Component tests receive an isolated clone of a precomputed preview, matching the page's Worker-result input. This avoids generating identical startup geometry for every test. The combined large-output resize and unit-conversion scenario is split into two focused cases, keeping both behaviors and all source-refetch assertions. Coverage thresholds and test time limits remain unchanged.
+
+Local validation passed lint/type checks, all 14 Chromium/WebKit scenarios, all seven Firefox scenarios in Linux, and the component suite with coverage; the split resize scenario adds one component case.

@@ -123,12 +123,13 @@ test("compact layouts keep the preview and controls reachable", async ({ page })
   const widthField = page.getByRole("spinbutton", { name: "Width", exact: true });
   await widthField.scrollIntoViewIfNeeded();
 
+  // Firefox may report a 44px CSS target as 43.999996px in layout coordinates.
   const decrementBox = await page.getByRole("button", { name: "Decrease Width" }).boundingBox();
   const incrementBox = await page.getByRole("button", { name: "Increase Width" }).boundingBox();
   expect(decrementBox).not.toBeNull();
   expect(incrementBox).not.toBeNull();
-  expect(decrementBox!.width).toBeGreaterThanOrEqual(44);
-  expect(incrementBox!.width).toBeGreaterThanOrEqual(44);
+  expect(decrementBox!.width).toBeGreaterThanOrEqual(44 - 0.01);
+  expect(incrementBox!.width).toBeGreaterThanOrEqual(44 - 0.01);
 
   const numberInput = page.locator(".number-input").filter({ has: widthField });
   const numberFieldBox = await numberInput.locator(".ldt-number-field").boundingBox();
@@ -139,8 +140,8 @@ test("compact layouts keep the preview and controls reachable", async ({ page })
 
   const roadsBox = await page.getByRole("switch", { name: "Roads" }).boundingBox();
   const presetBox = await page.getByRole("button", { name: "Grand Canyon", exact: true }).boundingBox();
-  expect(roadsBox!.height).toBeGreaterThanOrEqual(44);
-  expect(presetBox!.height).toBeGreaterThanOrEqual(44);
+  expect(roadsBox!.height).toBeGreaterThanOrEqual(44 - 0.01);
+  expect(presetBox!.height).toBeGreaterThanOrEqual(44 - 0.01);
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { DEFAULT_PROJECT } from "../packages/core/src/types";
 
-test("falls back to cut layers when WebGL cannot initialize", async ({ page }) => {
+test("keeps generation and location controls usable when WebGL is unavailable", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("https://static-res.makextool.com/**", (route) => route.abort());
@@ -15,7 +15,27 @@ test("falls back to cut layers when WebGL cannot initialize", async ({ page }) =
   await page.goto("/");
   await expect(page.getByRole("radio", { name: /Cut layers/ })).toHaveAttribute("aria-checked", "true");
   await expect(page.locator('svg[aria-label^="Cut preview for layer"]')).toBeVisible();
-  await expect(page.locator(".status-line")).toContainText("3D is unavailable");
+  await expect(page.locator(".preview-notice")).toContainText("3D is unavailable");
+  await page.getByRole("button", { name: /Generate terrain/ }).click();
+  await expect(page.locator(".status-line")).toContainText("Real terrain ready", { timeout: 30_000 });
+  await expect(page.getByText("Ready to export")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Cut layers/ })).toHaveAttribute("aria-checked", "true");
+  // Explicit retries must not overwrite the generation result either.
+  await page.getByRole("radio", { name: /3D stack/ }).click();
+  await expect(page.locator(".preview-notice")).toContainText("3D is unavailable");
+  await expect(page.locator(".status-line")).toContainText("Real terrain ready");
+  for (const output of ["Layered relief", "Flat engraving"]) {
+    await page.getByRole("radio", { name: output, exact: true }).click();
+    await page.getByRole("radio", { name: "Map", exact: true }).click();
+    await expect(page.locator(".preview-notice")).toContainText("Map is unavailable");
+    await expect(page.getByRole("radio", { name: output === "Layered relief" ? "Cut layers" : "Engraving", exact: true })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText("Ready to export")).toBeVisible();
+  }
+  await page.locator(".location-card").click();
+  await expect(page.getByRole("dialog", { name: "Choose anywhere" })).toBeVisible();
+  await expect(page.getByLabel("Search places")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Download files" })).toBeEnabled();
   expect(errors).toEqual([]);
 });
 

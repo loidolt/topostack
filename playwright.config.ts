@@ -16,7 +16,16 @@ export default defineConfig({
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
+    {
+      name: "firefox",
+      use: {
+        ...devices["Desktop Firefox"],
+        // Linux CI provides an Xvfb display and Mesa software rendering.
+        // Use the display for Firefox so map tests exercise WebGL2 rendering.
+        headless: !(process.env.CI && process.platform === "linux"),
+        launchOptions: { firefoxUserPrefs: { "webgl.force-enabled": true } },
+      },
+    },
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {

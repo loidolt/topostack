@@ -5,7 +5,7 @@
   import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
   import { markerSymbolCenterForAnchor, markerSymbolPaths, unwrapLongitude, type CustomLineFeatureV1, type GeoBounds, type MapMarkerV1, type MarkerSymbol, type ProjectConfigV1 } from "@topostack/core";
   import { boundsForProject } from "../data-provider";
-  let { project, onLocationChange }: { project: ProjectConfigV1; onLocationChange: (lat: number, lon: number, zoom: number, bounds: GeoBounds) => void } = $props();
+  let { project, onLocationChange, onUnavailable }: { project: ProjectConfigV1; onUnavailable?: () => void; onLocationChange: (lat: number, lon: number, zoom: number, bounds: GeoBounds) => void } = $props();
   let container: HTMLDivElement;
   let guide: HTMLDivElement;
   let map: MapLibreMap | undefined;
@@ -101,7 +101,9 @@
   }
 
   onMount(() => {
-    map = new maplibregl.Map({ container, style: "https://tiles.openfreemap.org/styles/liberty", center: [project.location.lon, project.location.lat], zoom: project.location.zoom, attributionControl: false, cooperativeGestures: true, dragRotate: false, touchPitch: false, trackResize: false });
+    try {
+      map = new maplibregl.Map({ container, style: "https://tiles.openfreemap.org/styles/liberty", center: [project.location.lon, project.location.lat], zoom: project.location.zoom, attributionControl: false, cooperativeGestures: true, dragRotate: false, touchPitch: false, trackResize: false });
+    } catch { onUnavailable?.(); return; }
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-left");

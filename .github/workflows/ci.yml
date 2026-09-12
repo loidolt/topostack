@@ -113,7 +113,7 @@ jobs:
         run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Test browser generation and export
-        run: npm run test:e2e
+        run: xvfb-run --auto-servernum npm run test:e2e
 
       - name: Upload browser diagnostics
         if: failure()
