@@ -70,7 +70,7 @@ The candidate [Atomm ZIP](../apps/generator/topostack-atomm.zip) contains 36 ent
 
 ## Remaining release acceptance
 
-The local macOS Firefox graphics process still cannot launch. A follow-up Linux container run on Node 22.22.2 passed all seven Firefox tests using an Xvfb display, including actual map rendering. The updated GitHub CI run must also pass for the release commit.
+The local macOS Firefox graphics process still cannot launch. A follow-up Linux container run on Node 22.22.2 passed all seven Firefox tests using an Xvfb display, including actual map rendering. All 21 browser scenarios subsequently passed in GitHub CI on `4d731eb`. Run the full pipeline again for the chosen release commit.
 
 The real Atomm host, Open in Studio interpretation, and physical xTool fabrication still require acceptance against the release ZIP. Account secrets, quotas, notification routing, the R2 `geocode/` cleanup lifecycle, and a coordinated rollback rehearsal are operator checks. Instructions and evidence requirements are in the runbook; this work did not change production account state or claim those checks were completed.
 
@@ -87,3 +87,5 @@ Production client telemetry beyond the browser canary remains an operational int
 - Component tests receive an isolated clone of a precomputed preview, matching the page's Worker-result input. This avoids generating identical startup geometry for every test. The combined large-output resize and unit-conversion scenario is split into two focused cases, keeping both behaviors and all source-refetch assertions. Coverage thresholds and test time limits remain unchanged.
 
 Local validation passed lint/type checks, all 14 Chromium/WebKit scenarios, all seven Firefox scenarios in Linux, and the component suite with coverage; the split resize scenario adds one component case.
+
+[The follow-up CI run](https://github.com/loidolt/topostack/actions/runs/34722570241) passed all 190 unit/component/Worker tests, all 21 browser scenarios, and all quality/build checks. Development deployment succeeded, then its smoke test exposed Wrangler's decorated custom-domain output (`hostname (custom domain)`). The verifier now normalizes that exact display form to an HTTPS origin before applying its existing strict URL validation. This preserves support for ordinary deployment URLs and the public monitor's explicit HTTPS configuration.

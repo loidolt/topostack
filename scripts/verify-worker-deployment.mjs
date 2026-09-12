@@ -8,7 +8,10 @@ if (!deploymentTarget) throw new Error("WORKER_URL was not returned by the deplo
 if (!publicAppUrl) throw new Error("PUBLIC_APP_URL was not configured and no deployment URL is available.");
 if (!expectedEnvironment || !["development", "production"].includes(expectedEnvironment)) throw new Error("EXPECTED_WORKER_ENVIRONMENT must be development or production.");
 
-const deploymentBase = new URL(deploymentTarget);
+// Wrangler prints custom-domain routes as a hostname with a display suffix,
+// while workers.dev targets are already URLs. Normalize only that known form.
+const customDomain = deploymentTarget.trim().match(/^([a-z0-9.-]+) \(custom domain\)$/i)?.[1];
+const deploymentBase = new URL(customDomain ? `https://${customDomain}` : deploymentTarget);
 const publicBase = new URL(publicAppUrl);
 if ([deploymentBase, publicBase].some((url) => url.protocol !== "https:" || url.username || url.password || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash)) throw new Error("Deployment and public app URLs must be HTTPS origins without credentials, paths, queries, or fragments.");
 
