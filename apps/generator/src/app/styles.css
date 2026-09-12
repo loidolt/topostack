@@ -797,7 +797,7 @@ body {
   display: flex;
   justify-content: space-between;
   color: var(--loidolt-text-muted);
-  font: var(--panel-font-micro) var(--loidolt-font-utility);
+  font: var(--panel-font-micro, 8px) var(--loidolt-font-utility);
 }
 
 /* The ticks label the slider, so they stop where the slider stops. */
@@ -1271,7 +1271,7 @@ body {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) 88px;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
   background: var(--loidolt-surface-sunken);
 }
 
@@ -1749,7 +1749,7 @@ body {
   background: var(--loidolt-surface);
   border-top: 1px solid var(--loidolt-border);
   padding: 10px 18px 8px;
-  position: relative;
+  min-height: 88px;
 }
 
 .layer-heading {
@@ -1777,10 +1777,9 @@ body {
 }
 
 .explode-control {
-  position: absolute;
-  right: 18px;
-  bottom: 8px;
   width: 210px;
+  max-width: 100%;
+  margin: 8px 0 0 auto;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1790,7 +1789,8 @@ body {
 }
 
 .explode-control input {
-  width: 120px;
+  flex: 1;
+  min-width: 0;
 }
 
 .search-input {
@@ -2116,10 +2116,6 @@ body {
     bottom: 6px;
     padding: 5px 7px;
     font-size: 9px;
-  }
-
-  .explode-control {
-    display: none;
   }
 }
 
