@@ -16,7 +16,7 @@ test("generates deterministic real terrain and downloads the complete fabricatio
   await expect(page.getByText("Generate before export")).toBeVisible();
   await expect(page.getByRole("button", { name: "Download files" })).toBeDisabled();
   await page.getByRole("radio", { name: /Cut layers/ }).click();
-  await expect(page.locator(".layer-heading")).toContainText(/Layer \d+.*of 10/);
+  await expect(page.locator(".layer-heading")).toContainText(/Layer \d+.*of 13/);
   await expect(page.locator('[data-marking-kind="road"]')).not.toHaveCount(0);
   await page.getByRole("radio", { name: /3D stack/ }).click();
   const preview = page.locator(".preview-stage");
@@ -96,4 +96,52 @@ test("location dialog traps focus and restores it on Escape", async ({ page }) =
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
+});
+
+test("compact layouts keep the preview and controls reachable", async ({ page }) => {
+  await page.route("https://static-res.makextool.com/**", (route) => route.abort("internetdisconnected"));
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto("/");
+
+  await expect(page.locator(".project-name > span")).toHaveText("Project name");
+  await expect(page.locator(".terrain-contextbar").getByRole("radiogroup", { name: "Output type" })).toBeVisible();
+
+  const previewBox = await page.locator(".preview-panel").boundingBox();
+  const controlsBox = await page.locator(".config-panel").boundingBox();
+  expect(previewBox).not.toBeNull();
+  expect(controlsBox).not.toBeNull();
+  expect(previewBox!.height).toBeGreaterThan(400);
+  expect(controlsBox!.y).toBeGreaterThanOrEqual(previewBox!.y + previewBox!.height);
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  const topbarBox = await page.locator(".topbar").boundingBox();
+  expect(topbarBox).not.toBeNull();
+  expect(topbarBox!.height).toBeLessThanOrEqual(70);
+  await expect(page.getByRole("radiogroup", { name: "Output type" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Expand all" }).click();
+  const widthField = page.getByRole("spinbutton", { name: "Width", exact: true });
+  await widthField.scrollIntoViewIfNeeded();
+
+  // Firefox may report a 44px CSS target as 43.999996px in layout coordinates.
+  const decrementBox = await page.getByRole("button", { name: "Decrease Width" }).boundingBox();
+  const incrementBox = await page.getByRole("button", { name: "Increase Width" }).boundingBox();
+  expect(decrementBox).not.toBeNull();
+  expect(incrementBox).not.toBeNull();
+  expect(decrementBox!.width).toBeGreaterThanOrEqual(44 - 0.01);
+  expect(incrementBox!.width).toBeGreaterThanOrEqual(44 - 0.01);
+
+  const numberInput = page.locator(".number-input").filter({ has: widthField });
+  const numberFieldBox = await numberInput.locator(".ldt-number-field").boundingBox();
+  const unitBox = await numberInput.locator("em").boundingBox();
+  expect(numberFieldBox).not.toBeNull();
+  expect(unitBox).not.toBeNull();
+  expect(numberFieldBox!.x + numberFieldBox!.width).toBeLessThanOrEqual(unitBox!.x + 0.5);
+
+  const roadsBox = await page.getByRole("switch", { name: "Roads" }).boundingBox();
+  const presetBox = await page.getByRole("button", { name: "Grand Canyon", exact: true }).boundingBox();
+  expect(roadsBox!.height).toBeGreaterThanOrEqual(44 - 0.01);
+  expect(presetBox!.height).toBeGreaterThanOrEqual(44 - 0.01);
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });

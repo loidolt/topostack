@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, geoPointToMapPoint, labelDimensions, labelLineSegments, layerToSvg, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
+import { buildEngravingPackage, buildFabricationPackage, carveWaterDepth, coordinateGridInterval, createSyntheticSource, DEFAULT_PROJECT, displayLength, distanceToShoreM, engravingToSvg, generateGeometry, geoPointToMapPoint, labelDimensions, labelLineSegments, layerToSvg, longitudeInBounds, masterToSvg, MAX_DEPTH_LAYER_COUNT, MAX_LAYER_COUNT, millimetersFromDisplay, MIN_LAYER_COUNT, MM_PER_INCH, planTerrainStack, projectFingerprint, solveShapeExponent, validateProject, waterPatternStrokes, type ProjectConfigV1, type SourceBundleV1, type WaterAreaV1 } from "./index.js";
 import { placeElevationLabel, placeLinearLabel } from "./label-placement.js";
 
 function realSource(project = DEFAULT_PROJECT) {
@@ -127,6 +127,23 @@ describe("TopoStack geometry", () => {
     expect(() => validateProject({ ...DEFAULT_PROJECT, markers: [markers[0]!, { ...markers[1]!, id: markers[0]!.id }] })).toThrow(/unique/i);
   });
 
+  it("projects and validates features across the antimeridian", () => {
+    const bounds = { west: 179.8, south: -1, east: 180.2, north: 1 };
+    expect(longitudeInBounds(179.9, bounds)).toBe(true);
+    expect(longitudeInBounds(-179.9, bounds)).toBe(true);
+    expect(longitudeInBounds(-179, bounds)).toBe(false);
+    expect(geoPointToMapPoint(0, 179.9, bounds, 100, 100).x).toBeCloseTo(-25);
+    expect(geoPointToMapPoint(0, -179.9, bounds, 100, 100).x).toBeCloseTo(25);
+    expect(() => validateProject({
+      ...DEFAULT_PROJECT,
+      location: { ...DEFAULT_PROJECT.location, lat: 0, lon: 180, zoom: 11, bounds },
+    })).not.toThrow();
+    expect(() => validateProject({
+      ...DEFAULT_PROJECT,
+      location: { ...DEFAULT_PROJECT.location, lat: 0, lon: 0, zoom: 1, bounds: { west: -181, south: -1, east: 181, north: 1 } },
+    })).toThrow(/longitude span/i);
+  });
+
   it("projects custom trails and boundaries independently of built-in map-detail toggles", () => {
     const center = DEFAULT_PROJECT.location;
     const customLines = [
@@ -170,7 +187,36 @@ describe("TopoStack geometry", () => {
     expect(deviation(ring)).toBeLessThanOrEqual(deviation(stepped.layers[2]?.polygons[0]?.outer ?? []));
   });
 
-  it("accepts any positive finite fabrication size", () => {
+  it("rounds contour corners instead of simplifying them into chamfers", () => {
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, minimumFeatureMm: 1, smoothing: 1 };
+    const squareHill = (nx: number, ny: number) => 1000 - 500 * Math.max(Math.abs(nx), Math.abs(ny));
+    const [project, source] = scaledForLayers(base, gridSource(base, 33, squareHill), 4);
+    const smoothed = generateGeometry(project, source).layers[2]?.polygons[0]?.outer ?? [];
+    const standard = generateGeometry({ ...project, smoothing: 0 }, source).layers[2]?.polygons[0]?.outer ?? [];
+    const largestTurn = (ring: Array<{ x: number; y: number }>) => Math.max(...ring.slice(0, -1).map((point, index) => {
+      const previous = ring[(index - 1 + ring.length - 1) % (ring.length - 1)]!;
+      const next = ring[(index + 1) % (ring.length - 1)]!;
+      const incoming = Math.atan2(point.y - previous.y, point.x - previous.x);
+      const outgoing = Math.atan2(next.y - point.y, next.x - point.x);
+      const difference = Math.abs(outgoing - incoming);
+      return Math.min(difference, Math.PI * 2 - difference);
+    }));
+
+    expect(smoothed.length).toBeGreaterThanOrEqual(standard.length);
+    expect(largestTurn(smoothed)).toBeLessThan(largestTurn(standard) * 0.75);
+  });
+
+
+  it("bounds project metadata, dimensions, and custom-data complexity", () => {
+    const marker = { id: "marker", lat: DEFAULT_PROJECT.location.lat, lon: DEFAULT_PROJECT.location.lon, symbol: "pin" as const };
+    const point = { lat: DEFAULT_PROJECT.location.lat, lon: DEFAULT_PROJECT.location.lon };
+    expect(() => validateProject({ ...DEFAULT_PROJECT, name: "x".repeat(121) })).toThrow(/project name/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, widthMm: 10_001 })).toThrow(/dimensions/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, markers: Array.from({ length: 251 }, (_, index) => ({ ...marker, id: "marker-" + index })) })).toThrow(/250 markers/i);
+    expect(() => validateProject({ ...DEFAULT_PROJECT, customLines: [{ id: "long", kind: "trail", points: Array.from({ length: 2_001 }, () => point) }] })).toThrow(/2000 points/i);
+  });
+
+  it("accepts bounded positive fabrication sizes", () => {
     expect(() => validateProject({ ...DEFAULT_PROJECT, widthMm: 2_400, heightMm: 1_200 })).not.toThrow();
     expect(() => validateProject({ ...DEFAULT_PROJECT, widthMm: 0 })).toThrow(/greater than zero/i);
   });
@@ -313,6 +359,39 @@ describe("TopoStack geometry", () => {
     expect(output.master.filename).toBe("crater-lake-engraving.svg");
     expect(output.files).toHaveLength(4);
     expect(await output.master.blob.text()).toBe(svg);
+    const renamed = { ...project, name: "Renamed Crater" };
+    const renamedOutput = buildEngravingPackage(result, renamed);
+    expect(renamedOutput.master.filename).toBe("renamed-crater-engraving.svg");
+    expect(await renamedOutput.master.blob.text()).toContain("Renamed Crater");
+    const renamedManifest = JSON.parse(await renamedOutput.files.find((file) => file.filename.endsWith("project.json"))!.blob.text());
+    expect(renamedManifest.project.name).toBe("Renamed Crater");
+  });
+
+  it("adds optional laser-ready vector patterns inside flat water areas", () => {
+    const area = {
+      outer: [{ x: -60, y: -35 }, { x: 60, y: -35 }, { x: 60, y: 35 }, { x: -60, y: 35 }, { x: -60, y: -35 }],
+      holes: [[{ x: -12, y: -8 }, { x: -12, y: 8 }, { x: 12, y: 8 }, { x: 12, y: -8 }, { x: -12, y: -8 }]],
+    };
+    const source = { ...realSource(), waterPatternAreas: [area] };
+
+    for (const waterFillPattern of ["lines", "ripples", "dots"] as const) {
+      const project: ProjectConfigV1 = { ...DEFAULT_PROJECT, outputMode: "engraving", waterFillPattern };
+      const result = generateGeometry(project, source);
+      const strokes = waterPatternStrokes(waterFillPattern, result.waterPatternAreas, project.widthMm, project.heightMm, project.lineStyle.waterMm);
+      const svg = engravingToSvg(result, project);
+
+      expect(result.waterPatternAreas).toHaveLength(1);
+      expect(strokes.length).toBeGreaterThan(0);
+      expect(svg).toContain(`id="ENGRAVE-water-fill" data-water-pattern="${waterFillPattern}"`);
+      expect(svg).toContain(`id="water-fill-${waterFillPattern}-1"`);
+      expect(svg).not.toContain("<pattern");
+      expect(svg).not.toContain("<clipPath");
+    }
+
+    const none = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, waterFillPattern: "none" as const };
+    expect(engravingToSvg(generateGeometry(none, source), none)).not.toContain("ENGRAVE-water-fill");
+    const hidden = { ...DEFAULT_PROJECT, outputMode: "engraving" as const, showWater: false, waterFillPattern: "ripples" as const };
+    expect(engravingToSvg(generateGeometry(hidden, source), hidden)).not.toContain("ENGRAVE-water-fill");
   });
 
   it("keeps flat linework bounded and uniquely keyed when provider ids repeat", () => {
@@ -411,8 +490,12 @@ describe("TopoStack geometry", () => {
   it("records unavailable requested vector data as a geometry warning", () => {
     const source = realSource();
     source.vectorStatus = "unavailable";
+    source.lakeDataStatus = "unavailable";
     const result = generateGeometry(DEFAULT_PROJECT, source);
-    expect(result.warnings[0]).toMatchObject({ code: "VECTOR_DATA_UNAVAILABLE" });
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "VECTOR_DATA_UNAVAILABLE" }), expect.objectContaining({ code: "LAKE_DATA_UNAVAILABLE" })]));
+    expect(() => buildFabricationPackage(result, DEFAULT_PROJECT)).toThrow(/map detail data is unavailable/i);
+    result.vectorStatus = "available";
+    expect(() => buildFabricationPackage(result, DEFAULT_PROJECT)).toThrow(/lake depth data is unavailable/i);
   });
 
   it("uses unique SVG ids in a multi-layer master", () => {
@@ -477,6 +560,21 @@ describe("TopoStack geometry", () => {
     const markings = generateGeometry(project, source).layers.flatMap((layer) => layer.markings).filter((marking) => marking.id.startsWith("ridge-road-") && marking.points.length > 1);
     for (let x = -89; x <= 89; x += 1) {
       const distance = Math.min(...markings.flatMap((marking) => marking.points.slice(0, -1).map((start, index) => distanceToSegment({ x, y: 0 }, start, marking.points[index + 1]!))));
+      expect(distance).toBeLessThan(0.02);
+    }
+  });
+
+  it("keeps rivers continuous at exact terrain-layer transitions", () => {
+    const base = { ...DEFAULT_PROJECT, widthMm: 200, heightMm: 200, showElevationLabels: false, showAlignmentGuides: false, showNorthArrow: false, showScaleBar: false };
+    const [project, source] = scaledForLayers(base, gridSource(base, 64, (nx) => 750 + nx * 250), 5);
+    source.markings = [{ id: "ridge-river", kind: "water", operation: "score", points: [{ x: -90, y: 0 }, { x: 90, y: 0 }] }];
+    const result = generateGeometry(project, source);
+    const markings = result.layers.flatMap((layer) => layer.markings
+      .filter((marking) => marking.id.startsWith("ridge-river-") && marking.points.length > 1)
+      .map((marking) => ({ layerIndex: layer.index, marking })));
+    expect(new Set(markings.map(({ layerIndex }) => layerIndex))).toEqual(new Set(result.layers.map((layer) => layer.index)));
+    for (let x = -89; x <= 89; x += 1) {
+      const distance = Math.min(...markings.flatMap(({ marking }) => marking.points.slice(0, -1).map((start, index) => distanceToSegment({ x, y: 0 }, start, marking.points[index + 1]!))));
       expect(distance).toBeLessThan(0.02);
     }
   });
@@ -775,6 +873,7 @@ describe("TopoStack geometry", () => {
     expect(projectFingerprint(reordered)).toBe(projectFingerprint(DEFAULT_PROJECT));
     expect(projectFingerprint({ ...DEFAULT_PROJECT, widthMm: 301 })).not.toBe(projectFingerprint(DEFAULT_PROJECT));
     expect(projectFingerprint({ ...DEFAULT_PROJECT, explodedPreview: 0.9 })).toBe(projectFingerprint(DEFAULT_PROJECT));
+    expect(projectFingerprint({ ...DEFAULT_PROJECT, name: "Renamed without geometry changes" })).toBe(projectFingerprint(DEFAULT_PROJECT));
   });
 
   it("derives the layer count from map scale, relief, and material thickness", () => {

@@ -1,6 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PROJECT } from "@topostack/core";
-import { boundsForProject, classifyTransportation, cleanBoundaryMarkings, cleanWaterwayMarkings, clipVectorTileLine, combineWaterAreas, dissolveWaterAreas, dissolveWaterPolygons, fittingDataZoom, isStateProvinceBoundary, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
+import { DEFAULT_PROJECT, type MarkingFeature } from "@topostack/core";
+import { boundsForProject, classifyTransportation, cleanBoundaryMarkings, cleanWaterwayMarkings, clipVectorTileLine, combineWaterAreas, dissolveWaterAreas, dissolveWaterPolygons, fittingDataZoom, isStateProvinceBoundary, limitVectorMarkingGroups, loadVectorMarkings, stitchTransportationMarkings, transportationLabel } from "./data-provider";
+
+
+describe("vector feature budgets", () => {
+  it("shares a hard limit across enabled categories and reports truncation", () => {
+    const marking = (kind: MarkingFeature["kind"], index: number): MarkingFeature => ({ id: kind + "-" + index, kind, operation: "engrave", points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] });
+    const groups = (["boundary", "road", "trail", "water"] as const).map((kind) => Array.from({ length: 5 }, (_, index) => marking(kind, index)));
+    const limited = limitVectorMarkingGroups(groups, 8);
+    expect(limited.markings).toHaveLength(8);
+    expect(limited.truncated).toBe(true);
+    expect(new Set(limited.markings.map((item) => item.kind))).toEqual(new Set(["boundary", "road", "trail", "water"]));
+    expect(limitVectorMarkingGroups([groups[0] ?? []], 8)).toMatchObject({ truncated: false });
+  });
+
+
+});
 
 describe("transportation metadata", () => {
   it("classifies supported roads and trails while excluding other transport", () => {
@@ -153,10 +168,19 @@ describe("water geometry cleanup", () => {
 
 const getHeaderMock = vi.hoisted(() => vi.fn());
 const getZxyMock = vi.hoisted(() => vi.fn());
-vi.mock("pmtiles", () => ({
+const vectorFixture = vi.hoisted(() => ({ outsideRoads: 0, insideRoads: 1, uniqueNames: false }));
+vi.mock("pmtiles", async (importOriginal) => ({
+  ...await importOriginal<typeof import("pmtiles")>(),
   PMTiles: class {
     getHeader = getHeaderMock;
     getZxy = getZxyMock;
+  },
+}));
+
+vi.mock("@mapbox/vector-tile", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@mapbox/vector-tile")>(),
+  VectorTile: class {
+    layers = { roads: { length: vectorFixture.outsideRoads + vectorFixture.insideRoads, feature: (index: number) => ({ type: 2, extent: 4096, properties: { kind: "major_road", name: vectorFixture.uniqueNames ? `Road ${index}` : "Rim Drive" }, loadGeometry: () => [[{ x: 0, y: index < vectorFixture.outsideRoads ? 0 : 2048 }, { x: 4096, y: index < vectorFixture.outsideRoads ? 0 : 2048 }]] }) } };
   },
 }));
 
@@ -167,6 +191,16 @@ describe("geographic crop bounds", () => {
     expect(bounds.east).toBeGreaterThan(DEFAULT_PROJECT.location.lon);
     expect(bounds.south).toBeLessThan(DEFAULT_PROJECT.location.lat);
     expect(bounds.north).toBeGreaterThan(DEFAULT_PROJECT.location.lat);
+  });
+
+  it("keeps antimeridian crops continuous in an unwrapped longitude window", () => {
+    const project = { ...DEFAULT_PROJECT, location: { ...DEFAULT_PROJECT.location, lat: 0, lon: 179.99, zoom: 11 } };
+    const bounds = boundsForProject(project);
+    expect(bounds.west).toBeLessThan(180);
+    expect(bounds.east).toBeGreaterThan(180);
+    expect(bounds.east - bounds.west).toBeLessThan(1);
+    expect(bounds.south).toBeLessThan(0);
+    expect(bounds.north).toBeGreaterThan(0);
   });
 
   it("keeps the selected map area independent of fabrication dimensions", () => {
@@ -180,9 +214,50 @@ describe("geographic crop bounds", () => {
 
 describe("vector marking zoom", () => {
   beforeEach(() => {
+    vectorFixture.outsideRoads = 0;
+    vectorFixture.insideRoads = 1;
+    vectorFixture.uniqueNames = false;
     getHeaderMock.mockReset();
     getZxyMock.mockReset();
     getZxyMock.mockResolvedValue(undefined);
+  });
+
+  it("does not let off-crop roads exhaust the feature budget", async () => {
+    vectorFixture.outsideRoads = 3000;
+    getHeaderMock.mockResolvedValue({ minZoom: 4, maxZoom: 12 });
+    getZxyMock.mockResolvedValue({ data: new ArrayBuffer(0) });
+    const result = await loadVectorMarkings({ west: 0.04, east: 0.05, south: 0.04, north: 0.05 }, 15, DEFAULT_PROJECT);
+    expect(result.truncated).toBe(false);
+    expect(result.markings).toHaveLength(1);
+    expect(result.markings[0]?.label).toBe("Rim Drive");
+  });
+
+  it("shares cleanup headroom with a dense tile when neighboring tiles are empty", async () => {
+    vectorFixture.insideRoads = 1500;
+    vectorFixture.uniqueNames = true;
+    getHeaderMock.mockResolvedValue({ minZoom: 4, maxZoom: 12 });
+    getZxyMock.mockResolvedValueOnce({ data: new ArrayBuffer(0) });
+    const result = await loadVectorMarkings({ west: 0.001, east: 0.17, south: 0.001, north: 0.08 }, 12, DEFAULT_PROJECT);
+    expect(getZxyMock).toHaveBeenCalledTimes(2);
+    expect(result.truncated).toBe(false);
+    expect(result.markings).toHaveLength(1500);
+  });
+
+  it("bounds raw linework even when repeated fragments collapse during cleanup", async () => {
+    vectorFixture.insideRoads = 7400;
+    getHeaderMock.mockResolvedValue({ minZoom: 4, maxZoom: 12 });
+    getZxyMock.mockResolvedValueOnce({ data: new ArrayBuffer(0) });
+    const result = await loadVectorMarkings({ west: 0.001, east: 0.17, south: 0.001, north: 0.08 }, 12, DEFAULT_PROJECT);
+    expect(result.markings).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("retains transportation names when their display is initially disabled", async () => {
+    getHeaderMock.mockResolvedValue({ minZoom: 4, maxZoom: 15 });
+    getZxyMock.mockResolvedValue({ data: new ArrayBuffer(0) });
+    const result = await loadVectorMarkings(boundsForProject(DEFAULT_PROJECT), 11, { ...DEFAULT_PROJECT, showTransportationLabels: false });
+    expect(result.markings.length).toBeGreaterThan(0);
+    expect(result.markings.every((marking) => marking.label === "Rim Drive")).toBe(true);
   });
 
   it("requests one extra vector zoom for local roads and trails", async () => {
@@ -197,12 +272,27 @@ describe("vector marking zoom", () => {
     }
   });
 
+  it("wraps archive requests while preserving continuous dateline geometry", async () => {
+    getHeaderMock.mockResolvedValue({ minZoom: 4, maxZoom: 12 });
+    const project = { ...DEFAULT_PROJECT, location: { ...DEFAULT_PROJECT.location, lat: 0, lon: 179.99, zoom: 11 } };
+    await loadVectorMarkings(boundsForProject(project), 11, project);
+    const requestedX = getZxyMock.mock.calls.map((call) => call[1] as number);
+    expect(requestedX.length).toBeGreaterThan(0);
+    expect(requestedX.every((x) => Number.isInteger(x) && x >= 0 && x < 2 ** 12)).toBe(true);
+    expect(requestedX).toContain(0);
+    expect(requestedX).toContain(2 ** 12 - 1);
+  });
+
   it("clamps the rounded zoom to the archive range", async () => {
     getHeaderMock.mockResolvedValue({ minZoom: 4, maxZoom: 11 });
     const bounds = boundsForProject(DEFAULT_PROJECT);
     await loadVectorMarkings(bounds, 11.6, DEFAULT_PROJECT);
     expect(getZxyMock).toHaveBeenCalled();
     for (const call of getZxyMock.mock.calls) expect(call[0]).toBe(11);
+  });
+
+  it("bounds work for a near-world selection imported at maximum zoom", () => {
+    expect(fittingDataZoom({ west: -180, east: 180, south: -85, north: 85 }, 15)).toBeLessThanOrEqual(2);
   });
 
   it("reduces oversized statewide requests to a bounded tile window", () => {

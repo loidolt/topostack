@@ -7,3 +7,6 @@ export * from "./offset.js";
 export * from "./svg.js";
 export * from "./units.js";
 export * from "./water.js";
+export * from "./water-pattern.js";
+export * from "./export-policy.js";
+export * from "./source-requirements.js";

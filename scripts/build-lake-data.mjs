@@ -185,4 +185,5 @@ writer.stdin.end();
 await once(writer, "exit");
 if (writer.exitCode !== 0) throw new Error(`tippecanoe exited with code ${writer.exitCode}.`);
 console.log(`Wrote ${outputPath}: ${kept.toLocaleString()} lakes, ${skipped.toLocaleString()} skipped (no depth estimate, too small, or degenerate).`);
-console.log(`Next: node scripts/provision-lake-data.mjs ${outputPath} --provision --skip-digest-check`);
+console.log(`Development pin capture: node scripts/provision-lake-data.mjs ${outputPath} --provision --skip-digest-check`);
+console.log("Record the printed SHA-256, then pass --expected-sha256=<hex> on every subsequent run and whenever --prod is used.");

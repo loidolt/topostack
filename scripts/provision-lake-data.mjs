@@ -5,7 +5,7 @@
  * touch production without --prod: the object key is overwritten in place, so an
  * unintended upload is visible to every live client immediately.
  */
-import { access, stat } from "node:fs/promises";
+import { access, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { pipeline } from "node:stream/promises";
@@ -27,6 +27,9 @@ const expectedDigest = (flags.find((flag) => flag.startsWith("--expected-sha256=
 if (!archivePath || !flags.includes("--provision")) {
   throw new Error("Usage: node scripts/provision-lake-data.mjs <archive.pmtiles> --provision [--prod] [--expected-sha256=<hex> | EXPECTED_ARCHIVE_SHA256=<hex>] [--skip-digest-check]");
 }
+if (includeProduction && !expectedDigest) throw new Error("Production provisioning requires a pinned SHA-256 digest; --skip-digest-check is development-only.");
+if (skipDigestCheck && expectedDigest) throw new Error("Choose either a pinned SHA-256 digest or --skip-digest-check, not both.");
+if (expectedDigest && !/^[a-f0-9]{64}$/.test(expectedDigest)) throw new Error("The expected SHA-256 digest must contain exactly 64 hexadecimal characters.");
 // The object key is overwritten in place, so touching the production bucket is
 // destructive for live clients. Default to development only.
 const buckets = includeProduction ? [DEVELOPMENT_BUCKET, PRODUCTION_BUCKET] : [DEVELOPMENT_BUCKET];
@@ -118,3 +121,9 @@ for (const bucket of buckets) {
 }
 
 console.log(`Provisioned ${OBJECT_KEY} in ${includeProduction ? "development and production" : "development only (pass --prod to update production)"}.`);
+
+await writeFile(`${archivePath}.provisioning.json`, JSON.stringify({
+  schemaVersion: 1, provisionedAt: new Date().toISOString(),
+  dataset: DATASET_SNAPSHOT, key: OBJECT_KEY, buckets,
+  sha256: archiveDigest, bytes: archive.size, maxZoom: EXPECTED_MAX_ZOOM,
+}, null, 2) + "\n", "utf8");

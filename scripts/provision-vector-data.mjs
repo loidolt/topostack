@@ -1,15 +1,16 @@
-import { access, stat } from "node:fs/promises";
+import { access, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 
-const DATASET_SNAPSHOT = "20260819";
+const DATASET_SNAPSHOT = "20260905";
 const EXPECTED_MAX_ZOOM = 12;
 const OBJECT_KEY = "osm/current.pmtiles";
 const DEVELOPMENT_BUCKET = "topostack-vector-data-development";
 const PRODUCTION_BUCKET = "topostack-vector-data";
 const credentialTtlSeconds = 24 * 60 * 60;
+const uploadConcurrency = 8;
 
 const flags = process.argv.slice(2).filter((argument) => argument.startsWith("--"));
 const archivePath = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
@@ -20,6 +21,9 @@ const expectedDigest = (flags.find((flag) => flag.startsWith("--expected-sha256=
 if (!archivePath || !flags.includes("--provision")) {
   throw new Error("Usage: node scripts/provision-vector-data.mjs <archive.pmtiles> --provision [--prod] [--expected-sha256=<hex> | EXPECTED_ARCHIVE_SHA256=<hex>] [--skip-digest-check]");
 }
+if (includeProduction && !expectedDigest) throw new Error("Production provisioning requires a pinned SHA-256 digest; --skip-digest-check is development-only.");
+if (skipDigestCheck && expectedDigest) throw new Error("Choose either a pinned SHA-256 digest or --skip-digest-check, not both.");
+if (expectedDigest && !/^[a-f0-9]{64}$/.test(expectedDigest)) throw new Error("The expected SHA-256 digest must contain exactly 64 hexadecimal characters.");
 // The object key is overwritten in place, so touching the production bucket is
 // destructive for live clients. Default to development only.
 const buckets = includeProduction ? [DEVELOPMENT_BUCKET, PRODUCTION_BUCKET] : [DEVELOPMENT_BUCKET];
@@ -106,8 +110,14 @@ for (const bucket of buckets) {
     AWS_SESSION_TOKEN: credentials.sessionToken,
   };
   const bucketUrl = `s3://${bucket}?endpoint=${endpoint}&region=auto&use_path_style=true`;
-  await run(pmtilesBin, ["upload", archivePath, OBJECT_KEY, `--bucket=${bucketUrl}`], awsEnv);
+  await run(pmtilesBin, ["upload", archivePath, OBJECT_KEY, `--bucket=${bucketUrl}`, `--max-concurrency=${uploadConcurrency}`], awsEnv);
   await run(pmtilesBin, ["show", OBJECT_KEY, `--bucket=${bucketUrl}`], awsEnv);
 }
 
 console.log(`Provisioned ${OBJECT_KEY} in ${includeProduction ? "development and production" : "development only (pass --prod to update production)"}.`);
+
+await writeFile(`${archivePath}.provisioning.json`, JSON.stringify({
+  schemaVersion: 1, provisionedAt: new Date().toISOString(),
+  dataset: DATASET_SNAPSHOT, key: OBJECT_KEY, buckets,
+  sha256: archiveDigest, bytes: archive.size, maxZoom: EXPECTED_MAX_ZOOM,
+}, null, 2) + "\n", "utf8");

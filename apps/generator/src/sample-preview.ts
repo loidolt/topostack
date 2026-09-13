@@ -26,7 +26,8 @@ export function createSamplePreviewSource(): SourceBundleV1 {
     // fixture recaptured; absent fixtures simply preview flat water.
     ...("waterAreas" in SAMPLE_PREVIEW ? { waterAreas: SAMPLE_PREVIEW.waterAreas as unknown as WaterAreaV1[] } : {}),
     vectorStatus: "available",
-    datasetVersion: "mapzen-terrarium+protomaps-20260819-z12-preview-v1",
+    lakeDataStatus: "waterAreas" in SAMPLE_PREVIEW ? "available" : "unavailable",
+    datasetVersion: "mapzen-terrarium+protomaps-20260905-z12-preview-v1",
     sourceKind: "preview",
     bounds: { ...SAMPLE_PREVIEW.bounds },
     imagerySources: ["srtm/N42W123.tif"],

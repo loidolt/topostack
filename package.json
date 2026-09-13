@@ -14,22 +14,38 @@
     "dev:api": "npm run dev -w @topostack/map-api",
     "build": "npm run build -w @topostack/core && npm run build -w @topostack/generator && npm run build -w @topostack/map-api",
     "test": "npm run test -w @topostack/core && npm run test -w @topostack/generator && npm run test -w @topostack/map-api",
+    "test:coverage": "npm run coverage -w @topostack/core && npm run coverage -w @topostack/generator && npm run coverage -w @topostack/map-api",
     "test:e2e": "playwright test",
+    "test:e2e:live": "playwright test --config playwright.live.config.ts",
     "typecheck": "npm run typecheck -w @topostack/core && npm run typecheck -w @topostack/generator && npm run typecheck -w @topostack/map-api",
+    "lint": "eslint . --max-warnings=0",
     "budget:web": "node scripts/check-web-budget.mjs",
     "data:provision": "node scripts/provision-vector-data.mjs",
     "package:atomm": "node scripts/validate-submission-env.mjs && npm run build -w @topostack/generator && node scripts/verify-atomm-dist.mjs && cd apps/generator/dist && zip -FSqr ../topostack-atomm.zip .",
     "release:atomm": "npm run package:atomm && node scripts/checksum-atomm.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.3.0",
+    "@vitest/coverage-istanbul": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^10.10.0",
+    "eslint-plugin-svelte": "^3.23.0",
+    "globals": "^16.5.0",
     "shapefile": "^0.6.6",
     "typescript": "^5.9.2",
+    "typescript-eslint": "^8.69.0",
     "vitest": "^4.1.0",
-    "wrangler": "^4.30.0"
+    "wrangler": "^4.131.1"
+  },
+  "overrides": {
+    "cookie": "0.7.2",
+    "@cloudflare/vitest-pool-workers": {
+      "miniflare": "5.20260911.0-alpha"
+    }
   },
   "engines": {
-    "node": ">=22"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   }
 }

@@ -8,6 +8,26 @@ vi.mock("../export-policy", () => ({ createAtommExport: vi.fn(() => []) }));
 describe("Atomm bridge", () => {
   beforeEach(() => { vi.resetModules(); vi.mocked(createAtommExport).mockClear(); delete window.atomm; });
 
+  it("connects when an async SDK arrives after the discovery timeout", async () => {
+    vi.useFakeTimers();
+    const script = document.createElement("script");
+    script.src = "https://static-res.makextool.com/scripts/js/generator-sdk/platform-sdk.js";
+    document.head.append(script);
+    const { connectAtomm } = await import("./atomm-bridge");
+    const on = vi.fn(); const ready = vi.fn();
+    const disconnect = connectAtomm(() => { throw new Error("Not exporting in this test"); }, ready);
+    await vi.advanceTimersByTimeAsync(6000);
+    window.atomm = { lifecycle: { on } } as unknown as AtommSdk;
+    script.dispatchEvent(new Event("load"));
+    expect(on).toHaveBeenCalledOnce();
+    expect(ready).toHaveBeenCalledOnce();
+    disconnect();
+    script.dispatchEvent(new Event("load"));
+    expect(ready).toHaveBeenCalledOnce();
+    script.remove();
+    vi.useRealTimers();
+  });
+
   it("waits for the SDK, registers once, and exports the latest state", async () => {
     vi.useFakeTimers();
     const geometry = generateGeometry(DEFAULT_PROJECT, createSyntheticSource(DEFAULT_PROJECT));
@@ -37,9 +57,10 @@ describe("Atomm bridge", () => {
     expect(exportUpdate).toHaveBeenNthCalledWith(3, { phase: "preparing", intent: "download" });
     expect(exportUpdate).toHaveBeenNthCalledWith(4, { phase: "error", intent: "download", message: "Package could not be built" });
 
-    connectAtomm(() => ({ geometry, project }), ready);
+    const disconnectAgain = connectAtomm(() => ({ geometry, project }), ready);
     expect(on).toHaveBeenCalledTimes(1);
     disconnect();
+    disconnectAgain();
     vi.useRealTimers();
   });
 });

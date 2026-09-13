@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && vite build",
+    "build": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && vite build && node ../../scripts/finalize-static-headers.mjs",
+    "build:e2e": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && vite build --mode e2e && node ../../scripts/finalize-static-headers.mjs",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run src --exclude src/app/App.client.test.ts && vitest run --config vitest.client.config.ts",
+    "coverage": "vitest run src --exclude src/app/App.client.test.ts --coverage --coverage.reportsDirectory=coverage/node --coverage.thresholds.statements=60 --coverage.thresholds.branches=55 --coverage.thresholds.functions=65 --coverage.thresholds.lines=65 && vitest run --config vitest.client.config.ts --coverage --coverage.reportsDirectory=coverage/client --coverage.thresholds.statements=60 --coverage.thresholds.branches=40 --coverage.thresholds.functions=65 --coverage.thresholds.lines=50 --testTimeout=20000",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -18,7 +20,7 @@
     "@topostack/core": "*",
     "fflate": "^0.8.3",
     "idb-keyval": "^6.2.2",
-    "maplibre-gl": "^6.4.1",
+    "maplibre-gl": "^6.9.0",
     "pbf": "^5.1.2",
     "pmtiles": "^4.5.0",
     "polygon-clipping": "^0.15.7",
@@ -30,7 +32,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@types/three": "^0.180.0",
     "@webgpu/types": "^0.1.69",
-    "cookie": "0.7.0",
+    "cookie": "^0.7.2",
     "jsdom": "^30.0.1",
     "svelte": "^5.56.9",
     "svelte-check": "^4.7.6",

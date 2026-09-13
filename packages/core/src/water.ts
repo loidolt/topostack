@@ -1,6 +1,6 @@
 import { pointInPolygon } from "./geometry2d.js";
 import { BATHYMETRIC_RELIEF_M } from "./types.js";
-import type { DepthSource, ElevationGrid, GeometryWarning, Point2D, ProjectConfigV1, WaterAreaV1, WaterSurfaceIR } from "./types.js";
+import type { ElevationGrid, GeometryWarning, Point2D, ProjectConfigV1, WaterAreaV1, WaterSurfaceIR } from "./types.js";
 
 /**
  * Water depth is not a geometry kind of its own - it is a carve of the
@@ -201,6 +201,7 @@ export function carveWaterDepth(
   config: ProjectConfigV1,
   areas: readonly WaterAreaV1[],
   groundWidthM: number,
+  groundHeightM = groundWidthM * (grid.height - 1) / (grid.width - 1),
 ): CarvedWater {
   // Applies to surveyed water as much as modeled: a reader raising the control
   // expects the sea floor to deepen alongside the lakes, and the ocean's depth
@@ -214,11 +215,9 @@ export function carveWaterDepth(
   const waterMask = new Uint8Array(grid.width * grid.height);
   if (!areas.length) return { grid: { ...grid, values }, surfaces, warnings, waterMask };
 
-  // Horizontal scale is uniform, so the mapped ground height follows from the
-  // crop's aspect ratio. Deriving both spacings from it keeps the distance
-  // transform isotropic in meters even when the grid's cells are not square.
+  // The geographic footprint is independent of physical output stretching.
   const spacingXM = groundWidthM / Math.max(1, grid.width - 1);
-  const spacingYM = (groundWidthM * (config.heightMm / config.widthMm)) / Math.max(1, grid.height - 1);
+  const spacingYM = groundHeightM / Math.max(1, grid.height - 1);
 
   const mask = new Uint8Array(grid.width * grid.height);
   const interior = new Float64Array(grid.width * grid.height);

@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run src"
+    "test": "vitest run src",
+    "coverage": "vitest run src --coverage --coverage.reportsDirectory=coverage --coverage.thresholds.statements=88 --coverage.thresholds.branches=78 --coverage.thresholds.functions=92 --coverage.thresholds.lines=94"
   },
   "dependencies": {
     "clipper-lib": "^6.4.2",

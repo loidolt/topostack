@@ -17,6 +17,6 @@ function isForbiddenApiHost(hostname) {
   return false;
 }
 
-if (url.protocol !== "https:" || isForbiddenApiHost(url.hostname)) {
-  throw new Error("VITE_MAP_API_URL must be a deployed HTTPS endpoint, not localhost, a reserved test/placeholder domain, or a workers.dev preview URL.");
+if (url.protocol !== "https:" || isForbiddenApiHost(url.hostname) || url.username || url.password || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) {
+  throw new Error("VITE_MAP_API_URL must be a deployed HTTPS origin without credentials, a path, query, or fragment, and cannot use localhost, reserved placeholders, or workers.dev.");
 }

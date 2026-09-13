@@ -15,6 +15,6 @@ export const MAP_DATA_ATTRIBUTION: SourceAttribution[] = [
   { name: "U.S. Geological Survey", url: "https://www.usgs.gov/", license: "3DEP, GMTED2010, and SRTM terrain data courtesy of the U.S. Geological Survey" },
   { name: "HydroLAKES v1.0", url: "https://www.hydrosheds.org/products/hydrolakes", license: "CC BY 4.0 — Messager, M.L., Lehner, B., Grill, G., Nedeva, I., Schmitt, O. (2016)" },
   { name: "GLOBathy", url: "https://doi.org/10.1038/s41597-022-01132-9", license: "CC0 1.0 — Khazaei, B., Read, L.K., Casali, M., Sampson, K.M., Yates, D.N. (2022)" },
-  { name: "Protomaps Basemap 20260819", url: "https://protomaps.com", license: "ODbL Produced Work based on OpenStreetMap data" },
+  { name: "Protomaps Basemap 20260905", url: "https://protomaps.com", license: "ODbL Produced Work based on OpenStreetMap data" },
   { name: "OpenStreetMap contributors", url: "https://www.openstreetmap.org/copyright", license: "ODbL" },
 ];

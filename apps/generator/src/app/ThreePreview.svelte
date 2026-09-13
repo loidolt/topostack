@@ -11,14 +11,14 @@
   import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
   import { labelLineSegments, type GeometryIRV1, type Point2D, type Polygon2D, type TextStyleV1 } from "@topostack/core";
 
-  let { geometry, exploded }: { geometry: GeometryIRV1; exploded: number } = $props();
+  let { geometry, exploded, onUnavailable }: { geometry: GeometryIRV1; exploded: number; onUnavailable?: () => void } = $props();
   let container: HTMLButtonElement;
   let runtime: Runtime | undefined;
 
   interface Runtime {
     renderer: THREE.WebGLRenderer; camera: THREE.PerspectiveCamera; controls: OrbitControls;
     rig: THREE.Group; content: THREE.Group; resizeObserver: ResizeObserver; frame: number;
-    environmentTarget: THREE.WebGLRenderTarget; texture: THREE.CanvasTexture; hasFittedCamera: boolean;
+    environmentTarget: THREE.WebGLRenderTarget; texture: THREE.CanvasTexture; fitSignature?: string;
     keyLight: THREE.DirectionalLight; detachContextHandlers: () => void;
   }
 
@@ -105,7 +105,10 @@
   onMount(() => {
     const scene = new THREE.Scene(); scene.background = new THREE.Color("#20231d");
     const camera = new THREE.PerspectiveCamera(34, 1, 10, 4_000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; container.appendChild(renderer.domElement);
+    let renderer: THREE.WebGLRenderer;
+    try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); }
+    catch { onUnavailable?.(); return; }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05; renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; container.appendChild(renderer.domElement);
     const pmrem = new THREE.PMREMGenerator(renderer); const environmentTarget = pmrem.fromScene(new RoomEnvironment()); pmrem.dispose(); scene.environment = environmentTarget.texture; scene.environmentIntensity = 0.38;
     // Layer steps read through cast shadows plus a cool fill from the opposite
     // quadrant; the warm key alone left the stepped edges flat. The key light's
@@ -114,9 +117,8 @@
     const fillLight = new THREE.DirectionalLight(0xa8c6e8, 0.85); fillLight.position.set(210, 150, 120); scene.add(fillLight);
     scene.add(new THREE.HemisphereLight(0x9fb8ad, 0x2d2118, 0.9));
     const rig = new THREE.Group(); const content = new THREE.Group(); content.scale.y = -1; rig.add(content); scene.add(rig);
-    const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.dampingFactor = 0.065; controls.maxPolarAngle = Math.PI * 0.95; controls.minDistance = 120; controls.maxDistance = 1800; controls.target.set(0, 0, 10);
-    let hasFittedCamera = false;
-    if (savedCamera) { camera.position.set(...savedCamera.position); controls.target.set(...savedCamera.target); controls.update(); hasFittedCamera = true; }
+    const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.dampingFactor = 0.065; controls.maxPolarAngle = Math.PI * 0.95; controls.minDistance = 120; controls.maxDistance = 1800; controls.target.set(0, 0, 10); camera.position.set(15, -165, 270); controls.update();
+    if (savedCamera) { camera.position.set(...savedCamera.position); controls.target.set(...savedCamera.target); controls.update(); }
     const texture = makeWoodTexture();
     const resizeObserver = new ResizeObserver(([entry]) => { const width = entry?.contentRect.width ?? 0; const height = entry?.contentRect.height ?? 0; if (width <= 0 || height <= 0) return; camera.aspect = width / height; camera.updateProjectionMatrix(); renderer.setSize(width, height, false); }); resizeObserver.observe(container);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)"); let start = performance.now();
@@ -128,7 +130,7 @@
     renderer.domElement.addEventListener("webglcontextlost", onContextLost);
     renderer.domElement.addEventListener("webglcontextrestored", onContextRestored);
     const detachContextHandlers = () => { renderer.domElement.removeEventListener("webglcontextlost", onContextLost); renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored); };
-    runtime = { renderer, camera, controls, rig, content, resizeObserver, frame: requestAnimationFrame(animate), environmentTarget, texture, hasFittedCamera, keyLight, detachContextHandlers };
+    runtime = { renderer, camera, controls, rig, content, resizeObserver, frame: requestAnimationFrame(animate), environmentTarget, texture, keyLight, detachContextHandlers };
     return () => {
       if (!runtime) return;
       const { position } = runtime.camera; const { target } = runtime.controls;
@@ -228,7 +230,20 @@
       runtime.keyLight.shadow.camera.updateProjectionMatrix();
       runtime.controls.minDistance = radius * 1.2; runtime.controls.maxDistance = radius * 8;
       runtime.camera.near = Math.max(radius * 0.15, 0.5); runtime.camera.far = radius * 24; runtime.camera.updateProjectionMatrix();
-      if (!runtime.hasFittedCamera) { runtime.camera.position.set(radius * 0.15, -radius * 1.65, radius * 2.7); runtime.controls.target.set(0, 0, (activeGeometry.layers.length * (activeGeometry.layers[0]?.materialThicknessMm ?? 1)) / 2); runtime.hasFittedCamera = true; }
+      const fitSignature = [activeGeometry.widthMm, activeGeometry.heightMm, activeGeometry.layers.length, activeGeometry.layers[0]?.materialThicknessMm ?? 1].join(":");
+      if (runtime.fitSignature !== fitSignature) {
+        const target = new THREE.Vector3(0, 0, (activeGeometry.layers.length * (activeGeometry.layers[0]?.materialThicknessMm ?? 1)) / 2);
+        const direction = runtime.camera.position.clone().sub(runtime.controls.target);
+        if (direction.lengthSq() < 1e-6) direction.set(0.15, -1.65, 2.7);
+        direction.normalize();
+        const verticalFov = THREE.MathUtils.degToRad(runtime.camera.fov);
+        const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(runtime.camera.aspect, 0.1));
+        const modelRadius = Math.hypot(activeGeometry.widthMm / 2, activeGeometry.heightMm / 2, stackHeight / 2);
+        const distance = modelRadius / Math.sin(Math.min(verticalFov, horizontalFov) / 2) * 1.15;
+        runtime.controls.target.copy(target);
+        runtime.camera.position.copy(target).addScaledVector(direction, distance);
+        runtime.fitSignature = fitSignature;
+      }
       runtime.controls.update();
     }, 160);
     return () => window.clearTimeout(timeout);

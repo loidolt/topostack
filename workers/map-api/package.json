@@ -9,10 +9,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "types": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler types src/worker-configuration.d.ts --env-file .dev.vars.example",
     "types:check": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler.log wrangler types src/worker-configuration.d.ts --env-file .dev.vars.example --check",
-    "test": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler-test.log vitest run test"
+    "test": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler-test.log vitest run test",
+    "coverage": "WRANGLER_LOG_PATH=/tmp/topostack-wrangler-test.log vitest run test --coverage --coverage.provider=istanbul --coverage.reportsDirectory=coverage --coverage.thresholds.statements=80 --coverage.thresholds.branches=72 --coverage.thresholds.functions=95 --coverage.thresholds.lines=84"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
-    "@cloudflare/workers-types": "^5.20260819.1"
+    "@cloudflare/workers-types": "^5.20260906.1"
   }
 }

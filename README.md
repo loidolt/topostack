@@ -1,6 +1,6 @@
 # TopoStack
 
-TopoStack is an Atomm-first generator for turning real-world terrain into either stacked, laser-cut topographic projects or single-surface topographic engravings. Layered relief derives its sheet count from terrain relief, map scale, vertical exaggeration, and material thickness. Flat engraving uses an independent contour-density system and produces one physical-size, engrave-only SVG with optional roads, trails, transportation labels, water outlines, state/province boundaries, latitude/longitude grid lines, elevation labels, compass, scale bar, and border. Both workflows preserve millimeter fabrication coordinates internally, include project metadata and source attribution, and keep geographic map bounds independent from physical output dimensions.
+TopoStack is an Atomm-first generator for turning real-world terrain into either stacked, laser-cut topographic projects or single-surface topographic engravings. Layered relief derives its sheet count from terrain relief, map scale, vertical exaggeration, and material thickness. Flat engraving uses an independent contour-density system and produces one physical-size, engrave-only SVG with optional roads, trails, transportation labels, water outlines with optional vector fill patterns, state/province boundaries, latitude/longitude grid lines, elevation labels, compass, scale bar, and border. Both workflows preserve millimeter fabrication coordinates internally, include project metadata and source attribution, and keep geographic map bounds independent from physical output dimensions.
 
 See [Flat engraving](docs/flat-engraving.md) for the workflow and SVG contract.
 
@@ -51,7 +51,7 @@ VITE_MAP_API_URL="$DEPLOYED_WORKER_URL" npm run package:atomm
 The Atomm-ready artifact is written to `apps/generator/topostack-atomm.zip`.
 Packaging fails closed when the Worker URL is missing, non-HTTPS, local, on a reserved test/placeholder domain (`.invalid`, `.test`, `.local`, `.localhost`, `example.*`), or a `*.workers.dev` preview URL; the built artifact is scanned for the same endpoint families. Deploy the production Worker and set its `GEOCODER_API_KEY` secret before creating a submission artifact.
 
-After every successful production deployment and readiness smoke test, CI packages the production URL, generates a SHA-256 checksum, and uploads a 30-day `topostack-atomm-<commit>` workflow artifact containing the generator ZIP, checksum, cover image, and listing copy. Run `VITE_MAP_API_URL=https://topostack.loidolt.space npm run release:atomm` to reproduce the same release files locally.
+After every successful production deployment and readiness smoke test, CI packages the production URL, generates a SHA-256 checksum, and uploads a 30-day `topostack-atomm-<commit>` workflow artifact containing the generator ZIP, checksum, cover image, and listing copy. Run `VITE_MAP_API_URL=https://topostack.echofoxtrot.works npm run release:atomm` to reproduce the same release files locally.
 
 ## CI and deployment environments
 
@@ -64,18 +64,22 @@ Create two GitHub environments with selected-branch deployment rules:
 
 Store these secrets separately in both environments, using environment-appropriate values:
 
-- `CLOUDFLARE_API_TOKEN` — a token restricted to the deployment account with Workers Scripts edit, Account Settings read, and Workers R2 Storage edit permissions, plus Workers Routes edit for the `loidolt.space` zone.
+- `CLOUDFLARE_API_TOKEN` — a token restricted to the deployment account with Workers Scripts edit, Account Settings read, and Workers R2 Storage edit permissions, plus Workers Routes edit for the `echofoxtrot.works` zone.
 - `CLOUDFLARE_ACCOUNT_ID` — the target Cloudflare account ID.
 - `GEOCODER_API_KEY` — the Geoapify credential synchronized to the selected Worker as an encrypted runtime secret.
 
 The Cloudflare credentials authenticate CI but are not exposed to Worker code. Only `GEOCODER_API_KEY` is uploaded as a Worker binding. The workflow is defined in `.github/workflows/ci.yml`.
 
-Production uses the `topostack` Worker as the origin for `https://topostack.loidolt.space`. The same deployment serves the generated frontend as static assets and the map API at `/v1/*`. Development deploys the same combined app/API shape to the `topostack-dev` Worker from the `dev` branch.
+Production uses the `topostack` Worker at `https://topostack.echofoxtrot.works`. Development uses the separate `topostack-dev` Worker at `https://dev-topostack.echofoxtrot.works` from the `dev` branch. Each deployment serves the generated frontend as static assets and the map API at `/v1/*`.
 
-The `Production Monitor` workflow runs an hourly canary against the frontend, `/health`, `/ready`, the data manifest, and a PMTiles byte-range read. Failed scheduled runs surface through normal GitHub Actions notifications. CI also enforces gzip budgets for total JavaScript, the largest JavaScript chunk, CSS, and the entry HTML via `npm run budget:web`; adjust a limit only alongside an intentional performance review.
+The `Production Monitor` workflow runs an hourly canary against the frontend security policy, `/health`, `/ready`, terrain and geocoder serving paths (which may use cached data), the data manifest, and both available PMTiles archives. A separate daily `Production Browser Monitor` generates a real project in Chromium, downloads the fabrication ZIP, and inspects its master SVG, covering the deployed browser-to-Worker integration that the deterministic local E2E fixture intentionally does not exercise. Failed scheduled runs surface through normal GitHub Actions notifications. CI also enforces gzip budgets for entry-preload, default-preview startup, and total JavaScript, the largest JavaScript chunk, CSS, and the entry HTML via `npm run budget:web`; adjust a limit only alongside an intentional performance review.
 
 ## Data setup
 
-The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket under dataset-versioned keys. Roads, water, and first-level administrative boundaries come from the pinned Protomaps/OpenStreetMap PMTiles release stored as `osm/current.pmtiles` in the `topostack-vector-data` bucket, served with a short revalidating cache policy because that key is overwritten on dataset updates. The `/ready` endpoint reports whether that archive and the geocoder configuration are present. Place search is proxied to Geoapify with a Worker secret. Provisioning (`scripts/provision-vector-data.mjs`) verifies a pinned SHA-256 digest, writes the development bucket by default, and touches production only with an explicit `--prod` flag. See `workers/map-api/README.md` for provisioning and deployment details.
+The Worker proxies Mapzen Terrarium elevation tiles, preserves their imagery-source metadata, and caches them in the `topostack-map-cache` R2 bucket under dataset-versioned keys. Roads, water, and first-level administrative boundaries come from the pinned Protomaps/OpenStreetMap PMTiles release stored as `osm/current.pmtiles` in the `topostack-vector-data` bucket, served with a short revalidating cache policy because that key is overwritten on dataset updates. The `/ready` endpoint reports whether both the vector and lake archives and the geocoder configuration are present. Generated geometry records vector and lake-data availability separately; requested data that is unavailable or truncated blocks export instead of silently producing incomplete fabrication files. Place search is proxied to Geoapify with a Worker secret. Provisioning (`scripts/provision-vector-data.mjs`) verifies a pinned SHA-256 digest, writes the development bucket by default, and touches production only with an explicit `--prod` flag. See `workers/map-api/README.md` for provisioning and deployment details.
 
 Terrain and map data are decorative source material, not survey, navigation, or engineering data.
+
+The launch-readiness fixes and remaining acceptance evidence are recorded in [the remediation notes](docs/launch-readiness-remediation-2026-09-12.md). Follow [the release acceptance and rollback runbook](docs/release-acceptance.md) before publishing. Atomm releases now include `topostack-atomm.release.json` with the ZIP digest, source revision/dirty-state flag, API origin, dataset version, and both archive identities. Keep this receipt alongside the ZIP and the data provisioning receipts.
+
+Use `nvm use` with the checked-in `.nvmrc` for the CI runtime (Node 22.22.2). The Worker test pool currently pins an older Wrangler internally; its Miniflare dependency has a scoped override to the patched 5.20260911.0-alpha release. Remove that override once the test pool ships the patched dependency itself.

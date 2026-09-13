@@ -1,6 +1,7 @@
 export type CropShape = "rectangle" | "circle";
 export type OutputMode = "stack" | "engraving";
 export type TrailPattern = "solid" | "dashed" | "dotted";
+export type WaterFillPattern = "none" | "lines" | "ripples" | "dots";
 export type RoadStyle = "centerline" | "outlined";
 export type RoadCap = "round" | "square";
 export type Operation = "cut" | "score" | "engrave";
@@ -21,6 +22,12 @@ export const MARKER_SYMBOLS: readonly MarkerSymbol[] = ["pin", "circle", "triang
 export const MAP_MARKER_SIZE_MM = 8;
 export const MAP_MARKER_CLEARANCE_MM = 1.2;
 export const CUSTOM_LINE_KINDS: readonly CustomLineKind[] = ["trail", "boundary"];
+export const MAX_PROJECT_NAME_LENGTH = 120;
+export const MAX_PROJECT_DIMENSION_MM = 10_000;
+export const MAX_MAP_MARKERS = 250;
+export const MAX_CUSTOM_LINES = 250;
+export const MAX_CUSTOM_LINE_POINTS = 2_000;
+export const MAX_CUSTOM_DATA_POINTS = 10_000;
 
 export interface CustomLineFeatureV1 {
   id: string;
@@ -185,6 +192,8 @@ export interface ProjectConfigV1 {
   showTrails: boolean;
   showTransportationLabels: boolean;
   showWater: boolean;
+  /** Optional vector pattern engraved inside water areas in flat mode. */
+  waterFillPattern: WaterFillPattern;
   showBoundaries: boolean;
   showCoordinateGrid: boolean;
   showWaterDepth: boolean;
@@ -290,7 +299,11 @@ export interface SourceBundleV1 {
   elevation: ElevationGrid;
   markings: MarkingFeature[];
   waterAreas?: WaterAreaV1[];
-  vectorStatus: "available" | "unavailable" | "not-requested";
+  /** OSM water polygons retained independently of depth-modeling metadata. */
+  waterPatternAreas?: Polygon2D[];
+  vectorStatus: "available" | "partial" | "unavailable" | "not-requested";
+  /** Status of the optional HydroLAKES/GLOBathy depth archive. */
+  lakeDataStatus: "available" | "unavailable" | "not-requested";
   datasetVersion: string;
   sourceKind: "real" | "preview" | "synthetic";
   bounds: GeoBounds;
@@ -355,7 +368,7 @@ export interface FabricationNest {
 }
 
 export interface GeometryWarning {
-  code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK" | "VECTOR_DATA_UNAVAILABLE" | "LABEL_OMITTED" | "WATER_DEPTH_CLAMPED";
+  code: "LOW_RELIEF" | "EMPTY_LAYER" | "SMALL_FEATURES" | "DATA_FALLBACK" | "VECTOR_DATA_PARTIAL" | "VECTOR_DATA_UNAVAILABLE" | "LAKE_DATA_UNAVAILABLE" | "LABEL_OMITTED" | "WATER_DEPTH_CLAMPED";
   message: string;
 }
 
@@ -367,6 +380,7 @@ export interface GeometryIRV1 {
   configFingerprint: string;
   sourceKind: SourceBundleV1["sourceKind"];
   vectorStatus: SourceBundleV1["vectorStatus"];
+  lakeDataStatus: SourceBundleV1["lakeDataStatus"];
   datasetVersion: string;
   bounds: GeoBounds;
   resolutionM?: number;
@@ -384,6 +398,8 @@ export interface GeometryIRV1 {
   waterDepthBelowLandM: number;
   layers: LayerIR[];
   waterSurfaces: WaterSurfaceIR[];
+  /** Crop-clipped water polygons used by optional flat-engraving fills. */
+  waterPatternAreas: Polygon2D[];
   fabricationNests: FabricationNest[];
   warnings: GeometryWarning[];
   attribution: SourceAttribution[];
@@ -428,6 +444,7 @@ export const DEFAULT_PROJECT: ProjectConfigV1 = {
   showTrails: true,
   showTransportationLabels: false,
   showWater: true,
+  waterFillPattern: "none",
   showBoundaries: false,
   showCoordinateGrid: false,
   showWaterDepth: true,

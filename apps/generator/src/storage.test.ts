@@ -27,15 +27,19 @@ describe("project import validation", () => {
     expect(() => parseProject({ ...DEFAULT_PROJECT, customLines: [{ ...customLines[0], points: [customLines[0].points[0]] }] })).toThrow(/at least two points/i);
   });
   it("validates and restores flat engraving settings", () => {
-    expect(parseProject({ ...DEFAULT_PROJECT, outputMode: "engraving", engravingContourCount: 24, engravingIndexInterval: 6, showEngravingBorder: false })).toMatchObject({
+    expect(parseProject({ ...DEFAULT_PROJECT, outputMode: "engraving", engravingContourCount: 24, engravingIndexInterval: 6, showEngravingBorder: false, waterFillPattern: "ripples" })).toMatchObject({
       outputMode: "engraving",
       engravingContourCount: 24,
       engravingIndexInterval: 6,
       showEngravingBorder: false,
+      waterFillPattern: "ripples",
     });
     expect(() => parseProject({ ...DEFAULT_PROJECT, outputMode: "print" })).toThrow(/output mode/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, engravingContourCount: 41 })).toThrow(/contour count/i);
     expect(() => parseProject({ ...DEFAULT_PROJECT, engravingIndexInterval: 1 })).toThrow(/index interval/i);
+    expect(() => parseProject({ ...DEFAULT_PROJECT, waterFillPattern: "checkerboard" })).toThrow(/water fill pattern/i);
+    const { waterFillPattern: _legacyWaterFillPattern, ...legacyProject } = DEFAULT_PROJECT;
+    expect(parseProject(legacyProject).waterFillPattern).toBe("none");
   });
   it("validates, restores, and defaults shared linework settings", () => {
     const lineStyle = { ...DEFAULT_PROJECT.lineStyle, contourMm: 0.14, majorRoadMm: 0.5, trailPattern: "dotted" as const };

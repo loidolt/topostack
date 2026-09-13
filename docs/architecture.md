@@ -26,8 +26,16 @@ Every generated result records a deterministic project fingerprint and source qu
 
 ## Data coverage
 
-The first release supports land terrain between ±85.0511° latitude. Mapzen Terrarium tiles provide elevation. The pinned Protomaps 20260819 archive provides OSM-derived roads, trails, and water through zoom 12 from `osm/current.pmtiles`; the browser requests one vector zoom beyond the reference-map zoom when the archive and tile budget permit, then clamps to the advertised range. Source resolution varies, and all output is decorative rather than survey-grade.
+The first release supports land terrain between ±85.0511° latitude. Mapzen Terrarium tiles provide elevation. The pinned Protomaps 20260905 archive provides OSM-derived roads, trails, and water through zoom 12 from `osm/current.pmtiles`; the browser requests one vector zoom beyond the reference-map zoom when the archive and tile budget permit, then clamps to the advertised range. Source resolution varies, and all output is decorative rather than survey-grade.
 
 ## Versioning
 
-`ProjectConfigV1`, `SourceBundleV1`, `GeometryIRV1`, and the exported manifest are explicitly versioned. Any incompatible change must introduce a migration rather than silently reinterpret an IndexedDB or exported project. Replacing the stored `layerCount` with `verticalExaggeration` moved the fingerprint prefix to `v3-`; projects saved before that load at the default exaggeration and must be regenerated once before export.
+`ProjectConfigV1`, `SourceBundleV1`, `GeometryIRV1`, and the exported manifest are explicitly versioned. Any incompatible change must introduce a migration rather than silently reinterpret an IndexedDB or exported project. Replacing the stored `layerCount` with `verticalExaggeration` originally moved the fingerprint prefix to `v3-`; projects saved before that load at the default exaggeration and must be regenerated once before export. The current prefix is `v5-`, invalidating geometry generated before the launch-readiness crop, clipping, and water-scaling fixes.
+
+## Launch-readiness invariants
+
+`sourceRequirements()` is shared by the provider, UI refresh logic, and core export policy. `exportBlockReason()` is shared by browser actions and both package builders. Transportation names are retained even when their labels are hidden. PMTiles caches live for one source operation; its header, directory, and body requests share cancellation and a 20-second request deadline. Source geometry is bounded to 200,000 points and 4,000 polygon rings before projection/union, with cancellation opportunities between decode batches.
+
+The first browser preview is computed in a Web Worker. WebGL startup failure selects the cut preview, and the asynchronously loaded Atomm SDK can register after its initial polling window. The build budget reports both entry preloads and the full default-preview startup graph, including Three.js and the geometry worker.
+
+The map camera fits stored geographic bounds to the actual responsive guide; resize events cannot overwrite the selection. Circular guides use the same physical-to-geographic transform as the crop. `crop.ts` derives relief from retained material and interpolated edge samples. Empty circular caps below the minimum feature size are omitted with a warning; interior empty sheets still block fabrication. Lake depth uses geographic grid spacing, independent of physical stretching. Boundaries, grids, roads, and waterways are clipped across exposed layer faces. Fixed annotations are omitted with a warning when their complete footprint cannot fit the material.

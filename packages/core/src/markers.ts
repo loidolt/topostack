@@ -74,12 +74,25 @@ function mercatorWorldY(latitude: number): number {
   return (1 - Math.asinh(Math.tan(radians)) / Math.PI) / 2;
 }
 
+/** Return the longitude equivalent that is closest to the center of an unwrapped map window. */
+export function unwrapLongitude(longitude: number, bounds: GeoBounds): number {
+  const center = (bounds.west + bounds.east) / 2;
+  return longitude + Math.round((center - longitude) / 360) * 360;
+}
+
+/** Test a canonical longitude against bounds that may cross the antimeridian. */
+export function longitudeInBounds(longitude: number, bounds: GeoBounds): boolean {
+  const unwrapped = unwrapLongitude(longitude, bounds);
+  return unwrapped >= bounds.west && unwrapped <= bounds.east;
+}
+
 /** Project a geographic coordinate into the artwork's centered millimeter space. */
 export function geoPointToMapPoint(lat: number, lon: number, bounds: GeoBounds, widthMm: number, heightMm: number): Point2D {
   const northY = mercatorWorldY(bounds.north);
   const southY = mercatorWorldY(bounds.south);
+  const unwrappedLongitude = unwrapLongitude(lon, bounds);
   return {
-    x: ((lon - bounds.west) / (bounds.east - bounds.west) - 0.5) * widthMm,
+    x: ((unwrappedLongitude - bounds.west) / (bounds.east - bounds.west) - 0.5) * widthMm,
     y: ((mercatorWorldY(lat) - northY) / (southY - northY) - 0.5) * heightMm,
   };
 }

@@ -42,12 +42,16 @@ export function connectAtomm(getCurrent: CurrentExport, onReady: () => void, onE
       }
     });
   };
+  // Async SDK downloads can finish after the short discovery polling window.
+  const script = document.querySelector<HTMLScriptElement>('script[src="https://static-res.makextool.com/scripts/js/generator-sdk/platform-sdk.js"]');
+  script?.addEventListener("load", setup);
   setup();
   const interval = window.setInterval(setup, 250);
   const timeout = window.setTimeout(() => window.clearInterval(interval), 5_000);
   return () => {
     window.clearInterval(interval);
     window.clearTimeout(timeout);
+    script?.removeEventListener("load", setup);
     // Fail closed after disconnect: a stale handler on a surviving SDK refuses
     // to export until a new connection installs its getter.
     if (currentExport === getCurrent) { currentExport = undefined; currentExportUpdate = undefined; }

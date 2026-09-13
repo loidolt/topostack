@@ -1,13 +1,16 @@
+import { exportBlockReason } from "./export-policy.js";
 import { formatNumber as format } from "./format.js";
-import { planTerrainStack, projectFingerprint } from "./geometry.js";
+import { planTerrainStack } from "./geometry.js";
 import { labelPathData } from "./labels.js";
 import { offsetClosedRing } from "./offset.js";
 import { displayElevation, displayLength, elevationUnit, lengthUnit } from "./units.js";
+import { waterPatternStrokes } from "./water-pattern.js";
 import type { ExportFile, FabricationNest, FabricationPackageV1, GeometryIRV1, LayerIR, LineStyleV1, Point2D, ProjectConfigV1 } from "./types.js";
 
 const CUT = "#ff0035";
 const SCORE = "#2563eb";
 const ENGRAVE = "#111827";
+const MAX_EXPORT_PACKAGE_BYTES = 100_000_000;
 
 function safeName(name: string): string {
   const value = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -214,6 +217,13 @@ function flatMarkingPaths(ir: GeometryIRV1): string {
   }).join("");
 }
 
+function engravingWaterPatternPaths(ir: GeometryIRV1, config: ProjectConfigV1): string {
+  const strokes = waterPatternStrokes(config.waterFillPattern, ir.waterPatternAreas, config.widthMm, config.heightMm, ir.lineStyle.waterMm);
+  if (!strokes.length) return "";
+  const paths = strokes.map((points, index) => `<path id="water-fill-${config.waterFillPattern}-${index + 1}" d="${pathData(points)}"/>`).join("");
+  return `<g id="ENGRAVE-water-fill" data-water-pattern="${config.waterFillPattern}" stroke-width="${format(ir.lineStyle.waterMm)}">${paths}</g>`;
+}
+
 function engravingBorder(config: ProjectConfigV1): string {
   if (!config.showEngravingBorder) return "";
   if (config.cropShape === "circle") return `<circle id="engraving-border" cx="0" cy="0" r="${format(config.widthMm / 2)}"/>`;
@@ -225,7 +235,7 @@ export function engravingToSvg(ir: GeometryIRV1, config: ProjectConfigV1): strin
   const minor = flatContourPaths(ir, config, false);
   const index = flatContourPaths(ir, config, true);
   const style = ir.lineStyle;
-  const body = `<g id="ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-linecap="round" stroke-linejoin="round"><g id="ENGRAVE-contours-minor" stroke-width="${format(style.contourMm)}">${minor}</g><g id="ENGRAVE-contours-index" stroke-width="${format(style.indexContourMm)}">${index}</g><g id="ENGRAVE-map-details" stroke-width="${format(style.annotationMm)}">${flatMarkingPaths(ir)}</g><g id="ENGRAVE-border" stroke-width="${format(style.borderMm)}">${engravingBorder(config)}</g></g>`;
+  const body = `<g id="ENGRAVE" data-operation="ENGRAVE" fill="none" stroke="${ENGRAVE}" stroke-linecap="round" stroke-linejoin="round">${engravingWaterPatternPaths(ir, config)}<g id="ENGRAVE-contours-minor" stroke-width="${format(style.contourMm)}">${minor}</g><g id="ENGRAVE-contours-index" stroke-width="${format(style.indexContourMm)}">${index}</g><g id="ENGRAVE-map-details" stroke-width="${format(style.annotationMm)}">${flatMarkingPaths(ir)}</g><g id="ENGRAVE-border" stroke-width="${format(style.borderMm)}">${engravingBorder(config)}</g></g>`;
   return svgDocument(config.widthMm, config.heightMm, body, `${ir.projectName} — flat topographic engraving`);
 }
 
@@ -265,12 +275,11 @@ export function assemblyGuideToSvg(ir: GeometryIRV1): string {
   return svgDocument(width, height, body, `${ir.projectName} — assembly guide`, 0, 0);
 }
 
-export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV1): FabricationPackageV1 {
+export function buildFabricationPackage(generated: GeometryIRV1, config: ProjectConfigV1): FabricationPackageV1 {
+  const ir = { ...generated, projectId: config.id, projectName: config.name };
   if (config.outputMode !== "stack") throw new Error("Choose layered relief before exporting fabrication files.");
-  if (ir.sourceKind !== "real") throw new Error("Generate real terrain data before exporting fabrication files.");
-  if (ir.configFingerprint !== projectFingerprint(config)) throw new Error("Project settings changed. Regenerate the terrain before exporting.");
-  if (ir.vectorStatus !== "available" && (config.showRoads || config.showTrails || config.showWater || config.showBoundaries || config.showWaterDepth)) throw new Error("Map detail data is unavailable. Disable those map details or regenerate after the service is restored.");
-  if (ir.layers.some((layer) => layer.polygons.length === 0)) throw new Error("One or more layers are empty. Reduce the layer count or minimum feature size before exporting.");
+  const reason = exportBlockReason(ir, config);
+  if (reason) throw new Error(reason);
   const base = safeName(config.name);
   const panels = fabricationPanels(ir);
   const panelFiles = panels.map((panel, index) => {
@@ -306,6 +315,7 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
       resolutionM: ir.resolutionM,
       datasetVersion: ir.datasetVersion,
       vectorStatus: ir.vectorStatus,
+      lakeDataStatus: ir.lakeDataStatus,
       imagerySources: ir.imagerySources,
     },
     attribution: ir.attribution,
@@ -331,7 +341,7 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
     { filename: "README.txt", blob: new Blob([readme], { type: "text/plain" }) },
     { filename: "ATTRIBUTION.txt", blob: new Blob([attribution], { type: "text/plain" }) },
   ];
-  if (files.reduce((total, file) => total + file.blob.size, 0) > 100_000_000) throw new Error("The fabrication package exceeds Atomm's 100 MB export limit.");
+  if (files.reduce((total, file) => total + file.blob.size, 0) > MAX_EXPORT_PACKAGE_BYTES) throw new Error("The fabrication package exceeds Atomm's 100 MB export limit.");
   return {
     schemaVersion: 1,
     master,
@@ -339,11 +349,11 @@ export function buildFabricationPackage(ir: GeometryIRV1, config: ProjectConfigV
   };
 }
 
-export function buildEngravingPackage(ir: GeometryIRV1, config: ProjectConfigV1): FabricationPackageV1 {
+export function buildEngravingPackage(generated: GeometryIRV1, config: ProjectConfigV1): FabricationPackageV1 {
+  const ir = { ...generated, projectId: config.id, projectName: config.name };
   if (config.outputMode !== "engraving") throw new Error("Choose flat engraving before exporting engraving artwork.");
-  if (ir.sourceKind !== "real") throw new Error("Generate real terrain data before exporting engraving files.");
-  if (ir.configFingerprint !== projectFingerprint(config)) throw new Error("Project settings changed. Regenerate the terrain before exporting.");
-  if (ir.vectorStatus !== "available" && (config.showRoads || config.showTrails || config.showWater || config.showBoundaries)) throw new Error("Map detail data is unavailable. Disable those map details or regenerate after the service is restored.");
+  const reason = exportBlockReason(ir, config);
+  if (reason) throw new Error(reason);
   const base = safeName(config.name);
   const master: ExportFile = { filename: `${base}-engraving.svg`, blob: new Blob([engravingToSvg(ir, config)], { type: "image/svg+xml" }) };
   const attribution = `${ir.attribution.map((item) => `${item.name} — ${item.license}\n${item.url}`).join("\n\n")}\n\nImagery sources used:\n${ir.imagerySources.length ? ir.imagerySources.join("\n") : "Not reported by source service"}`;
@@ -362,6 +372,7 @@ export function buildEngravingPackage(ir: GeometryIRV1, config: ProjectConfigV1)
       resolutionM: ir.resolutionM,
       datasetVersion: ir.datasetVersion,
       vectorStatus: ir.vectorStatus,
+      lakeDataStatus: ir.lakeDataStatus,
       imagerySources: ir.imagerySources,
     },
     attribution: ir.attribution,
@@ -371,19 +382,20 @@ export function buildEngravingPackage(ir: GeometryIRV1, config: ProjectConfigV1)
   const details = [
     config.showRoads ? "roads" : "",
     config.showTrails ? "trails" : "",
-    config.showWater ? "water outlines" : "",
+    config.showWater ? `water outlines${config.waterFillPattern !== "none" ? ` with ${config.waterFillPattern} fill` : ""}` : "",
     config.showBoundaries ? "state/province boundaries" : "",
     config.showCoordinateGrid ? "latitude/longitude grid" : "",
   ].filter(Boolean);
   const roadAppearance = config.lineStyle.roadStyle === "centerline" ? "centerlines" : `outlined major roads spaced ${format(config.lineStyle.majorRoadSpacingMm)} mm`;
   const linework = `Road appearance: ${roadAppearance}, ${config.lineStyle.roadCap} endpoints. Line widths: minor contours ${format(config.lineStyle.contourMm)} mm, index contours ${format(config.lineStyle.indexContourMm)} mm, major roads ${format(config.lineStyle.majorRoadMm)} mm, local roads ${format(config.lineStyle.localRoadMm)} mm, trails ${format(config.lineStyle.trailMm)} mm (${config.lineStyle.trailPattern}), water ${format(config.lineStyle.waterMm)} mm, state/province boundaries ${format(config.lineStyle.boundaryMm)} mm (dashed), latitude/longitude grid ${format(config.lineStyle.coordinateGridMm)} mm (dotted), annotations ${format(config.lineStyle.annotationMm)} mm, border ${format(config.lineStyle.borderMm)} mm.\n`;
-  const readme = `${ir.projectName}\n\nFlat topographic engraving\nArtwork size: ${size}\nContour lines: ${config.engravingContourCount}\nIndex contour: every ${config.engravingIndexInterval} lines\n${linework}Map details: ${details.length ? details.join(", ") : "none"}\nBorder: ${config.showEngravingBorder ? "engraved" : "none"}\n\nThe SVG contains one black ENGRAVE operation group and no CUT or SCORE paths. Minor and index contours are separated into named subgroups so their line weights can be assigned independently. Verify physical dimensions, focus, power, speed, and material settings with a small test engraving before processing the final item. Terrain data is decorative and is not survey, navigation, or engineering data.\n`;
+  const readme = `${ir.projectName}\n\nFlat topographic engraving\nArtwork size: ${size}\nContour lines: ${config.engravingContourCount}\nIndex contour: every ${config.engravingIndexInterval} lines\nWater fill: ${config.showWater ? config.waterFillPattern : "none"}\n${linework}Map details: ${details.length ? details.join(", ") : "none"}\nBorder: ${config.showEngravingBorder ? "engraved" : "none"}\n\nThe SVG contains one black ENGRAVE operation group and no CUT or SCORE paths. Minor and index contours are separated into named subgroups so their line weights can be assigned independently. Verify physical dimensions, focus, power, speed, and material settings with a small test engraving before processing the final item. Terrain data is decorative and is not survey, navigation, or engineering data.\n`;
   const files: ExportFile[] = [
     master,
     { filename: `${base}-project.json`, blob: new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }) },
     { filename: "README.txt", blob: new Blob([readme], { type: "text/plain" }) },
     { filename: "ATTRIBUTION.txt", blob: new Blob([attribution], { type: "text/plain" }) },
   ];
+  if (files.reduce((total, file) => total + file.blob.size, 0) > MAX_EXPORT_PACKAGE_BYTES) throw new Error("The engraving package exceeds Atomm's 100 MB export limit.");
   return { schemaVersion: 1, master, files };
 }
 
