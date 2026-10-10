@@ -31,6 +31,9 @@ function checkSupports(result: GeometryIRV1): void {
     expect(piece.resting || held.length > 0, piece.id).toBe(true);
     if (held.length >= 3) expect(convexContains(held.map(({ column }) => column.point), centre(piece)), piece.id).toBe(true);
     expect(piece.locators?.length ?? 0).toBeGreaterThanOrEqual(ending.length);
+    // One mark per rod position, even where a column meets the piece from above and below.
+    const marks = (piece.locators ?? []).map((ring) => ring.slice(0, -1).reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 })).map((sum, index) => `${(sum.x / (piece.locators![index]!.length - 1)).toFixed(3)},${(sum.y / (piece.locators![index]!.length - 1)).toFixed(3)}`);
+    expect(new Set(marks).size, piece.id).toBe(marks.length);
   }
   for (const { column, segment } of segments) {
     const head = byId.get(segment.headPieceId)!;
@@ -75,6 +78,19 @@ describe("airspace supports in a generated stack", () => {
     const result = build({ form, classes: { ...DEFAULT_AIRSPACE_STACK.classes, D: true } }, [core, shelf, tower]);
     expect(result.airspaceStack!.columns.length).toBeGreaterThan(0);
     checkSupports(result);
+  });
+
+  it.each(["plates", "tiers"] as const)("continues %s columns up through the levels rather than standing a rod just beside one", (form) => {
+    const stack = build({ form }, [core, shelf, stem, cap]).airspaceStack!;
+    const segments = stack.columns.flatMap((column) => column.segments.map((segment) => ({ point: column.point, segment })));
+    expect(stack.columns.some((column) => column.segments.length > 1)).toBe(true);
+    for (const [index, a] of segments.entries()) {
+      for (const b of segments.slice(index + 1)) {
+        const apart = Math.hypot(a.point.x - b.point.x, a.point.y - b.point.y);
+        const stacked = Math.min(a.segment.topMm, b.segment.topMm) <= Math.max(a.segment.bottomMm, b.segment.bottomMm) + 1e-6;
+        if (stacked && apart > 1e-9) expect(apart, `${a.segment.id} beside ${b.segment.id}`).toBeGreaterThanOrEqual(16);
+      }
+    }
   });
 
   it("stands tiers on the tiers below where it can", () => {
