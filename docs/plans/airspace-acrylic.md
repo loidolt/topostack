@@ -51,7 +51,7 @@ The three forms read these the same way:
 | Tiers | `F ∪ C` | none; the tint carries it | Shared sector edges within the piece |
 | Volumes | The union of sectors present at each acrylic sheet | none | none; each sheet's edge is the boundary |
 
-Each piece is the union of the sectors that make it and nothing more, so plates and tiers both stop at the airspace edge. Class D, when on, adds one lid piece per Class D area at its ceiling in every form.
+Each piece is the union of the sectors that make it and nothing more, so plates and tiers both stop at the airspace edge. Class D, when on, adds one lid piece per Class D area at its ceiling in every form. A lid covers only the part of its area where no other modelled airspace carries on through its ceiling (judged by charted altitudes, not merged levels): under a Class C shelf or inside a restricted area the lid stops at that airspace's edge, and in volumes it fills only the room the solid sheets at its height leave, so it never notches them. A lid that other airspace swallows whole is left out.
 
 **Surface floors in tiers.** A Class B or C core or a special use area that starts at the surface would otherwise have no piece until its ceiling, and read as empty air over the airport. In tiers it gets a floor piece just above the terrain under it. That floor is stepped like a floor given above ground, with 0 ft above ground: each step sits on the highest ground under it and snaps up to an existing level. Class D keeps its lid only. Plates need no such piece, since every plate already shows every sector it passes through.
 
