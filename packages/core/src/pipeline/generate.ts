@@ -20,7 +20,7 @@ import { insertedShorelines, markingEnabled, placeTransportationLabels, routeMar
 import { addAlignmentGuides, addPieceLabels } from "./assembly-marks.js";
 import { cutPlacedGraphics, elevationLabelTexts, placeAnnotations, placeElevationLabels, placeGraphics, placeMarkers, placePlaque } from "./annotations.js";
 import { placeAviationLabels } from "./aviation-labels.js";
-import { registeredAirspaceStage } from "./airspace-settings.js";
+import { registeredAirspaceStage, type AirspaceStageMemo } from "./airspace-settings.js";
 
 /**
  * Routed features × layers at which merging each layer's covering set into one
@@ -57,9 +57,9 @@ function dedupeMarkingIds(layers: LayerIR[], inserts: WaterInsertIR[] = []): voi
  * (`@topostack/core/airspace`). A realm that never loaded it builds none and
  * says so, as the in-chat preview does.
  */
-const buildAirspace: NonNullable<ReturnType<typeof registeredAirspaceStage>> = (config, source, layers, ladder, clip, inserts, warnings) => {
+const buildAirspace: NonNullable<ReturnType<typeof registeredAirspaceStage>> = (config, source, layers, ladder, clip, inserts, warnings, memo) => {
   const stage = registeredAirspaceStage();
-  if (stage) return stage(config, source, layers, ladder, clip, inserts, warnings);
+  if (stage) return stage(config, source, layers, ladder, clip, inserts, warnings, memo);
   warnings.push({ code: "AIRSPACE_NOT_LOADED", message: "Airspace in 3D is not built in this preview; open the project in the studio to see it." });
   return undefined;
 };
@@ -79,7 +79,11 @@ interface TerrainCache {
   layers: LayerIR[];
   warnings: GeometryWarning[];
 }
-interface GenerationSession { terrain?: TerrainCache }
+interface GenerationSession {
+  terrain?: TerrainCache;
+  /** The airspace stage's pieces and rods, reused while its inputs are unchanged. */
+  airspace?: AirspaceStageMemo;
+}
 
 // Everything affects terrain unless explicitly known to be downstream of it.
 // New config fields therefore invalidate safely until their dependency is reviewed.
@@ -188,7 +192,7 @@ function* generationSteps(config: ProjectConfigV1, source: SourceBundleV1, optio
   const key = session ? terrainKey(config) : "";
   const cached = session?.terrain?.input === input && session.terrain.key === key ? session.terrain : undefined;
   // Drop the previous map before allocating another large grid and contour stack.
-  if (session && !cached) session.terrain = undefined;
+  if (session && !cached) { session.terrain = undefined; session.airspace = undefined; }
   source = cached?.source ?? smoothLakeShorelines(source, config);
   const grid = cached?.grid ?? measuredElevationGrid(source.elevation);
   const flatEngraving = config.outputMode === "engraving";
@@ -233,7 +237,7 @@ function* generationSteps(config: ProjectConfigV1, source: SourceBundleV1, optio
   const waterInserts = water?.inserts ?? [];
   if (water) stage("water-inserts");
   // On the unsplit sheets, with every lake opening known: pieces clear the terrain that was cut.
-  const airspaceStack = flatEngraving || !config.airspaceStack ? undefined : buildAirspace(config, source, layers, ladder, context.clip, waterInserts, context.warnings);
+  const airspaceStack = flatEngraving || !config.airspaceStack ? undefined : buildAirspace(config, source, layers, ladder, context.clip, waterInserts, context.warnings, session && (session.airspace ??= {}));
   if (airspaceStack) stage("airspace");
 
   // Before nesting: cavities record indices into a donor's polygons and holes

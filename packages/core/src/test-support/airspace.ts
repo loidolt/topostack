@@ -45,6 +45,9 @@ export const tower = volume("tower", "class-d", circleRing(50, 0, 12), { ref: "s
 export const stem = volume("stem", "class-b", square(40, -60, 100, -10), { ref: "msl", ft: sheetsUp(8) }, { ref: "msl", ft: sheetsUp(14) });
 export const cap = volume("cap", "class-b", square(40, -60, 100, 90), { ref: "msl", ft: sheetsUp(11) }, { ref: "msl", ft: sheetsUp(14) });
 
+/** The synthetic source carrying `volumes`, one object, for tests that generate it more than once. */
+export const withAirspace = (volumes: AirspaceVolumeV1[]): SourceBundleV1 => ({ ...source, airspaceVolumes: volumes });
+
 export function build(settings: Partial<AirspaceStackSettingsV1>, volumes: AirspaceVolumeV1[] | undefined, config: Partial<ProjectConfigV1> = {}): GeometryIRV1 {
   const airspaceStack = { ...DEFAULT_AIRSPACE_STACK, ...settings, classes: { ...DEFAULT_AIRSPACE_STACK.classes, ...settings.classes } };
   const withVolumes: SourceBundleV1 = volumes ? { ...source, airspaceVolumes: volumes } : source;

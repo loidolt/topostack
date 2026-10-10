@@ -35,7 +35,7 @@
   import { MARKING_COLORS, markingStyleKey, type MarkingStyleKey } from "$lib/studio/marking-style";
   import { PreviewMotion } from "$lib/studio/preview-motion";
   import { sharedPieceEdges } from "$lib/studio/seam-lines";
-  import { airspaceBody, airspaceBodyKey, type CachedAirspaceBody, addStacked, appendLabel, appendPolyline, applyExploded, batchSegments, boundsOverlap, type CachedLayer, disposeContent, disposeLayerCache, layerGrainTexture, layerKey, type LineBatch, makeWoodTexture, markingLift, polygonBounds, shapeFromPolygon, SURFACE_DEPTH_BIAS, waterStainBands, waterStainMask } from "$lib/studio/three-scene";
+  import { airspaceBody, airspaceBodyKey, airspaceRods, type CachedAirspaceBody, addStacked, appendLabel, appendPolyline, applyExploded, batchSegments, boundsOverlap, type CachedLayer, disposeContent, disposeLayerCache, layerGrainTexture, layerKey, type LineBatch, makeWoodTexture, markingLift, polygonBounds, shapeFromPolygon, SURFACE_DEPTH_BIAS, waterStainBands, waterStainMask } from "$lib/studio/three-scene";
   const isEmbedded = getEmbedded();
   let zoom = $state(1);
   let fitDistance = 320;
@@ -370,7 +370,7 @@
       // (below), so the two finishes read apart at a glance.
       const acrylicMaterial = new THREE.MeshStandardMaterial({
         color: 0x2f7fb0, transparent: true, opacity: 0.38, roughness: 0.08, metalness: 0,
-        side: THREE.DoubleSide, depthWrite: false,
+        side: THREE.DoubleSide, depthWrite: false, forceSinglePass: true,
       });
       runtime.sceneResources.push(engraveMaterial, majorRoadMaterial, localRoadMaterial, trailMaterial, scoreMaterial, boundaryMaterial, coordinateGridMaterial, aviationMaterial, aviationDashedMaterial, specialUseMaterial, labelMaterial, seamMaterial, markerFillMaterial, acrylicMaterial);
       activeGeometry.layers.forEach((layer) => {
@@ -458,31 +458,35 @@
       // sectional colours them; clear plates show their frost. Each level rides
       // above the top sheet when the stack is exploded.
       if (airspace?.levels.length) {
+        // Transparent double-sided materials are drawn in two passes that
+        // flip the side and recompile-check the program for every mesh, every
+        // frame. All faces of a piece share one colour and opacity, so one
+        // pass blends to nearly the same result.
+        const glass = { transparent: true, side: THREE.DoubleSide, depthWrite: false, forceSinglePass: true } as const;
         const tints = {
-          clear: new THREE.MeshStandardMaterial({ color: 0xdcecf2, transparent: true, opacity: 0.24, roughness: 0.06, metalness: 0, side: THREE.DoubleSide, depthWrite: false }),
-          blue: new THREE.MeshStandardMaterial({ color: 0x3f7fd4, transparent: true, opacity: 0.4, roughness: 0.08, metalness: 0, side: THREE.DoubleSide, depthWrite: false }),
-          magenta: new THREE.MeshStandardMaterial({ color: 0xb44a91, transparent: true, opacity: 0.4, roughness: 0.08, metalness: 0, side: THREE.DoubleSide, depthWrite: false }),
+          clear: new THREE.MeshStandardMaterial({ color: 0xdcecf2, opacity: 0.24, roughness: 0.06, metalness: 0, ...glass }),
+          blue: new THREE.MeshStandardMaterial({ color: 0x3f7fd4, opacity: 0.4, roughness: 0.08, metalness: 0, ...glass }),
+          magenta: new THREE.MeshStandardMaterial({ color: 0xb44a91, opacity: 0.4, roughness: 0.08, metalness: 0, ...glass }),
         };
-        const frostMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+        const frostMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.45, ...glass });
         const rodMaterial = new THREE.MeshStandardMaterial({ color: 0xa8aeb2, roughness: 0.4, metalness: 0.3 });
         runtime.sceneResources.push(tints.clear, tints.blue, tints.magenta, frostMaterial, rodMaterial);
         const thickness = airspace.thicknessMm;
         const levelLayer = new Map<string, number>();
         airspace.levels.forEach((level, position) => {
           const stackIndex = activeGeometry.layers.length + position;
+          const top = level.zMm + thickness + markingLift(thickness);
+          // A level's frost, edges and labels are each one draw call, not one per piece.
+          const frost: THREE.Shape[] = [];
+          const edgeBatches = new Map<THREE.LineBasicMaterial | THREE.LineDashedMaterial, LineBatch>();
+          const labelBatch: LineBatch = { positions: [] };
           for (const piece of level.pieces) {
             levelLayer.set(piece.id, stackIndex);
             for (const mesh of airspaceBody(runtime!.airspaceBodies, piece, thickness, tints[piece.tint])) addStacked(runtime!.content, mesh, stackIndex, level.zMm);
-            const top = level.zMm + thickness + markingLift(thickness);
             if (omitMarkings) continue;
-            const edgeBatches = new Map<THREE.LineBasicMaterial | THREE.LineDashedMaterial, LineBatch>();
-            const labelBatch: LineBatch = { positions: [] };
             for (const marking of airspacePieceMarkings(piece)) {
-              if (marking.filled && marking.points.length > 2) {
-                const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shapeFromPolygon({ outer: marking.points, holes: marking.holes ?? [] }), 8), frostMaterial);
-                mesh.renderOrder = 3;
-                addStacked(runtime!.content, mesh, stackIndex, top);
-              } else if (marking.points.length > 1) {
+              if (marking.filled && marking.points.length > 2) frost.push(shapeFromPolygon({ outer: marking.points, holes: marking.holes ?? [] }));
+              else if (marking.points.length > 1) {
                 const material = lineMaterials[markingStyleKey(marking)];
                 let batch = edgeBatches.get(material);
                 if (!batch) { batch = { positions: [], ...(material instanceof THREE.LineDashedMaterial ? { distances: [] } : {}) }; edgeBatches.set(material, batch); }
@@ -490,24 +494,17 @@
               }
               if (marking.label && marking.points[0]) appendLabel(labelBatch, marking.label, marking.points[0], marking.labelRotationRad, marking.textStyle);
             }
-            for (const [material, batch] of edgeBatches) if (batch.positions.length) addStacked(runtime!.content, batchSegments(batch, material), stackIndex, top);
-            if (labelBatch.positions.length) addStacked(runtime!.content, batchSegments(labelBatch, labelMaterial), stackIndex, top + markingLift(thickness) * 0.5);
           }
+          if (frost.length) {
+            const mesh = new THREE.Mesh(new THREE.ShapeGeometry(frost, 8), frostMaterial);
+            mesh.renderOrder = 3;
+            addStacked(runtime!.content, mesh, stackIndex, top);
+          }
+          for (const [material, batch] of edgeBatches) if (batch.positions.length) addStacked(runtime!.content, batchSegments(batch, material), stackIndex, top);
+          if (labelBatch.positions.length) addStacked(runtime!.content, batchSegments(labelBatch, labelMaterial), stackIndex, top + markingLift(thickness) * 0.5);
         });
         // Rods stand from their seat to the piece they hold, and ride with that piece.
-        const radius = airspace.rod.sizeMm / 2;
-        for (const column of airspace.columns) {
-          for (const segment of column.segments) {
-            const length = segment.topMm - segment.bottomMm;
-            if (length <= 0) continue;
-            const shape = airspace.rod.shape === "square"
-              ? new THREE.BoxGeometry(airspace.rod.sizeMm, airspace.rod.sizeMm, length)
-              : new THREE.CylinderGeometry(radius, radius, length, 16).rotateX(Math.PI / 2);
-            const rod = new THREE.Mesh(shape.translate(column.point.x, column.point.y, length / 2), rodMaterial);
-            rod.castShadow = true;
-            addStacked(runtime!.content, rod, levelLayer.get(segment.headPieceId) ?? activeGeometry.layers.length, segment.bottomMm);
-          }
-        }
+        for (const { mesh, stackIndex } of airspaceRods(airspace, (id) => levelLayer.get(id) ?? activeGeometry.layers.length, rodMaterial)) addStacked(runtime!.content, mesh, stackIndex, 0);
       }
 
       // Open water is stain on the wood rather than a pane over it: the top

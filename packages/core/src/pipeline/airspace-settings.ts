@@ -31,8 +31,15 @@ export function airspaceTint(volume: Pick<AirspaceVolumeV1, "aviationClass" | "s
   return "blue";
 }
 
+/**
+ * A slot a generation session lends the stage to keep its last pieces and
+ * rods in, so an edit that leaves them alone does not rebuild them. Only the
+ * stage reads what it holds.
+ */
+export interface AirspaceStageMemo { current?: unknown }
+
 /** The airspace stage's signature, as `@topostack/core/airspace` exports it. */
-export type AirspaceStage = (config: ProjectConfigV1, source: SourceBundleV1, layers: LayerIR[], ladder: ElevationLadder, clip: Point2D[], inserts: WaterInsertIR[], warnings: GeometryWarning[]) => AirspaceStackIR | undefined;
+export type AirspaceStage = (config: ProjectConfigV1, source: SourceBundleV1, layers: LayerIR[], ladder: ElevationLadder, clip: Point2D[], inserts: WaterInsertIR[], warnings: GeometryWarning[], memo?: AirspaceStageMemo) => AirspaceStackIR | undefined;
 
 let registered: AirspaceStage | undefined;
 
