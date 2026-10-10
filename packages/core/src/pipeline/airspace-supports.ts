@@ -38,6 +38,13 @@ const TOUCH_MM2 = 1;
 const CUT_STEP_MM = 0.5;
 /** Through rods sit on one grid for every piece, so a rod can rise through one piece to hold the next. */
 const THROUGH_GRID_MM = 8;
+/**
+ * Glued segments: a candidate this close to a column already standing moves
+ * onto it, so segments on the levels above continue that column instead of
+ * standing a few millimetres beside it. Wider than the coarsest candidate
+ * grid's half-diagonal (20 mm steps), so any column inside a piece catches one.
+ */
+const ALIGN_MM = 16;
 
 interface Placed { piece: AirspacePieceIR; zMm: number; topMm: number; prepared: PreparedPolygons }
 interface Candidate {
@@ -233,6 +240,31 @@ function candidatePoints(piece: AirspacePieceIR, prepared: PreparedPolygons, mar
   return { valid, samples };
 }
 
+/**
+ * Glued segments: candidates with every one near a column already standing
+ * moved onto that column where a segment can stand there too, so a piece's
+ * rods continue the columns below it rather than jog beside them. A candidate
+ * near no such column stays where it is.
+ */
+function alignedCandidates(context: Context, prepared: PreparedPolygons, zMm: number, points: Point2D[], margin: number): Candidate[] {
+  const columns = [...context.segmentPoints.values()].filter((point) => pointInPreparedPolygons(point, prepared) && clearOfEdges(point, prepared, margin));
+  const seats = new Map<Point2D, Candidate | undefined>();
+  const seatOf = (point: Point2D) => {
+    if (!seats.has(point)) seats.set(point, seatAt(context, point, zMm));
+    return seats.get(point);
+  };
+  const candidates = new Map<string, Candidate>();
+  for (const point of points) {
+    const near = columns
+      .map((column) => ({ column, distance: Math.hypot(column.x - point.x, column.y - point.y) }))
+      .filter((entry) => entry.distance < ALIGN_MM)
+      .sort((a, b) => a.distance - b.distance);
+    const candidate = near.map((entry) => seatOf(entry.column)).find(Boolean) ?? seatAt(context, point, zMm);
+    if (candidate) candidates.set(pointKey(candidate.point), candidate);
+  }
+  return [...candidates.values()];
+}
+
 /** Columns for one piece by farthest-point choice, or undefined when it cannot be held. */
 function chooseColumns(piece: AirspacePieceIR, candidates: Candidate[], samples: Point2D[], rod: AirspaceRodSettingsV1, spacingMm: number): Candidate[] | undefined {
   if (!candidates.length) return undefined;
@@ -363,7 +395,7 @@ function holdPiece(context: Context, piece: AirspacePieceIR, prepared: PreparedP
   const margin = context.rodRadius + PIECE_EDGE_MM;
   const fine = candidatePoints(piece, prepared, margin).valid;
   if (!through) {
-    const columns = choose(fine.flatMap((point) => seatAt(context, point, zMm) ?? []));
+    const columns = choose(alignedCandidates(context, prepared, zMm, fine, margin));
     return columns && { columns, segmented: false };
   }
   const shared = candidatePoints(piece, prepared, margin, context.rodSpacingMm).valid.filter((point) => !crowded(context, point));
@@ -544,9 +576,14 @@ function cutSockets(columns: AirspaceColumnIR[], layers: LayerIR[], rod: Airspac
 /** A rod's outline on the top face of every piece a segment stands on or holds; on clear acrylic the mark shows through to the underside. */
 function engraveLocators(stack: AirspaceStackIR, rod: AirspaceRodSettingsV1): void {
   const pieces = new Map(stack.levels.flatMap((level) => level.pieces.map((piece) => [piece.id, piece] as const)));
+  // A column continuing through a piece meets it from both sides at one point: one mark serves both.
+  const marked = new Set<string>();
   const add = (pieceId: string, point: Point2D) => {
     const piece = pieces.get(pieceId);
-    if (piece) piece.locators = [...(piece.locators ?? []), rodFootprint(point, rod)];
+    const key = `${pieceId}@${pointKey(point)}`;
+    if (!piece || marked.has(key)) return;
+    marked.add(key);
+    piece.locators = [...(piece.locators ?? []), rodFootprint(point, rod)];
   };
   for (const column of stack.columns) for (const segment of column.segments) {
     add(segment.headPieceId, column.point);

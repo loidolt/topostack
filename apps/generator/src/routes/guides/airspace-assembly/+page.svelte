@@ -16,7 +16,7 @@
   <table>
     <thead><tr><th scope="col">Rods meet pieces</th><th scope="col">How to assemble</th><th scope="col">What to check</th></tr></thead>
     <tbody>
-      <tr><td>Glued segments</td><td>Short rods join adjacent levels or rise from the terrain. Their engraved outlines locate the seats on the acrylic.</td><td>Match each rod's exported length and keep the piece level while the adhesive cures.</td></tr>
+      <tr><td>Glued segments</td><td>Short rods join adjacent levels or rise from the terrain. Their engraved outlines locate the seats on the acrylic, and where a rod continues to the next level it stands on the same mark, so the column reads as one straight line.</td><td>Match each rod's exported length and keep the piece level while the adhesive cures.</td></tr>
       <tr><td>Through holes</td><td>Rods rise through holes in the pieces they carry. The guide identifies the column, rod and each supported piece's height.</td><td>Slide pieces on before fixing the top. Follow any additional segmented supports shown in the guide.</td></tr>
     </tbody>
   </table>
