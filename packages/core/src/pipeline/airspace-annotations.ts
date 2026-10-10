@@ -132,7 +132,8 @@ export function annotateAirspace(stack: AirspaceStackIR, volumes: AirspaceVolume
     const clear = windows.get(piece)!;
     if (piece.frost?.length && clear.length) piece.frost = clipPolygons(piece.frost, clear, "difference");
     const reserved = [...clear, ...offsetPolygons((piece.locators ?? []).map((outer) => ({ outer, holes: [] })), 1, "round")];
-    const inkRegion = reserved.length ? clipPolygons(piece.polygons, reserved, "difference") : piece.polygons;
+    // Prepared once: every sector ring and hatch line of the piece is clipped to it.
+    const inkRegion = preparePolygons(reserved.length ? clipPolygons(piece.polygons, reserved, "difference") : piece.polygons);
     const edges = stack.form === "volumes" ? [] : piece.sectorIds.flatMap((id) => {
       const volume = byId.get(id);
       if (!volume) return [];

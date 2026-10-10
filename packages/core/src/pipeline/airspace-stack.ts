@@ -4,7 +4,7 @@ import { normalizedPolygons } from "./water-inserts.js";
 import { AIRSPACE_MIN_PIECE_MM2, partitionAirspace } from "./airspace-partition.js";
 import { annotateAirspace } from "./airspace-annotations.js";
 import { placeAirspaceSupports } from "./airspace-supports.js";
-import { AIRSPACE_DEFAULT_CAP_FT, airspaceMaterial, airspaceTint } from "./airspace-settings.js";
+import { AIRSPACE_DEFAULT_CAP_FT, airspaceMaterial, airspaceTint, type AirspaceStageMemo } from "./airspace-settings.js";
 import type {
   AirspaceLevelIR, AirspacePieceIR, AirspaceStackIR, AirspaceStackSettingsV1, AirspaceTint, AirspaceVolumeV1,
   GeometryWarning, LayerIR, Point2D, Polygon2D, ProjectConfigV1, SourceBundleV1, WaterInsertIR,
@@ -75,9 +75,12 @@ function boundsOf(polygons: Polygon2D[]): Bounds2D {
   return { minX: bounds.minX - 1, minY: bounds.minY - 1, maxX: bounds.maxX + 1, maxY: bounds.maxY + 1 };
 }
 
-const union = (polygons: Polygon2D[]) => (polygons.length ? clipPolygons(polygons, [], "union") : []);
-
-/** Closed by half the minimum feature: tile seams and slivers between sectors disappear, and so does any notch the laser cannot cut. */
+/**
+ * Closed by half the minimum feature: tile seams and slivers between sectors
+ * disappear, and so does any notch the laser cannot cut. The outward offset
+ * unions overlapping and abutting polygons itself; a separate union first
+ * cost seconds on terraced sectors, whose many parts share edges exactly.
+ */
 function closed(polygons: Polygon2D[], minimumFeatureMm: number): Polygon2D[] {
   if (!polygons.length) return [];
   const radius = minimumFeatureMm / 2;
@@ -225,7 +228,7 @@ function terrainAbove(builder: Builder, zMm: number): Polygon2D[] {
 /** A piece's final outline: closed, cut back from the terrain, inside the crop, and without fragments too small to build. */
 function pieceOutline(builder: Builder, polygons: Polygon2D[], zMm: number): Polygon2D[] {
   const { config } = builder;
-  let outline = closed(union(polygons), config.minimumFeatureMm);
+  let outline = closed(polygons, config.minimumFeatureMm);
   const terrain = terrainAbove(builder, zMm);
   if (terrain.length && outline.length) outline = clipPolygons(outline, windowPolygons(terrain, boundsOf(outline)), "difference");
   outline = clipPolygons(outline, builder.layers[0]!.polygons, "intersection");
@@ -267,7 +270,7 @@ function stepLevels(builder: Builder, parts: Part[], altitudes: number[][], snap
       const members = [...floors, ...ceilings, ...through];
       const outline = pieceOutline(builder, members.flatMap((part) => part.polygons), zMm);
       const shelves = [...floors, ...ceilings];
-      const frosted = shelves.length && outline.length ? closed(union(shelves.flatMap((part) => part.polygons)), builder.config.minimumFeatureMm) : [];
+      const frosted = shelves.length && outline.length ? closed(shelves.flatMap((part) => part.polygons), builder.config.minimumFeatureMm) : [];
       outline.forEach((polygon, n) => {
         const own = [polygon];
         const frost = frosted.length ? clipPolygons(frosted, own, "intersection") : [];
@@ -360,11 +363,55 @@ function piecesOverlap(levels: AirspaceLevelIR[], thicknessMm: number): boolean 
 }
 
 /**
+ * Mixes every coordinate of the stage's geometric inputs into two 32-bit
+ * lanes. The layers are a fresh clone on every generation, so identity can
+ * never match; hashing is linear and costs a few milliseconds where the
+ * booleans it spares cost seconds.
+ */
+function geometryKey(layers: LayerIR[], inserts: WaterInsertIR[], clip: Point2D[]): string {
+  let low = 0x811c9dc5, high = 0x9e3779b9, count = 0;
+  const mix = (value: number) => {
+    low = Math.imul(low ^ (value | 0), 0x01000193) >>> 0;
+    high = Math.imul(high ^ (value | 0), 0x5bd1e995) >>> 0;
+    high ^= high >>> 13;
+  };
+  const ring = (points: Point2D[]) => {
+    mix(points.length);
+    count += points.length;
+    // Clipper's own grid: finer than this cannot change a boolean.
+    for (const point of points) { mix(Math.round(point.x * 10_000)); mix(Math.round(point.y * 10_000)); }
+  };
+  const polygons = (entries: Polygon2D[]) => {
+    mix(entries.length);
+    for (const polygon of entries) { mix(polygon.holes.length); ring(polygon.outer); polygon.holes.forEach(ring); }
+  };
+  for (const layer of layers) { mix(layer.index); polygons(layer.polygons); }
+  for (const insert of inserts) { mix(insert.layerIndex); polygons(insert.polygons); }
+  ring(clip);
+  return `${layers.length}:${inserts.length}:${count}:${low}:${high}`;
+}
+
+/** What the memo keeps: everything before annotation, which is cheap and follows text and line style. */
+interface AirspaceMemoEntry {
+  source: SourceBundleV1;
+  key: string;
+  stack: AirspaceStackIR | undefined;
+  warnings: GeometryWarning[];
+  /** Sheets the rod sockets cut, by layer index, as they were after the cut. */
+  socketed: Map<number, Polygon2D[]>;
+}
+
+/**
  * The airspace stack for a layered model, or undefined when the project does
  * not ask for one. Runs on the unsplit sheets after water inserts are cut, so
  * every hole a later stage adds to a sheet is already known.
+ *
+ * Pieces and rods depend only on the settings, the terrain and the airspace
+ * data, not on map detail, labels or line style, yet they are most of the
+ * work. With a `memo` from the generation session, an edit that leaves those
+ * inputs alone reuses them and only annotates again.
  */
-export function buildAirspaceStack(config: ProjectConfigV1, source: SourceBundleV1, layers: LayerIR[], ladder: ElevationLadder, clip: Point2D[], inserts: WaterInsertIR[], warnings: GeometryWarning[]): AirspaceStackIR | undefined {
+export function buildAirspaceStack(config: ProjectConfigV1, source: SourceBundleV1, layers: LayerIR[], ladder: ElevationLadder, clip: Point2D[], inserts: WaterInsertIR[], warnings: GeometryWarning[], memo?: AirspaceStageMemo): AirspaceStackIR | undefined {
   const settings = config.airspaceStack;
   const material = airspaceMaterial(config);
   if (!settings || !material) return undefined;
@@ -373,6 +420,54 @@ export function buildAirspaceStack(config: ProjectConfigV1, source: SourceBundle
     return undefined;
   }
   if (source.airspaceStatus === "partial") warnings.push({ code: "AIRSPACE_DATA_PARTIAL", message: "Airspace data is incomplete. Narrow the map area or turn off some airspace classes, then regenerate before exporting." });
+  const volumes = source.airspaceVolumes.filter((volume) => classEnabled(volume, settings.classes));
+  const key = memo && [
+    JSON.stringify([settings, material, config.materialThicknessMm, config.minimumFeatureMm, ladder.ladderBase, ladder.stack.metersPerLayer]),
+    geometryKey(layers, inserts, clip),
+  ].join("|");
+  const previous = memo?.current as AirspaceMemoEntry | undefined;
+  let entry: AirspaceMemoEntry;
+  if (previous && previous.source === source && previous.key === key) {
+    entry = previous;
+    // The layers are this generation's own clone, so the cut sheets go in as copies too.
+    for (const [index, polygons] of entry.socketed) {
+      const layer = layers.find((candidate) => candidate.index === index);
+      if (layer) layer.polygons = structuredClone(polygons);
+    }
+  } else {
+    if (memo) memo.current = undefined;
+    const before = layers.map((layer) => layer.polygons);
+    const built: GeometryWarning[] = [];
+    const stack = piecesAndRods(config, source, layers, ladder, clip, inserts, built, settings, material, volumes);
+    const socketed = new Map(layers.filter((layer, index) => layer.polygons !== before[index]).map((layer) => [layer.index, layer.polygons] as const));
+    entry = { source, key: key ?? "", stack, warnings: built, socketed };
+    if (memo) memo.current = { ...entry, stack: structuredClone(stack), socketed: structuredClone(socketed) };
+  }
+  warnings.push(...entry.warnings.map((warning) => ({ ...warning })));
+  if (!entry.stack) return undefined;
+  // Annotation writes into the pieces, so a reused stack is annotated as a copy.
+  const stack = entry === previous ? structuredClone(entry.stack) : entry.stack;
+  annotateAirspace(stack, volumes, config, warnings);
+  const levels = stack.levels;
+  const topMm = levels.length ? Math.max(...levels.map((level) => level.zMm + material.thicknessMm)) : 0;
+  stack.topMm = topMm;
+  if (topMm > AIRSPACE_TALL_MM) warnings.push({
+    code: "AIRSPACE_TALL",
+    message: `The airspace stands ${Math.round(topMm)} mm tall. Lower the airspace ceiling cap or Vertical exaggeration for a model that is easier to build and display.`,
+  });
+  if (settings.form === "volumes") {
+    const area = levels.reduce((sum, level) => sum + level.pieces.reduce((pieceSum, entry) => pieceSum + totalArea(entry.polygons), 0), 0);
+    const footprints = area / (config.widthMm * config.heightMm);
+    if (footprints > AIRSPACE_HEAVY_FOOTPRINTS) warnings.push({
+      code: "AIRSPACE_ACRYLIC_HEAVY",
+      message: `Solid airspace takes acrylic covering the model ${footprints.toFixed(1)} times over. Plates or tiers use far less.`,
+    });
+  }
+  return stack;
+}
+
+/** Levels, pieces, rods and their sockets, before any engraving is placed on them. */
+function piecesAndRods(config: ProjectConfigV1, source: SourceBundleV1, layers: LayerIR[], ladder: ElevationLadder, clip: Point2D[], inserts: WaterInsertIR[], warnings: GeometryWarning[], settings: AirspaceStackSettingsV1, material: { thicknessMm: number; kerfMm: number }, volumes: AirspaceVolumeV1[]): AirspaceStackIR | undefined {
   const t = config.materialThicknessMm;
   const metersPerLayer = ladder.stack.metersPerLayer;
   const scale: Scale = {
@@ -381,7 +476,6 @@ export function buildAirspaceStack(config: ProjectConfigV1, source: SourceBundle
   };
   const gapMm = material.thicknessMm + AIRSPACE_LEVEL_ROOM_MM;
   const crop: Polygon2D[] = [{ outer: clip, holes: [] }];
-  const volumes = source.airspaceVolumes.filter((volume) => classEnabled(volume, settings.classes));
   const charted = volumes
     .filter((volume) => volume.aviationClass === "class-b" || volume.aviationClass === "class-c")
     .flatMap((volume) => (volume.ceiling.ref === "msl" || volume.ceiling.ref === "fl" ? [volume.ceiling.ft] : []));
@@ -446,21 +540,5 @@ export function buildAirspaceStack(config: ProjectConfigV1, source: SourceBundle
   const stack: AirspaceStackIR = { form: settings.form, thicknessMm: material.thicknessMm, kerfMm: material.kerfMm, ceilingCapFt, mmPerMeter: scale.mmPerMeter, topMm: 0, levels, sectors, rod: { ...settings.rod }, ...(source.airspaceCycle ? { cycle: source.airspaceCycle } : {}), columns: [], cutList: [], backingSheet: false };
   // Rods hold the pieces, and their sockets become holes in the sheets; a piece no rod can hold is left out.
   placeAirspaceSupports(stack, layers, inserts, t, config.minimumFeatureMm, warnings);
-  annotateAirspace(stack, volumes, config, warnings);
-  levels = stack.levels;
-  const topMm = levels.length ? Math.max(...levels.map((level) => level.zMm + material.thicknessMm)) : 0;
-  stack.topMm = topMm;
-  if (topMm > AIRSPACE_TALL_MM) warnings.push({
-    code: "AIRSPACE_TALL",
-    message: `The airspace stands ${Math.round(topMm)} mm tall. Lower the airspace ceiling cap or Vertical exaggeration for a model that is easier to build and display.`,
-  });
-  if (settings.form === "volumes") {
-    const area = levels.reduce((sum, level) => sum + level.pieces.reduce((pieceSum, entry) => pieceSum + totalArea(entry.polygons), 0), 0);
-    const footprints = area / (config.widthMm * config.heightMm);
-    if (footprints > AIRSPACE_HEAVY_FOOTPRINTS) warnings.push({
-      code: "AIRSPACE_ACRYLIC_HEAVY",
-      message: `Solid airspace takes acrylic covering the model ${footprints.toFixed(1)} times over. Plates or tiers use far less.`,
-    });
-  }
   return stack;
 }
