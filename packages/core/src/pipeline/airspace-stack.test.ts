@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AIRSPACE_STACK, DEFAULT_PROJECT, generateGeometry, parseProject, type AirspaceStackSettingsV1 } from "../index.js";
+import { DEFAULT_AIRSPACE_STACK, DEFAULT_PROJECT, generateGeometry, parseProject, type AirspaceStackSettingsV1, type Polygon2D } from "../index.js";
 import { clipPolygons } from "../primitives/offset.js";
+import { signedArea } from "../primitives/geometry2d.js";
 import { exportBlockReason } from "../export/export-policy.js";
 import { projectFingerprint } from "./fingerprint.js";
-import { gridSource, scaledForLayers } from "../test-support/sources.js";
+import { circleRing, gridSource, scaledForLayers } from "../test-support/sources.js";
 import { base, build, CEILING, core, FEET, inside, plain, project, SHELF, sheetsUp, shelf, square, stepM, t, tower, volume, zOf } from "../test-support/airspace.js";
 
 describe("airspace stack settings", () => {
@@ -72,8 +73,19 @@ describe("airspace plates", () => {
     expect(lidded.levels.map((level) => level.altitudeFt)).toEqual([SHELF, sheetsUp(16), CEILING]);
     const lid = lidded.levels[1]!;
     expect(lid.pieces.flatMap((entry) => entry.sectorIds)).toContain("tower");
-    // Below its ceiling the tower is not in the cross-section; the core around it is.
+    // The shelf carries on through the lid's height: the plate crosses it there, but only the lid outside it is a shelf.
+    const frost = lid.pieces.flatMap((entry) => entry.frost ?? []);
+    expect(inside({ x: 128, y: 0 }, frost)).toBe(true);
+    expect(inside({ x: 100, y: 0 }, frost)).toBe(false);
+    // Below its ceiling the tower is not in the cross-section; the shelf around it is.
     expect(lidded.levels[0]!.pieces.flatMap((entry) => entry.sectorIds)).not.toContain("tower");
+  });
+
+  it("leaves out a Class D lid that other airspace swallows whole", () => {
+    const inner = volume("inner", "class-d", circleRing(50, 0, 10), { ref: "sfc", ft: 0 }, { ref: "msl", ft: sheetsUp(16) });
+    const stack = build({ form: "plates", classes: { D: true } as AirspaceStackSettingsV1["classes"] }, [core, shelf, inner]).airspaceStack!;
+    expect(stack.levels.map((level) => level.altitudeFt)).toEqual([SHELF, CEILING]);
+    expect(stack.levels.flatMap((level) => level.pieces.flatMap((entry) => entry.sectorIds))).not.toContain("inner");
   });
 
   it("merges levels too close for a rod between them, and says so", () => {
@@ -114,6 +126,33 @@ describe("airspace volumes", () => {
     const expected = Math.ceil((zOf(CEILING) - zOf(SHELF)) / t - 1e-6);
     expect(stack.levels).toHaveLength(expected);
     stack.levels.forEach((level, index) => expect(level.zMm).toBeCloseTo(zOf(SHELF) + index * t, 6));
+  });
+
+  it("fits a Class D lid around the solid sheets instead of notching them", () => {
+    const area = (polygons: Polygon2D[]) => polygons.reduce((sum, polygon) => sum + Math.abs(signedArea(polygon.outer)) - polygon.holes.reduce((holes, ring) => holes + Math.abs(signedArea(ring)), 0), 0);
+    const sheets = build({ form: "volumes" }, [shelf]).airspaceStack!;
+    const lidded = build({ form: "volumes", classes: { D: true } as AirspaceStackSettingsV1["classes"] }, [shelf, tower]).airspaceStack!;
+    const lid = lidded.levels.find((level) => level.pieces.some((entry) => entry.sectorIds.includes("tower")))!;
+    expect(lid.zMm).toBeCloseTo(zOf(sheetsUp(16)), 6);
+    const lidPolygons = lid.pieces.flatMap((entry) => entry.polygons);
+    expect(inside({ x: 128, y: 0 }, lidPolygons)).toBe(true);
+    expect(inside({ x: 100, y: 0 }, lidPolygons)).toBe(false);
+    // Every shelf sheet keeps its whole area, the ones beside the lid included.
+    const shelfArea = (stack: typeof sheets) => stack.levels.filter((level) => level !== lid).map((level) => Math.round(area(level.pieces.flatMap((entry) => entry.polygons))));
+    expect(shelfArea(lidded)).toEqual(shelfArea(sheets));
+  });
+});
+
+describe("airspace tiers with Class D", () => {
+  it("stops a lid where a shelf or a restricted area carries on through its height", () => {
+    const restricted = volume("restricted", "special-use", square(110, -60, 150, -15), { ref: "sfc", ft: 0 }, { ref: "msl", ft: CEILING }, { specialUseKind: "restricted" });
+    const stack = build({ form: "tiers", classes: { D: true, specialUse: true } as AirspaceStackSettingsV1["classes"] }, [shelf, tower, restricted]).airspaceStack!;
+    const lid = stack.levels.find((level) => level.altitudeFt === sheetsUp(16))!;
+    const lidPolygons = lid.pieces.filter((entry) => entry.sectorIds.includes("tower")).flatMap((entry) => entry.polygons);
+    expect(inside({ x: 128, y: 5 }, lidPolygons)).toBe(true);
+    expect(inside({ x: 100, y: 5 }, lidPolygons)).toBe(false); // inside the shelf
+    expect(inside({ x: 128, y: -22 }, lidPolygons)).toBe(false); // inside the restricted area
+    expect(lid.pieces.every((entry) => entry.sectorIds.every((id) => id === "tower"))).toBe(true);
   });
 });
 

@@ -113,11 +113,11 @@ function overSheets(polygons: Polygon2D[], layers: LayerIR[]): Polygon2D[][] {
 
 /** Resolve one sector's limits: a part with fixed limits, or a sector to be stepped over the ground once the levels are known. */
 function resolveSector(volume: AirspaceVolumeV1, polygons: Polygon2D[], settings: AirspaceStackSettingsV1, capM: number, layers: LayerIR[], scale: Scale): Part | GroundSector | undefined {
-  const isLid = volume.aviationClass === "class-d";
+  const lid = volume.aviationClass === "class-d";
   const fixed = (altitude: AirspaceVolumeV1["ceiling"]) => (altitude.ref === "msl" || altitude.ref === "fl" ? altitude.ft * FEET : undefined);
   const ceilingFixed = volume.ceiling.ref === "unlimited" ? capM : fixed(volume.ceiling);
   // Tiers give a sector that starts at the surface a floor just above the ground, as one 0 ft above it.
-  const surfaceFloor = volume.floor.ref === "sfc" && settings.form === "tiers" && !isLid;
+  const surfaceFloor = volume.floor.ref === "sfc" && settings.form === "tiers" && !lid;
   const floorFromGround = volume.floor.ref === "agl" || surfaceFloor;
   const ceilingFromGround = volume.ceiling.ref === "agl";
   const floorFixed = volume.floor.ref === "sfc" ? null : fixed(volume.floor) ?? null;
@@ -244,15 +244,41 @@ function piece(id: string, tint: AirspaceTint, polygons: Polygon2D[], parts: Par
 
 const boxesOverlap = (a: Bounds2D, b: Bounds2D) => a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
 
+function partBox(builder: Builder, part: Part): Bounds2D {
+  let bounds = builder.partBounds.get(part);
+  if (!bounds) { bounds = boundsOf(part.polygons); builder.partBounds.set(part, bounds); }
+  return bounds;
+}
+
 /** The parts that share area with a piece; their boxes rule most out before any boolean. */
 function partsWithin(builder: Builder, parts: Part[], polygons: Polygon2D[]): Part[] {
   const box = boundsOf(polygons);
-  return parts.filter((part) => {
-    let bounds = builder.partBounds.get(part);
-    if (!bounds) { bounds = boundsOf(part.polygons); builder.partBounds.set(part, bounds); }
-    return boxesOverlap(bounds, box) && clipPolygons(part.polygons, polygons, "intersection").length > 0;
+  return parts.filter((part) => boxesOverlap(partBox(builder, part), box) && clipPolygons(part.polygons, polygons, "intersection").length > 0);
+}
+
+const isLid = (part: Part) => part.volume.aviationClass === "class-d";
+
+/**
+ * A Class D lid marks where Class D ends. Where other airspace carries on
+ * through that height, as a Class C shelf over the airport or a restricted
+ * area around it does, a lid there would sit inside that airspace, so each
+ * lid stops at its edge and the airspace there is shown by its own pieces.
+ * `cover` gives the area each lid must leave.
+ */
+function trimLids(builder: Builder, parts: Part[], cover: (lid: Part) => Polygon2D[]): Part[] {
+  return parts.flatMap((part) => {
+    if (!isLid(part)) return [part];
+    const box = partBox(builder, part);
+    const around = cover(part).filter((polygon) => boxesOverlap(boundsOf([polygon]), box));
+    if (!around.length) return [part];
+    const polygons = clipPolygons(part.polygons, around, "difference");
+    return polygons.length ? [{ ...part, polygons }] : [];
   });
 }
+
+/** Airspace a lid's ceiling lies inside, by the charted altitudes rather than the merged levels: a shelf merged onto the lid's level still starts below it. */
+const enclosing = (parts: Part[]) => (lid: Part) =>
+  parts.filter((part) => !isLid(part) && (part.floorM === null || part.floorM < lid.ceilingM - 1e-6) && part.ceilingM > lid.ceilingM + 1e-6).flatMap((part) => part.polygons);
 
 function stepLevels(builder: Builder, parts: Part[], altitudes: number[][], snap: (altitudeM: number) => number, form: "plates" | "tiers"): AirspaceLevelIR[] {
   const { scale } = builder;
@@ -261,9 +287,11 @@ function stepLevels(builder: Builder, parts: Part[], altitudes: number[][], snap
     const altitude = group[0]!;
     const zMm = scale.z(altitude);
     if (zMm < scale.thicknessMm) continue; // below the land: nothing to hold in the air
-    const floors = parts.filter((part) => part.floorM !== null && snap(part.floorM) === altitude && part.volume.aviationClass !== "class-d");
-    const ceilings = parts.filter((part) => snap(part.ceilingM) === altitude);
-    const through = parts.filter((part) => part.volume.aviationClass !== "class-d" && (part.floorM === null || snap(part.floorM) < altitude) && snap(part.ceilingM) > altitude);
+    const floors = parts.filter((part) => part.floorM !== null && snap(part.floorM) === altitude && !isLid(part));
+    const through = parts.filter((part) => !isLid(part) && (part.floorM === null || snap(part.floorM) < altitude) && snap(part.ceilingM) > altitude);
+    const ceilings = trimLids(builder, parts.filter((part) => snap(part.ceilingM) === altitude), enclosing(parts));
+    // Only lids made this level, and other airspace swallowed them: a plate here would be a bare cross-section.
+    if (!floors.length && !ceilings.length) continue;
     const index = levels.length;
     const pieces: AirspacePieceIR[] = [];
     if (form === "plates") {
@@ -296,11 +324,11 @@ function renumber(level: AirspaceLevelIR, index: number): AirspaceLevelIR {
   return { ...level, index, pieces: level.pieces.map((entry) => ({ ...entry, id: entry.id.replace(/^A\d+-/, `A${index + 1}-`) })) };
 }
 
-/** Volumes: every acrylic sheet from the lowest floor to the highest ceiling, stacked; Class D stays a lid at its ceiling. */
+/** Volumes: every acrylic sheet from the lowest floor to the highest ceiling, stacked; Class D stays a lid at its ceiling, around the sheets. */
 function sliceLevels(builder: Builder, parts: Part[], warnings: GeometryWarning[]): AirspaceLevelIR[] | undefined {
   const { scale, thicknessMm } = builder;
-  const solid = parts.filter((part) => part.volume.aviationClass !== "class-d");
-  const lids = parts.filter((part) => part.volume.aviationClass === "class-d");
+  const solid = parts.filter((part) => !isLid(part));
+  const lids = parts.filter(isLid);
   const levels: AirspaceLevelIR[] = [];
   if (solid.length) {
     const bottom = Math.max(scale.thicknessMm, Math.min(...solid.map((part) => (part.floorM === null ? scale.thicknessMm : scale.z(part.floorM)))));
@@ -342,7 +370,10 @@ function sliceLevels(builder: Builder, parts: Part[], warnings: GeometryWarning[
   for (const [ceiling, members] of [...byCeiling].sort((a, b) => a[0] - b[0])) {
     const zMm = scale.z(ceiling);
     const index = levels.length;
-    const pieces = pieceOutline(builder, members.flatMap((part) => part.polygons), zMm).map((polygon, n) => piece(`A${index + 1}-${n + 1}`, "blue", [polygon], partsWithin(builder, members, [polygon])));
+    // A lid takes only the room the solid sheets beside it leave, never a notch out of them.
+    const sheets = levels.filter((level) => Math.abs(level.zMm - zMm) < thicknessMm - 1e-6).flatMap((level) => level.pieces.flatMap((entry) => entry.polygons));
+    const trimmed = trimLids(builder, members, () => sheets);
+    const pieces = trimmed.length ? pieceOutline(builder, trimmed.flatMap((part) => part.polygons), zMm).map((polygon, n) => piece(`A${index + 1}-${n + 1}`, "blue", [polygon], partsWithin(builder, trimmed, [polygon]))) : [];
     if (pieces.length) levels.push({ index, altitudeFt: Math.round(ceiling / FEET), mergedFt: [], zMm, pieces });
   }
   return levels.sort((a, b) => a.zMm - b.zMm).map((level, index) => renumber(level, index));

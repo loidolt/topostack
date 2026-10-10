@@ -18,7 +18,7 @@
       <tr><td>Solid volumes</td><td>Acrylic sheets fill each modeled sector from floor to ceiling.</td><td>A solid representation when you can accommodate the extra material and weight.</td></tr>
     </tbody>
   </table>
-  <p>The pieces are clipped to your map frame. Special use sectors are blue or magenta according to their kind; Class D is represented as a lid rather than a filled tower-airport volume.</p>
+  <p>The pieces are clipped to your map frame. Special use sectors are blue or magenta according to their kind; Class D is represented as a lid rather than a filled tower-airport volume. Where a Class C shelf or a special use area carries on through the lid's height, the lid stops at that airspace's edge, so overlapping areas never cut into each other.</p>
 
   <h2>Choose the classes and ceiling</h2>
   <p><strong>Class B</strong>, <strong>Class C</strong> and <strong>Special use</strong> are on initially. Turn on <strong>Class D</strong> for tower-airport lids. At least one kind stays selected. Special use includes areas such as MOAs, restricted and warning areas; small fragments or areas outside your frame may produce no pieces.</p>

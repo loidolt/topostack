@@ -40,7 +40,8 @@ export const shelf: AirspaceVolumeV1 = {
   ...volume("shelf", "class-b", square(-140, -60, 110, 60), { ref: "msl", ft: SHELF }, { ref: "msl", ft: CEILING }),
   polygons: [{ outer: square(-140, -60, 110, 60), holes: [square(19.98, -30.02, 80.02, 30.02).reverse()] }],
 };
-export const tower = volume("tower", "class-d", circleRing(50, 0, 12), { ref: "sfc", ft: 0 }, { ref: "msl", ft: sheetsUp(16) });
+// A Class D tower straddling the shelf's east edge: the shelf carries on through its ceiling west of x = 110.
+export const tower = volume("tower", "class-d", circleRing(112, 0, 30), { ref: "sfc", ft: 0 }, { ref: "msl", ft: sheetsUp(16) });
 // A floating volume that widens three sheets up, so the stack leans north past the rods under its base.
 export const stem = volume("stem", "class-b", square(40, -60, 100, -10), { ref: "msl", ft: sheetsUp(8) }, { ref: "msl", ft: sheetsUp(14) });
 export const cap = volume("cap", "class-b", square(40, -60, 100, 90), { ref: "msl", ft: sheetsUp(11) }, { ref: "msl", ft: sheetsUp(14) });
