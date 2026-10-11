@@ -298,6 +298,71 @@ describe("preview resource cleanup", () => {
     target.remove();
   });
 
+  it("fits the first real airspace result, preserves later orbits and can refit after resizing", async () => {
+    const update = vi.spyOn(OrbitControls.prototype, "update");
+    const geometry = generateGeometry(DEFAULT_PROJECT, createSamplePreviewSource());
+    const target = document.createElement("div");
+    document.body.append(target);
+    component = mount(ThreePreviewHost, { target, props: { initial: geometry } });
+    const host = component as unknown as { setGeometry: (next: GeometryIRV1) => void; setExploded: (next: number) => void; fitView: () => void };
+    flushSync();
+    const renderer = three.renderers[0]!;
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const controls = update.mock.contexts.at(-1) as OrbitControls;
+    const samplePosition = controls.object.position.clone();
+    const real = structuredClone(geometry);
+    const square = (r: number) => [{ x: -r, y: -r }, { x: r, y: -r }, { x: r, y: r }, { x: -r, y: r }, { x: -r, y: -r }];
+    real.sourceKind = "real";
+    real.airspaceStack = { form: "tiers", thicknessMm: 3, kerfMm: 0.15, ceilingCapFt: 10000, mmPerMeter: 0.01, topMm: 263, rod: DEFAULT_AIRSPACE_STACK.rod, columns: [], cutList: [], backingSheet: false, levels: [{ index: 0, altitudeFt: 6000, mergedFt: [], zMm: 260, pieces: [{ id: "A1-1", tint: "blue", sectorIds: ["sector"], polygons: [{ outer: square(40), holes: [] }], locators: [], markings: [] }] }] };
+    host.setGeometry(real); flushSync();
+    await vi.waitFor(() => expect(controls.target.z).toBeCloseTo(131.5));
+    expect(controls.object.position.distanceTo(samplePosition)).toBeGreaterThan(1);
+    const camera = controls.object as THREE.PerspectiveCamera;
+    const expectFramed = () => {
+      camera.updateMatrixWorld();
+      const scene = renderer.render.mock.lastCall![0] as THREE.Scene;
+      scene.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const box = new THREE.Box3().setFromObject(object);
+        for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+          const projected = new THREE.Vector3(x, y, z).project(camera);
+          expect(Math.abs(projected.x)).toBeLessThan(1);
+          expect(Math.abs(projected.y)).toBeLessThan(1);
+          expect(Math.abs(projected.z)).toBeLessThan(1);
+        }
+      });
+    };
+    expectFramed();
+    controls.target.set(12, -7, 15);
+    camera.position.set(130, -230, 450); controls.update();
+    const position = camera.position.clone(); const orbitTarget = controls.target.clone();
+    const next = structuredClone(real); next.widthMm += 10;
+    host.setGeometry(next); flushSync();
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(camera.position.distanceTo(position)).toBeLessThan(1e-8);
+    expect(controls.target.distanceTo(orbitTarget)).toBeLessThan(1e-8);
+    // A narrow stage needs a larger distance. Fit must use its current aspect.
+    const stage = target.querySelector(".three-stage")!;
+    Object.defineProperty(stage, "clientWidth", { value: 240 });
+    Object.defineProperty(stage, "clientHeight", { value: 640 });
+    resizeCallbacks[0]!([{ contentRect: { width: 240, height: 640 } }] as ResizeObserverEntry[], {} as ResizeObserver);
+    host.fitView();
+    expect(controls.target.z).toBeCloseTo(131.5);
+    expectFramed();
+    // The exploded slider changes mesh positions without rebuilding geometry.
+    host.setExploded(1); flushSync(); host.fitView();
+    expect(controls.target.z).toBeCloseTo((263 + next.layers.length * 13) / 2);
+    expectFramed();
+    // Switching preview modes preserves the real result's camera.
+    const fittedPosition = camera.position.clone();
+    await unmount(component);
+    component = mount(ThreePreviewHost, { target, props: { initial: next } }); flushSync();
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const restored = update.mock.contexts.at(-1) as OrbitControls;
+    expect(restored.object.position.distanceTo(fittedPosition)).toBeLessThan(1e-8);
+    update.mockRestore(); target.remove();
+  });
+
   it("keeps the ambient rig through rebuilds and pauses for reduced motion and hidden tabs", async () => {
     const query = Object.assign(new EventTarget(), { matches: false });
     vi.stubGlobal("matchMedia", () => query);

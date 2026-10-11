@@ -3,7 +3,7 @@
   // destroyed when leaving 3D mode, so the camera pose lives at module level.
   // The fit signature and fitted view travel with the pose, so a remounted
   // preview of the same model keeps the orbit instead of refitting it.
-  let savedCamera: { position: [number, number, number]; target: [number, number, number]; fitSignature?: string; fitDistance: number; fitTarget: [number, number, number] } | undefined;
+  let savedCamera: { position: [number, number, number]; target: [number, number, number]; fitSignature?: string; sourceKind?: string; fitDistance: number; fitTarget: [number, number, number] } | undefined;
 </script>
 
 <script lang="ts">
@@ -23,7 +23,7 @@
    * matching `hiddenPrefixes` are left out while their drafts are drawn above.
    */
   let { geometry, exploded, placement, onUnavailable, rememberCamera = true }: {
-    geometry: Pick<GeometryIRV1, "widthMm" | "heightMm" | "layers" | "waterSurfaces" | "lineStyle" | "waterInserts" | "waterInsertMaterial" | "airspaceStack">;
+    geometry: Pick<GeometryIRV1, "widthMm" | "heightMm" | "layers" | "waterSurfaces" | "lineStyle" | "waterInserts" | "waterInsertMaterial" | "airspaceStack"> & Partial<Pick<GeometryIRV1, "sourceKind">>;
     /** Isolated representative previews must not replace the project camera. */
     rememberCamera?: boolean;
     exploded: number;
@@ -63,10 +63,28 @@
     if (!force && near === runtime.camera.near) return;
     runtime.camera.near = near; runtime.camera.updateProjectionMatrix();
   }
-  export function fitView() {
+  /** Frame the current meshes, including the slider's exploded height. */
+  function updateFit(): void {
     if (!runtime) return;
+    const bounds = new THREE.Box3().setFromObject(runtime.content);
+    if (bounds.isEmpty()) return;
+    bounds.getCenter(fitTarget);
+    const verticalFov = THREE.MathUtils.degToRad(runtime.camera.fov);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(runtime.camera.aspect, 0.1));
+    const radius = bounds.getSize(new THREE.Vector3()).length() / 2;
+    fitDistance = radius / Math.sin(Math.min(verticalFov, horizontalFov) / 2) * 1.15;
+    runtime.controls.maxDistance = Math.max(runtime.controls.maxDistance, fitDistance);
+    runtime.camera.far = Math.max(runtime.camera.far, fitDistance + radius * 1.15);
+    runtime.camera.updateProjectionMatrix();
+  }
+  export function fitView() {
+    if (!runtime || placement) return;
+    updateFit();
+    const direction = runtime.camera.position.clone().sub(runtime.controls.target);
+    if (direction.lengthSq() < 1e-6) direction.set(0.15, -1.65, 2.7);
     runtime.controls.target.copy(fitTarget);
-    setZoom(1);
+    runtime.camera.position.copy(fitTarget).addScaledVector(direction.normalize(), fitDistance);
+    runtime.controls.update(); runtime.requestRender();
   }
   let container: HTMLButtonElement;
   let runtime: Runtime | undefined;
@@ -76,7 +94,7 @@
     /** Top-down camera for placement mode; used once the ease to overhead finishes. */
     topCamera: THREE.OrthographicCamera; topDown: boolean;
     rig: THREE.Group; content: THREE.Group; resizeObserver: ResizeObserver; frame: number;
-    environmentTarget: THREE.WebGLRenderTarget; texture: THREE.CanvasTexture; fitSignature?: string;
+    environmentTarget: THREE.WebGLRenderTarget; texture: THREE.CanvasTexture; fitSignature?: string; sourceKind?: string;
     /** The near plane at fitted distances; `fitNearPlane` lowers it as the camera closes in. */
     farthestNear: number;
     keyLight: THREE.DirectionalLight; detachContextHandlers: () => void; requestRender: () => void;
@@ -201,7 +219,13 @@
     const rig = new THREE.Group(); const content = new THREE.Group(); content.scale.y = -1; rig.add(content); scene.add(rig);
     const topCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 20_000); topCamera.position.set(0, 0, 5_000); topCamera.lookAt(0, 0, 0);
     const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.dampingFactor = 0.065; controls.maxPolarAngle = Math.PI * 0.95; controls.minDistance = CLOSEST_ORBIT_MM; controls.maxDistance = 1800; controls.zoomToCursor = true; controls.target.set(0, 0, 10); camera.position.set(15, -165, 270); controls.update();
-    if (rememberCamera && savedCamera) { camera.position.set(...savedCamera.position); controls.target.set(...savedCamera.target); controls.update(); fitDistance = savedCamera.fitDistance; fitTarget = new THREE.Vector3(...savedCamera.fitTarget); }
+    if (rememberCamera && savedCamera) {
+      camera.position.set(...savedCamera.position); controls.target.set(...savedCamera.target);
+      const savedDistance = controls.getDistance();
+      controls.minDistance = Math.min(controls.minDistance, savedDistance);
+      controls.maxDistance = Math.max(controls.maxDistance, savedDistance);
+      controls.update(); fitDistance = savedCamera.fitDistance; fitTarget = new THREE.Vector3(...savedCamera.fitTarget);
+    }
     const texture = makeWoodTexture();
     let contextLost = false;
     const motionQuery = isEmbedded() ? window.matchMedia("(prefers-reduced-motion: reduce)") : undefined;
@@ -305,13 +329,13 @@
       controls.removeEventListener("change", requestRender);
       controls.removeEventListener("change", updateZoom);
     };
-    runtime = { renderer, camera, topCamera, topDown: false, controls, rig, content, resizeObserver, frame: 0, environmentTarget, texture, keyLight, farthestNear: camera.near, detachContextHandlers, requestRender, sceneResources: [], layerMeshes: new Map(), airspaceBodies: new Map(), fitSignature: rememberCamera ? savedCamera?.fitSignature : undefined };
+    runtime = { renderer, camera, topCamera, topDown: false, controls, rig, content, resizeObserver, frame: 0, environmentTarget, texture, keyLight, farthestNear: camera.near, detachContextHandlers, requestRender, sceneResources: [], layerMeshes: new Map(), airspaceBodies: new Map(), fitSignature: rememberCamera ? savedCamera?.fitSignature : undefined, sourceKind: rememberCamera ? savedCamera?.sourceKind : undefined };
     requestRender();
     return () => {
       if (!runtime) return;
       const { position, target } = orbitBeforePlacement ?? { position: runtime.camera.position, target: runtime.controls.target };
       cancelAnimationFrame(easeFrame);
-      if (rememberCamera) savedCamera = { position: [position.x, position.y, position.z], target: [target.x, target.y, target.z], fitSignature: runtime.fitSignature, fitDistance, fitTarget: [fitTarget.x, fitTarget.y, fitTarget.z] };
+      if (rememberCamera) savedCamera = { position: [position.x, position.y, position.z], target: [target.x, target.y, target.z], fitSignature: runtime.fitSignature, sourceKind: runtime.sourceKind, fitDistance, fitTarget: [fitTarget.x, fitTarget.y, fitTarget.z] };
       cancelAnimationFrame(runtime.frame); runtime.detachContextHandlers(); runtime.resizeObserver.disconnect(); disposeContent(runtime.content, runtime.sceneResources); disposeLayerCache(runtime.layerMeshes); runtime.texture.dispose(); runtime.environmentTarget.dispose(); scene.environment = null; runtime.keyLight.shadow.dispose(); runtime.controls.dispose(); runtime.renderer.dispose();
       // Browsers cap live WebGL contexts; release this one now instead of at GC.
       runtime.renderer.forceContextLoss(); runtime.renderer.domElement.remove(); runtime = undefined;
@@ -328,12 +352,13 @@
   const lineStyle = $derived(geometry.lineStyle);
   const widthMm = $derived(geometry.widthMm);
   const heightMm = $derived(geometry.heightMm);
+  const sourceKind = $derived(geometry.sourceKind);
   // A string, so an equal prefix list from a new array does not rebuild the scene.
   const hiddenKey = $derived(placement?.hiddenPrefixes.join("|") ?? "");
   const hideMarkings = $derived(placement?.hideMarkings ?? false);
   $effect(() => {
     const omitMarkings = hideMarkings;
-    const activeGeometry = { layers, waterSurfaces, waterInserts, waterInsertMaterial, airspaceStack, lineStyle, widthMm, heightMm };
+    const activeGeometry = { layers, waterSurfaces, waterInserts, waterInsertMaterial, airspaceStack, lineStyle, widthMm, heightMm, sourceKind };
     const showAirspace = !placement;
     const hiddenPrefixes = hiddenKey ? hiddenKey.split("|") : [];
     const timeout = window.setTimeout(() => {
@@ -567,24 +592,15 @@
       runtime.controls.maxDistance = Math.max(radius * 8, runtime.controls.getDistance());
       runtime.farthestNear = Math.max(radius * 0.15, 0.5); runtime.camera.far = radius * 24; fitNearPlane(true);
       const fitSignature = [activeGeometry.widthMm, activeGeometry.heightMm, activeGeometry.layers.length, activeGeometry.layers[0]?.materialThicknessMm ?? 1, Math.round(airspaceTop)].join(":");
-      if (runtime.fitSignature !== fitSignature) {
-        const target = new THREE.Vector3(0, 0, Math.max(activeGeometry.layers.length * (activeGeometry.layers[0]?.materialThicknessMm ?? 1), airspaceTop) / 2);
-        const direction = runtime.camera.position.clone().sub(runtime.controls.target);
-        if (direction.lengthSq() < 1e-6) direction.set(0.15, -1.65, 2.7);
-        direction.normalize();
-        const verticalFov = THREE.MathUtils.degToRad(runtime.camera.fov);
-        const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(runtime.camera.aspect, 0.1));
-        const modelRadius = Math.hypot(activeGeometry.widthMm / 2, activeGeometry.heightMm / 2, stackHeight / 2);
-        const distance = modelRadius / Math.sin(Math.min(verticalFov, horizontalFov) / 2) * 1.15;
-        fitDistance = Math.min(runtime.controls.maxDistance, Math.max(runtime.controls.minDistance, distance));
-        fitTarget = target.clone();
-        if (!runtime.fitSignature) {
-          runtime.controls.target.copy(target);
-          runtime.camera.position.copy(target).addScaledVector(direction, fitDistance);
-        }
+      const firstRealResult = activeGeometry.sourceKind === "real" && runtime.sourceKind !== "real";
+      if (runtime.fitSignature !== fitSignature || firstRealResult) {
+        // Replace the bundled sample's framing once real terrain arrives.
+        // Later edits keep the maker's orbit; Fit view remains available.
+        if (!runtime.fitSignature || firstRealResult) fitView(); else updateFit();
         runtime.fitSignature = fitSignature;
         zoom = fitDistance / runtime.controls.getDistance();
       }
+      runtime.sourceKind = activeGeometry.sourceKind;
       runtime.controls.update();
       runtime.renderer.shadowMap.needsUpdate = true;
       runtime.requestRender();

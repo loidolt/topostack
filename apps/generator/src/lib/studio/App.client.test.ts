@@ -97,6 +97,19 @@ describe("TopoStack Svelte shell", () => {
   });
   afterEach(async () => { if (component) await unmount(component); component = undefined; loadTerrainMock.mockReset(); loadVectorMarkingsMock.mockReset(); loadLakeAreasMock.mockReset(); Object.values(noaaArchive).forEach((mock) => mock.mockReset()); theme.preference = "system"; localStorage.removeItem("topostack-theme"); localStorage.removeItem("topostack-studio-panels-v1"); delete window.atomm; nav.section = "charts"; resetDraft(); });
 
+  it("offers Fit view for the standalone 3D preview and calls the mounted preview", async () => {
+    const target = document.createElement("div");
+    component = mount(App, { target, props: { initialPreview: structuredClone(initialPreview) } });
+    await vi.waitFor(() => expect(target.querySelector('[data-testid="three-preview"]')).not.toBeNull());
+    const fit = [...target.querySelectorAll<HTMLButtonElement>(".preview-toolbar button")].find(button => button.textContent?.trim() === "Fit view")!;
+    expect(fit.disabled).toBe(false);
+    fit.click(); await tick();
+    expect(target.querySelector('[data-testid="three-preview"]')?.getAttribute("data-fit-count")).toBe("1");
+    const cut = [...target.querySelectorAll<HTMLButtonElement>('.mode-switch [role="radio"]')].find(button => button.textContent?.includes("Cut layers"))!;
+    cut.click(); await tick();
+    expect([...target.querySelectorAll(".preview-toolbar button")].some(button => button.textContent?.trim() === "Fit view")).toBe(false);
+  });
+
   it("title edits survive committing an open placement draft", async () => {
     const { saveProject } = await import("$lib/storage/storage");
     const target = document.createElement("div");
