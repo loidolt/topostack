@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AIRSPACE_STACK, DEFAULT_PROJECT, generateGeometry, parseProject, type AirspaceStackSettingsV1, type Polygon2D } from "../index.js";
+import { airspaceStackTint, DEFAULT_AIRSPACE_STACK, DEFAULT_PROJECT, generateGeometry, parseProject, type AirspaceStackSettingsV1, type Polygon2D } from "../index.js";
 import { clipPolygons } from "../primitives/offset.js";
 import { signedArea } from "../primitives/geometry2d.js";
 import { exportBlockReason } from "../export/export-policy.js";
@@ -14,6 +14,9 @@ describe("airspace stack settings", () => {
     expect(parseProject(JSON.parse(JSON.stringify(DEFAULT_PROJECT))).airspaceStack).toBeUndefined();
     const invalid = (patch: Record<string, unknown>) => () => parseProject({ ...DEFAULT_PROJECT, airspaceStack: { ...DEFAULT_AIRSPACE_STACK, ...patch } });
     expect(invalid({ form: "cones" })).toThrow("form");
+    expect(invalid({ tint: "amber" })).toThrow("chart tints or clear");
+    const clearTiers = { ...DEFAULT_AIRSPACE_STACK, form: "tiers" as const, tint: "clear" as const };
+    expect(parseProject(JSON.parse(JSON.stringify({ ...DEFAULT_PROJECT, airspaceStack: clearTiers }))).airspaceStack).toEqual(clearTiers);
     expect(invalid({ classes: { B: false, C: false, D: false, specialUse: false } })).toThrow("at least one");
     expect(invalid({ ceilingCapFt: 500 })).toThrow("ceiling cap");
     expect(invalid({ rod: { ...DEFAULT_AIRSPACE_STACK.rod, sizeMm: 20 } })).toThrow("rod size");
@@ -117,6 +120,45 @@ describe("airspace tiers", () => {
     const restricted = volume("range", "special-use", square(-140, 70, -90, 90), { ref: "msl", ft: SHELF }, { ref: "msl", ft: CEILING }, { specialUseKind: "restricted" });
     const tints = build({ form: "tiers" }, [moa, restricted]).airspaceStack!.levels[0]!.pieces.map((entry) => [entry.sectorIds[0], entry.tint]);
     expect(Object.fromEntries(tints)).toEqual({ moa: "magenta", range: "blue" });
+  });
+});
+
+describe("airspace tint", () => {
+  const moa = volume("moa", "special-use", square(-140, -90, -90, -70), { ref: "msl", ft: SHELF }, { ref: "msl", ft: CEILING }, { specialUseKind: "moa" });
+  const tints = (stack: { levels: Array<{ pieces: Array<{ tint: string }> }> }) => new Set(stack.levels.flatMap((level) => level.pieces.map((entry) => entry.tint)));
+
+  it("follows the form when the project does not set it", () => {
+    expect(airspaceStackTint({ form: "plates" })).toBe("clear");
+    expect(airspaceStackTint({ form: "tiers" })).toBe("chart");
+    expect(airspaceStackTint({ form: "volumes" })).toBe("chart");
+    expect(airspaceStackTint({ form: "plates", tint: "chart" })).toBe("chart");
+  });
+
+  it("tints plates after the chart, a piece per colour, each frosted on its own shelves", () => {
+    const stack = build({ form: "plates", tint: "chart" }, [core, shelf, moa]).airspaceStack!;
+    const level = stack.levels[0]!;
+    const blue = level.pieces.filter((entry) => entry.tint === "blue");
+    const magenta = level.pieces.filter((entry) => entry.tint === "magenta");
+    expect(inside({ x: 50, y: 0 }, blue.flatMap((entry) => entry.polygons))).toBe(true); // the core still passes through a tinted plate
+    expect(inside({ x: 0, y: 50 }, blue.flatMap((entry) => entry.frost ?? []))).toBe(true);
+    expect(magenta.flatMap((entry) => entry.sectorIds)).toEqual(["moa"]);
+    expect(inside({ x: -115, y: -80 }, magenta.flatMap((entry) => entry.frost ?? []))).toBe(true);
+  });
+
+  it("cuts tiers and volumes from clear acrylic when asked, one piece across colours", () => {
+    const tiers = build({ form: "tiers", tint: "clear" }, [shelf, moa]).airspaceStack!;
+    expect(tints(tiers)).toEqual(new Set(["clear"]));
+    expect(tiers.levels.every((level) => level.pieces.every((entry) => entry.frost === undefined))).toBe(true);
+    const volumes = build({ form: "volumes", tint: "clear" }, [shelf, tower]).airspaceStack;
+    const withLid = build({ form: "volumes", tint: "clear", classes: { ...DEFAULT_AIRSPACE_STACK.classes, D: true } }, [shelf, tower]).airspaceStack!;
+    expect(volumes && tints(volumes)).toEqual(new Set(["clear"]));
+    expect(tints(withLid)).toEqual(new Set(["clear"]));
+  });
+
+  it("leaves projects without a tint as they were", () => {
+    const fingerprint = (tint?: "chart" | "clear") => projectFingerprint({ ...project, airspaceStack: { ...DEFAULT_AIRSPACE_STACK, ...(tint ? { tint } : {}) } });
+    expect(fingerprint()).not.toBe(fingerprint("clear"));
+    expect(tints(build({ form: "tiers" }, [shelf, moa]).airspaceStack!)).toEqual(new Set(["blue", "magenta"]));
   });
 });
 

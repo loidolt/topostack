@@ -1,4 +1,4 @@
-import { AIRSPACE_STACK_FORMS, AIRSPACE_STACK_LIMITS, DEFAULT_PLAQUE_SIZE_MM, DEFAULT_PROJECT, MAP_MARKER_SIZE_MM, MARKER_SYMBOLS, MAX_CUSTOM_DATA_NAME_LENGTH, MAX_PROJECT_DIMENSION_MM, MAX_PROJECT_NAME_LENGTH, MAX_VERTICAL_EXAGGERATION, MIN_VERTICAL_EXAGGERATION, MIN_WORK_AREA_MM, northArrowMaximumMm, PLAQUE_MAX_LINE_LENGTH, PLAQUE_MAX_LINES, type AirspaceRodSettingsV1, type AirspaceStackForm, type AirspaceStackSettingsV1, type AviationDetailsV1, type BuiltInMarkerSymbol, type CropShape, type GeoBounds, type GeoPoint, type MapMarkerV1, type ProjectConfigV1, type UnitSystem } from "../types.js";
+import { AIRSPACE_STACK_FORMS, AIRSPACE_STACK_LIMITS, AIRSPACE_STACK_TINTS, DEFAULT_PLAQUE_SIZE_MM, DEFAULT_PROJECT, MAP_MARKER_SIZE_MM, MARKER_SYMBOLS, MAX_CUSTOM_DATA_NAME_LENGTH, MAX_PROJECT_DIMENSION_MM, MAX_PROJECT_NAME_LENGTH, MAX_VERTICAL_EXAGGERATION, MIN_VERTICAL_EXAGGERATION, MIN_WORK_AREA_MM, northArrowMaximumMm, PLAQUE_MAX_LINE_LENGTH, PLAQUE_MAX_LINES, type AirspaceRodSettingsV1, type AirspaceStackForm, type AirspaceStackSettingsV1, type AirspaceStackTint, type AviationDetailsV1, type BuiltInMarkerSymbol, type CropShape, type GeoBounds, type GeoPoint, type MapMarkerV1, type ProjectConfigV1, type UnitSystem } from "../types.js";
 import { fnv1aHex, stableStringify } from "../primitives/hash.js";
 import { DEFAULT_AIRSPACE_STACK } from "../pipeline/airspace-settings.js";
 import { boundsAround, boundsForProject, coverBounds, isMercatorBounds, MERCATOR_MAX_LATITUDE, wrapLongitude, zoomForBounds } from "./bounds.js";
@@ -40,6 +40,7 @@ export type ProjectRequestAviation = Partial<AviationDetailsV1>;
 export interface ProjectRequestAirspaceStack {
   form?: AirspaceStackForm;
   classes?: Partial<AirspaceStackSettingsV1["classes"]>;
+  tint?: AirspaceStackTint;
   ceilingCapFt?: number;
   thicknessMm?: number;
   kerfMm?: number;
@@ -231,11 +232,12 @@ const defined = <T extends object>(record: T): T => Object.fromEntries(Object.en
 function airspaceStackValue(value: unknown, issues: Issues): ProjectRequestAirspaceStack | false | undefined {
   if (value === false) return false;
   if (!isRecord(value)) return issues.add("airspaceStack", "Must be false, or an object of airspace settings.");
-  unknownKeys(value, ["form", "classes", "ceilingCapFt", "thicknessMm", "kerfMm", "rod"], "airspaceStack", issues);
+  unknownKeys(value, ["form", "classes", "tint", "ceilingCapFt", "thicknessMm", "kerfMm", "rod"], "airspaceStack", issues);
   const limits = AIRSPACE_STACK_LIMITS;
   const stack: ProjectRequestAirspaceStack = {
     form: value.form === undefined ? undefined : oneOf(value.form, "airspaceStack.form", AIRSPACE_STACK_FORMS, issues),
     classes: value.classes === undefined ? undefined : switches(value.classes, PROJECT_REQUEST_AIRSPACE_CLASS_KEYS, "airspaceStack.classes", issues),
+    tint: value.tint === undefined ? undefined : oneOf(value.tint, "airspaceStack.tint", AIRSPACE_STACK_TINTS, issues),
   };
   for (const key of ["ceilingCapFt", "thicknessMm", "kerfMm"] as const) {
     if (value[key] !== undefined) stack[key] = numberIn(value[key], `airspaceStack.${key}`, limits[key], issues);

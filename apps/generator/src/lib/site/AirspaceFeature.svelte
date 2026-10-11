@@ -8,7 +8,7 @@
     <p class="eyebrow">Above the landscape</p>
     <h2 id="airspace-title">Give airspace a<br />new perspective.</h2>
     <p>Build the sky above your terrain. Turn FAA airspace into clear or tinted acrylic shelves, supported on rods at the heights your model represents.</p>
-    <p class="detail">Choose open plates, colored tiers, or solid volumes. Preview the stack, then export separate acrylic cut files, rod lengths, and an illustrated assembly guide.</p>
+    <p class="detail">Build it layered or solid, in clear or chart-colored acrylic. Preview the stack, then export separate acrylic cut files, rod lengths, and an illustrated assembly guide.</p>
     <div class="actions">
       <a class="primary-link" href={`${base}/guides/airspace-in-3d`}>Make an airspace model <ArrowRight size={17} aria-hidden="true" /></a>
       <a class="guide-link" href={`${base}/guides/airspace-assembly`}>See how it goes together</a>

@@ -3,22 +3,25 @@
   import Article from "$lib/site/Article.svelte";
 </script>
 
-<Article title="Make an airspace model in 3D" intro="Show the sky above a place as acrylic over a wooden terrain relief. Choose airspace classes, compare three ways to build them, and inspect the pieces before you cut.">
+<Article title="Make an airspace model in 3D" intro="Show the sky above a place as acrylic over a wooden terrain relief. Choose airspace classes, compare the ways to build them, and inspect the pieces before you cut.">
   <h2>Start with an airport and its surroundings</h2>
   <p>Choose <strong>Layered</strong> in the <a href={`${base}/studio`}>studio</a>, find a US airport, and frame the surrounding area in <strong>Map</strong>. Denver is a useful first Class B project; Colorado Springs (COS) is a useful Class C project. A wider crop shows the changing shelf footprints; a tight crop around a runway may sit entirely inside one sector and produce a single plate.</p>
   <p>Open the <strong>Aviation</strong> panel and turn on <strong>Airspace in 3D</strong>. This builds acrylic above the terrain. The switches above it, under <strong>On the map</strong>, draw airport and airspace linework instead; they do not turn on the acrylic model.</p>
   <p class="note">FAA coverage includes the US and its territories. Only the selected Class B, C, D and special use sectors are modeled. The default Crater Lake crop may have no selected airspace. These are decorative models, not for navigation or flight planning.</p>
 
   <h2>Choose how to build the airspace</h2>
+  <p>Under <strong>Build as</strong>, choose <strong>Layered</strong> for acrylic only at the altitudes where airspace starts or ends, with open air between levels, or <strong>Solid</strong> for acrylic sheets that fill each modeled sector from floor to ceiling. Solid uses several times the acrylic and weight.</p>
+  <p>Layered airspace asks what <strong>Each level</strong> holds:</p>
   <table>
-    <thead><tr><th scope="col">Build as</th><th scope="col">What you make</th><th scope="col">When to choose it</th></tr></thead>
+    <thead><tr><th scope="col">Each level</th><th scope="col">What you make</th><th scope="col">When to choose it</th></tr></thead>
     <tbody>
-      <tr><td>Plates</td><td>Clear acrylic at the altitudes where airspace starts or ends. Engraved shelf markings show the sectors; the space between plates stays open.</td><td>A clear view through the model with fewer acrylic sheets.</td></tr>
-      <tr><td>Tiers</td><td>Tinted pieces at shelf boundaries, with open space between levels. Class B is blue and Class C is magenta.</td><td>Show each shelf's footprint and distinguish the classes.</td></tr>
-      <tr><td>Solid volumes</td><td>Acrylic sheets fill each modeled sector from floor to ceiling.</td><td>A solid representation when you can accommodate the extra material and weight.</td></tr>
+      <tr><td>Whole slice</td><td>A piece cut to all the airspace at that altitude, with the shelves that start or end there frosted and the sectors it passes through engraved.</td><td>Sturdy pieces that overlap, so one rod can rise through several levels. Reads like a map of the airspace at each height.</td></tr>
+      <tr><td>Shelves only</td><td>Only the shelves that start or end at that altitude: the upside-down wedding cake of the chart users' guide. A sector that starts at the surface gets a floor just above the terrain.</td><td>The least acrylic and the clearest steps. Narrow rings need more rods of their own.</td></tr>
     </tbody>
   </table>
-  <p>The pieces are clipped to your map frame. Special use sectors are blue or magenta according to their kind; Class D is represented as a lid rather than a filled tower-airport volume. Where a Class C shelf or a special use area carries on through the lid's height, the lid stops at that airspace's edge, so overlapping areas never cut into each other.</p>
+  <p>The two look much alike over a single Class B, whose shelves share one ceiling. They differ most where special use areas span several levels: a whole slice shows such an area at every level it passes through, shelves only at its floor and ceiling.</p>
+  <p>Under <strong>Acrylic</strong>, choose <strong>Clear</strong> to cut every piece from clear acrylic, with each class shown by its engraved chart line style, or <strong>Chart colors</strong> to cut Class B and the prohibited, restricted and warning areas from blue acrylic and Class C, MOAs and alert areas from magenta. New airspace starts clear, and the acrylic stays as you set it when you change the form.</p>
+  <p>The pieces are clipped to your map frame. Class D is represented as a lid rather than a filled tower-airport volume. Where a Class C shelf or a special use area carries on through the lid's height, the lid stops at that airspace's edge, so overlapping areas never cut into each other.</p>
 
   <h2>Choose the classes and ceiling</h2>
   <p><strong>Class B</strong>, <strong>Class C</strong> and <strong>Special use</strong> are on initially. Turn on <strong>Class D</strong> for tower-airport lids. At least one kind stays selected. Special use includes areas such as MOAs, restricted and warning areas; small fragments or areas outside your frame may produce no pieces.</p>

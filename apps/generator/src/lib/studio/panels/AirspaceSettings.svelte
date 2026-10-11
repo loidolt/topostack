@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AIRSPACE_STACK_FORMS, type AirspaceStackForm, type AirspaceStackSettingsV1 } from "@topostack/core";
+  import { airspaceStackTint, type AirspaceStackForm, type AirspaceStackSettingsV1, type AirspaceStackTint } from "@topostack/core";
   import LengthField from "$lib/studio/StudioLengthField.svelte";
   import NumberField from "$lib/studio/StudioNumberField.svelte";
   import Switch from "$lib/studio/StudioSwitch.svelte";
@@ -20,11 +20,37 @@
   const fine = $derived(studio.project.units === "imperial" ? 0.01 : 0.1);
   const finer = $derived(studio.project.units === "imperial" ? 0.001 : 0.01);
 
-  const FORMS: Record<AirspaceStackForm, { label: string; note: string }> = {
-    plates: { label: "Plates", note: "A clear plate at each altitude where airspace starts or ends, cut to the airspace there, with the shelves frosted. Open air between plates." },
-    tiers: { label: "Tiers", note: "Tinted pieces where each shelf starts and ends, like the chart guide's wedding cake: blue Class B, magenta Class C. Open air between tiers." },
-    volumes: { label: "Solid volumes", note: "Every acrylic sheet from floor to ceiling, stacked solid. Uses far more acrylic than plates or tiers." },
+  type Layered = Exclude<AirspaceStackForm, "volumes">;
+  // Plates and tiers are one choice, layered, and a second: what each level holds.
+  // Switching to solid and back returns to the layered form last used.
+  let lastLayered = $state<Layered>("plates");
+  $effect(() => { if (settings.form !== "volumes") lastLayered = settings.form; });
+  const layered = $derived<Layered>(settings.form === "volumes" ? lastLayered : settings.form);
+  const tint = $derived(airspaceStackTint(settings));
+  // A project without a tint takes its form's; changing the form here keeps the acrylic shown, so it never changes by itself.
+  const updateForm = (form: AirspaceStackForm) => update({ form, tint });
+
+  const BUILDS = [
+    { value: "layered", label: "Layered", note: "Acrylic at each altitude where airspace starts or ends" },
+    { value: "solid", label: "Solid", note: "Every sheet from floor to ceiling" },
+  ] as const;
+  const LEVELS: ReadonlyArray<{ value: Layered; label: string; note: string }> = [
+    { value: "plates", label: "Whole slice", note: "All the airspace at that height" },
+    { value: "tiers", label: "Shelves only", note: "Just the steps of the wedding cake" },
+  ];
+  const TINTS: ReadonlyArray<{ value: AirspaceStackTint; label: string; note: string }> = [
+    { value: "clear", label: "Clear", note: "Class shown by engraving" },
+    { value: "chart", label: "Chart colors", note: "Blue and magenta sheets" },
+  ];
+  const FORM_NOTES: Record<AirspaceStackForm, string> = {
+    plates: "Each level is cut to all the airspace at its height, shelves frosted. Sturdy, and through rods pass several levels. Open air between levels.",
+    tiers: "Each level holds only the shelves that start or end there, the chart guide's wedding cake. The least acrylic; more rods. Open air between levels.",
+    volumes: "Every acrylic sheet from floor to ceiling, stacked solid. Uses far more acrylic than layered airspace.",
   };
+  // Blue and magenta as the 3D preview tints them.
+  const BLUE = "#3f7fd4";
+  const MAGENTA = "#b44a91";
+  const choose = <T,>(value: T, current: T, apply: () => void) => () => { if (value !== current) apply(); };
 
   const stack = $derived(studio.geometry?.airspaceStack);
   const rods = $derived(stack?.columns.reduce((total, column) => total + column.segments.length, 0) ?? 0);
@@ -39,13 +65,58 @@
 </script>
 
 <div class="toggle-settings airspace-settings">
+  {#snippet profile(form: AirspaceStackForm)}
+    <path class="airspace-choice-ground" d="M2 26H50" />
+    {#if form === "volumes"}
+      <path class="airspace-choice-solid" d="M20 25V18H12V11H4V4H48V11H40V18H32V25Z" />
+    {:else}
+      <path class="airspace-choice-outline" d="M20 25V18H12V11H4V4H48V11H40V18H32V25" />
+      <path class="airspace-choice-piece" d={form === "plates" ? "M12 18H40M4 11H48M4 4H48" : "M12 18H20M32 18H40M4 11H12M40 11H48M4 4H48M20 23H32"} />
+    {/if}
+  {/snippet}
+  <p class="subgroup-heading">Build as</p>
+  <div class="line-presets airspace-choices" role="radiogroup" aria-label="Airspace form">
+    {#each BUILDS as option (option.value)}
+      {@const on = (settings.form === "volumes") === (option.value === "solid")}
+      <button type="button" role="radio" aria-checked={on} data-state={on ? "on" : "off"} tabindex={on ? 0 : -1} onkeydown={studio.navigateChoice} onclick={choose(on, true, () => updateForm(option.value === "solid" ? "volumes" : layered))}>
+        <svg viewBox="0 0 52 28" aria-hidden="true">{@render profile(option.value === "solid" ? "volumes" : layered)}</svg>
+        <span><b>{option.label}</b><small>{option.note}</small></span>
+      </button>
+    {/each}
+  </div>
+  {#if settings.form !== "volumes"}
+    <p class="subgroup-heading">Each level</p>
+    <div class="line-presets airspace-choices" role="radiogroup" aria-label="Airspace levels">
+      {#each LEVELS as option (option.value)}
+        {@const on = settings.form === option.value}
+        <button type="button" role="radio" aria-checked={on} data-state={on ? "on" : "off"} tabindex={on ? 0 : -1} onkeydown={studio.navigateChoice} onclick={choose(option.value, settings.form, () => updateForm(option.value))}>
+          <svg viewBox="0 0 52 28" aria-hidden="true">{@render profile(option.value)}</svg>
+          <span><b>{option.label}</b><small>{option.note}</small></span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  <small class="depth-note">{FORM_NOTES[settings.form]}{settings.form === "volumes" ? "" : " The two differ most where special use airspace spans several levels; over a single Class B they look much alike."}</small>
+  <p class="subgroup-heading">Acrylic</p>
+  <div class="line-presets airspace-choices" role="radiogroup" aria-label="Airspace acrylic">
+    {#each TINTS as option (option.value)}
+      {@const on = tint === option.value}
+      <button type="button" role="radio" aria-checked={on} data-state={on ? "on" : "off"} tabindex={on ? 0 : -1} onkeydown={studio.navigateChoice} onclick={choose(option.value, tint, () => update({ tint: option.value }))}>
+        <svg viewBox="0 0 52 28" aria-hidden="true">
+          {#if option.value === "chart"}
+            <path class="airspace-choice-piece" d="M4 20H22M4 13H22M4 6H22" stroke={BLUE} />
+            <path class="airspace-choice-piece" d="M30 17H48M30 8H48" stroke={MAGENTA} />
+          {:else}
+            <path class="airspace-choice-glass" d="M4 20H22M4 13H22M4 6H22M30 17H48M30 8H48" />
+            <path class="airspace-choice-engraving" d="M4 20H22M4 13H22M4 6H22" stroke={BLUE} />
+            <path class="airspace-choice-engraving" d="M30 17H48M30 8H48" stroke={MAGENTA} />
+          {/if}
+        </svg>
+        <span><b>{option.label}</b><small>{option.note}</small></span>
+      </button>
+    {/each}
+  </div>
   <p class="subgroup-heading">Airspace</p>
-  <label class="field-row airspace-select">Build as
-    <select aria-label="Airspace form" value={settings.form} onchange={(event) => update({ form: event.currentTarget.value as AirspaceStackForm })}>
-      {#each AIRSPACE_STACK_FORMS as form (form)}<option value={form}>{FORMS[form].label}</option>{/each}
-    </select>
-  </label>
-  <small class="depth-note">{FORMS[settings.form].note}</small>
   <div class="toggle-stack">
     <Switch checked={settings.classes.B} disabled={lastOn("B")} onCheckedChange={(B) => update({ classes: { ...settings.classes, B } })} aria-label="Class B airspace"><span class="toggle-label">Class B</span></Switch>
     <Switch checked={settings.classes.C} disabled={lastOn("C")} onCheckedChange={(C) => update({ classes: { ...settings.classes, C } })} aria-label="Class C airspace"><span class="toggle-label">Class C</span></Switch>

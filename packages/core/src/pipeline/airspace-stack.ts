@@ -4,7 +4,7 @@ import { normalizedPolygons } from "./water-inserts.js";
 import { AIRSPACE_MIN_PIECE_MM2, partitionAirspace } from "./airspace-partition.js";
 import { annotateAirspace } from "./airspace-annotations.js";
 import { placeAirspaceSupports } from "./airspace-supports.js";
-import { AIRSPACE_DEFAULT_CAP_FT, airspaceMaterial, airspaceTint, type AirspaceStageMemo } from "./airspace-settings.js";
+import { AIRSPACE_DEFAULT_CAP_FT, airspaceMaterial, airspaceStackTint, airspaceTint, type AirspaceStageMemo } from "./airspace-settings.js";
 import type {
   AirspaceLevelIR, AirspacePieceIR, AirspaceStackIR, AirspaceStackSettingsV1, AirspaceTint, AirspaceVolumeV1,
   GeometryWarning, LayerIR, Point2D, Polygon2D, ProjectConfigV1, SourceBundleV1, WaterInsertIR,
@@ -211,6 +211,17 @@ interface Builder {
   dropped: { count: number };
   clearance: Map<number, Polygon2D[]>;
   partBounds: Map<Part, Bounds2D>;
+  /** Every piece is cut from clear acrylic rather than tinted after the chart. */
+  clear: boolean;
+}
+
+/** The acrylic a part's piece is cut from. */
+const tintOf = (builder: Builder, part: Part): AirspaceTint => (builder.clear ? "clear" : airspaceTint(part.volume));
+
+/** The tints among some parts, blue before magenta. */
+function tintsOf(builder: Builder, parts: Part[]): AirspaceTint[] {
+  const present = new Set(parts.map((part) => tintOf(builder, part)));
+  return (["clear", "blue", "magenta"] as const).filter((tint) => present.has(tint));
 }
 
 /** The terrain that rises into a piece whose underside is at `zMm`, grown by the clearance; sheets nest, so the lowest such sheet is all of it. */
@@ -294,25 +305,17 @@ function stepLevels(builder: Builder, parts: Part[], altitudes: number[][], snap
     if (!floors.length && !ceilings.length) continue;
     const index = levels.length;
     const pieces: AirspacePieceIR[] = [];
-    if (form === "plates") {
-      const members = [...floors, ...ceilings, ...through];
-      const outline = pieceOutline(builder, members.flatMap((part) => part.polygons), zMm);
-      const shelves = [...floors, ...ceilings];
-      const frosted = shelves.length && outline.length ? closed(shelves.flatMap((part) => part.polygons), builder.config.minimumFeatureMm) : [];
-      outline.forEach((polygon, n) => {
-        const own = [polygon];
-        const frost = frosted.length ? clipPolygons(frosted, own, "intersection") : [];
-        pieces.push(piece(`A${index + 1}-${n + 1}`, "clear", own, partsWithin(builder, members, own), {
-          frost: normalizedPolygons(frost, builder.config.minimumFeatureMm),
-        }));
-      });
-    } else {
-      for (const tint of ["blue", "magenta"] as const) {
-        const members = [...floors, ...ceilings].filter((part) => airspaceTint(part.volume) === tint);
-        if (!members.length) continue;
-        for (const polygon of pieceOutline(builder, members.flatMap((part) => part.polygons), zMm)) {
-          pieces.push(piece(`A${index + 1}-${pieces.length + 1}`, tint, [polygon], partsWithin(builder, members, [polygon])));
-        }
+    // Plates cut the whole cross-section, tiers only the shelves; each tint is its own piece.
+    const shelves = [...floors, ...ceilings];
+    const members = form === "plates" ? [...shelves, ...through] : shelves;
+    for (const tint of tintsOf(builder, members)) {
+      const own = members.filter((part) => tintOf(builder, part) === tint);
+      const outline = pieceOutline(builder, own.flatMap((part) => part.polygons), zMm);
+      const ownShelves = form === "plates" ? shelves.filter((part) => tintOf(builder, part) === tint) : [];
+      const frosted = ownShelves.length && outline.length ? closed(ownShelves.flatMap((part) => part.polygons), builder.config.minimumFeatureMm) : [];
+      for (const polygon of outline) {
+        const frost = frosted.length ? clipPolygons(frosted, [polygon], "intersection") : [];
+        pieces.push(piece(`A${index + 1}-${pieces.length + 1}`, tint, [polygon], partsWithin(builder, own, [polygon]), form === "plates" ? { frost: normalizedPolygons(frost, builder.config.minimumFeatureMm) } : {}));
       }
     }
     if (pieces.length) levels.push({ index, altitudeFt: Math.round(altitude / FEET), mergedFt: group.slice(1).map((value) => Math.round(value / FEET)), zMm, pieces });
@@ -346,11 +349,11 @@ function sliceLevels(builder: Builder, parts: Part[], warnings: GeometryWarning[
       const altitude = scale.baseM + (zMm - scale.thicknessMm) / scale.mmPerMeter;
       const index = levels.length;
       const pieces: AirspacePieceIR[] = [];
-      for (const tint of ["blue", "magenta"] as const) {
-        // A sheet belongs to a sector when its middle lies between the floor and the ceiling.
-        const middle = altitude + thicknessMm / 2 / scale.mmPerMeter;
-        const members = solid.filter((part) => airspaceTint(part.volume) === tint && (part.floorM === null || part.floorM <= middle) && part.ceilingM > middle);
-        if (!members.length) continue;
+      // A sheet belongs to a sector when its middle lies between the floor and the ceiling.
+      const middle = altitude + thicknessMm / 2 / scale.mmPerMeter;
+      const present = solid.filter((part) => (part.floorM === null || part.floorM <= middle) && part.ceilingM > middle);
+      for (const tint of tintsOf(builder, present)) {
+        const members = present.filter((part) => tintOf(builder, part) === tint);
         const terrainIndex = builder.layers.findIndex((layer) => (layer.index + 1) * scale.thicknessMm > zMm);
         const key = `${terrainIndex}:${members.map((part) => partIndexes.get(part)).join(",")}`;
         let outline = outlines.get(key);
@@ -373,7 +376,7 @@ function sliceLevels(builder: Builder, parts: Part[], warnings: GeometryWarning[
     // A lid takes only the room the solid sheets beside it leave, never a notch out of them.
     const sheets = levels.filter((level) => Math.abs(level.zMm - zMm) < thicknessMm - 1e-6).flatMap((level) => level.pieces.flatMap((entry) => entry.polygons));
     const trimmed = trimLids(builder, members, () => sheets);
-    const pieces = trimmed.length ? pieceOutline(builder, trimmed.flatMap((part) => part.polygons), zMm).map((polygon, n) => piece(`A${index + 1}-${n + 1}`, "blue", [polygon], partsWithin(builder, trimmed, [polygon]))) : [];
+    const pieces = trimmed.length ? pieceOutline(builder, trimmed.flatMap((part) => part.polygons), zMm).map((polygon, n) => piece(`A${index + 1}-${n + 1}`, builder.clear ? "clear" : "blue", [polygon], partsWithin(builder, trimmed, [polygon]))) : [];
     if (pieces.length) levels.push({ index, altitudeFt: Math.round(ceiling / FEET), mergedFt: [], zMm, pieces });
   }
   return levels.sort((a, b) => a.zMm - b.zMm).map((level, index) => renumber(level, index));
@@ -524,7 +527,7 @@ function piecesAndRods(config: ProjectConfigV1, source: SourceBundleV1, layers: 
     .map((part) => (part.floorM !== null && !part.floorFromGround && scale.z(part.floorM) <= t ? { ...part, floorM: null } : part))
     .filter((part) => scale.z(part.ceilingM) > t);
   const terraced = new Set(parts.filter((part) => part.floorFromGround || part.ceilingFromGround).map((part) => part.volume.id));
-  const builder: Builder = { config, layers, scale, thicknessMm: material.thicknessMm, dropped: { count: 0 }, clearance: new Map(), partBounds: new Map() };
+  const builder: Builder = { config, layers, scale, thicknessMm: material.thicknessMm, dropped: { count: 0 }, clearance: new Map(), partBounds: new Map(), clear: airspaceStackTint(settings) === "clear" };
   let levels: AirspaceLevelIR[];
   if (settings.form === "volumes") {
     const sliced = sliceLevels(builder, parts, warnings);

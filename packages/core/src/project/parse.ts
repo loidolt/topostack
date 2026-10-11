@@ -79,6 +79,7 @@ function airspaceStackValue(value: unknown): AirspaceStackSettingsV1 {
   return {
     form: settings.form as AirspaceStackSettingsV1["form"],
     classes: { B: booleanValue(classes.B, "airspace Class B"), C: booleanValue(classes.C, "airspace Class C"), D: booleanValue(classes.D, "airspace Class D"), specialUse: booleanValue(classes.specialUse, "airspace special use") },
+    ...(settings.tint === undefined ? {} : { tint: settings.tint as AirspaceStackSettingsV1["tint"] }),
     ...(settings.ceilingCapFt === undefined ? {} : { ceilingCapFt: numberValue(settings.ceilingCapFt) }),
     ...(settings.thicknessMm === undefined ? {} : { thicknessMm: numberValue(settings.thicknessMm) }),
     ...(settings.kerfMm === undefined ? {} : { kerfMm: numberValue(settings.kerfMm) }),

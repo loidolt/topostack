@@ -109,7 +109,9 @@
     <thead><tr><th scope="col">Control</th><th scope="col">Range or options</th><th scope="col">Default</th><th scope="col">Notes</th></tr></thead>
     <tbody>
       <tr><td>Airspace in 3D</td><td>On, off</td><td>Off</td><td>Builds FAA acrylic airspace above the terrain; requests its data when enabled.</td></tr>
-      <tr><td>Build as</td><td>Plates, Tiers, Solid volumes</td><td>Plates</td><td>Clear boundary plates, tinted boundary pieces, or sheets filling the volume.</td></tr>
+      <tr><td>Build as</td><td>Layered, Solid</td><td>Layered</td><td>Acrylic only where airspace starts or ends, or sheets filling the volume.</td></tr>
+      <tr><td>Each level</td><td>Whole slice, Shelves only</td><td>Whole slice</td><td><em>Layered</em>. A piece cut to all the airspace at that height, or only the shelves that start or end there.</td></tr>
+      <tr><td>Acrylic</td><td>Clear, Chart colors</td><td>Clear</td><td>Clear pieces engraved in the chart's line styles, or blue and magenta acrylic after the sectional.</td></tr>
       <tr><td>Class B, Class C, Special use, Class D</td><td>On, off</td><td>B, C and special use on; D off</td><td>At least one stays selected. Class D builds flat lids. FAA coverage only.</td></tr>
       <tr><td>Ceiling cap</td><td>1,000–60,000 ft MSL, or automatic</td><td>Highest selected B/C ceiling; otherwise 10,000 ft</td><td>Limits the representation, including unlimited sectors. It is an absolute altitude, not height above the airport.</td></tr>
       <tr><td>Acrylic thickness</td><td>1–10 mm</td><td>Material thickness</td><td>Sets airspace stock thickness and available space between levels.</td></tr>

@@ -509,13 +509,16 @@ export interface ProjectConfigV1 {
 }
 
 /**
- * How airspace is built in acrylic. `plates`: one clear plate per altitude
- * level, cut to the airspace there. `tiers`: tinted pieces only where a shelf
- * starts or ends, the chart guide's wedding cake. `volumes`: every acrylic
- * sheet from floor to ceiling, stacked solid.
+ * How airspace is built in acrylic. `plates`: a piece at each altitude level,
+ * cut to the whole cross-section of the airspace there. `tiers`: pieces only
+ * where a shelf starts or ends, the chart guide's wedding cake. `volumes`:
+ * every acrylic sheet from floor to ceiling, stacked solid.
  */
 export type AirspaceStackForm = "plates" | "tiers" | "volumes";
 export const AIRSPACE_STACK_FORMS = ["plates", "tiers", "volumes"] as const satisfies readonly AirspaceStackForm[];
+/** The acrylic airspace is cut from: `chart` tints each piece after the sectional (blue or magenta), `clear` cuts every piece from clear acrylic. */
+export type AirspaceStackTint = "chart" | "clear";
+export const AIRSPACE_STACK_TINTS = ["chart", "clear"] as const satisfies readonly AirspaceStackTint[];
 /** The ranges `validateProject` holds airspace settings to; the agent request contract publishes the same. */
 export const AIRSPACE_STACK_LIMITS = {
   ceilingCapFt: { min: 1_000, max: 60_000 },
@@ -545,6 +548,8 @@ export interface AirspaceStackSettingsV1 {
   form: AirspaceStackForm;
   /** Which airspace is built. Class D is a single lid at its ceiling over each airport. */
   classes: { B: boolean; C: boolean; D: boolean; specialUse: boolean };
+  /** Absent follows the form: clear for plates, chart tints for tiers and volumes. */
+  tint?: AirspaceStackTint;
   /** Every ceiling is trimmed to this; absent takes the highest Class B or C ceiling in the crop, else 10,000 ft. */
   ceilingCapFt?: number;
   /** Acrylic sheet thickness; absent follows `materialThicknessMm`. */
