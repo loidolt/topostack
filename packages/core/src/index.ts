@@ -31,7 +31,7 @@ export type { FlatWaterArea, PaintLayerClip, PaintRegionSources } from "./pipeli
 export { DEFAULT_WATER_INSERT_CLEARANCE_MM, WATER_INSERT_LEDGE_MM, WATER_INSERT_MIN_WIDTH_MM, waterInsertMaterial } from "./pipeline/water-inserts.js";
 export { airspacePieceMarkings } from "./export/airspace.js";
 export { airspacePanelGroups } from "./pipeline/airspace-panels.js";
-export { AIRSPACE_DEFAULT_CAP_FT, DEFAULT_AIRSPACE_STACK, airspaceMaterial, airspaceTint, registerAirspaceStage, type AirspaceStage } from "./pipeline/airspace-settings.js";
+export { AIRSPACE_DEFAULT_CAP_FT, DEFAULT_AIRSPACE_STACK, airspaceMaterial, airspaceStackTint, airspaceTint, registerAirspaceStage, type AirspaceStage } from "./pipeline/airspace-settings.js";
 export { acrylicPanelGroups } from "./pipeline/water-insert-panels.js";
 export { acrylicGeometry, acrylicNestableParts, resolveAcrylicNestSettings } from "./export/water-inserts.js";
 export { FEET_PER_METER, displayElevation, displayLength, elevationUnit, lengthUnit, millimetersFromDisplay } from "./primitives/units.js";

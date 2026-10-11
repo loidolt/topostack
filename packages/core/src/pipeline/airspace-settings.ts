@@ -1,4 +1,4 @@
-import type { AirspaceStackIR, AirspaceStackSettingsV1, AirspaceTint, AirspaceVolumeV1, GeometryWarning, LayerIR, Point2D, ProjectConfigV1, SourceBundleV1, WaterInsertIR } from "../types.js";
+import type { AirspaceStackIR, AirspaceStackSettingsV1, AirspaceStackTint, AirspaceTint, AirspaceVolumeV1, GeometryWarning, LayerIR, Point2D, ProjectConfigV1, SourceBundleV1, WaterInsertIR } from "../types.js";
 import type { ElevationLadder } from "./generation-context.js";
 
 /**
@@ -22,6 +22,11 @@ export function airspaceMaterial(config: ProjectConfigV1): { thicknessMm: number
   const settings = config.airspaceStack;
   if (!settings) return undefined;
   return { thicknessMm: settings.thicknessMm ?? config.materialThicknessMm, kerfMm: settings.kerfMm ?? config.laserKerfMm };
+}
+
+/** The acrylic a project's airspace is cut from, its form's own when the project does not set one. */
+export function airspaceStackTint(settings: Pick<AirspaceStackSettingsV1, "form" | "tint">): AirspaceStackTint {
+  return settings.tint ?? (settings.form === "plates" ? "clear" : "chart");
 }
 
 /** Acrylic colour after the sectional: blue for Class B and D and the prohibited, restricted and warning areas; magenta for Class C, MOAs and alert areas. */

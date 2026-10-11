@@ -1,6 +1,6 @@
 import { isTextFont } from "../annotate/font-data.js";
 import { MERCATOR_MAX_LATITUDE } from "../primitives/units.js";
-import { AIRSPACE_STACK_FORMS, AIRSPACE_STACK_LIMITS } from "../types.js";
+import { AIRSPACE_STACK_FORMS, AIRSPACE_STACK_LIMITS, AIRSPACE_STACK_TINTS } from "../types.js";
 import {
   CUSTOM_LINE_KINDS,
   PAINT_REGION_KINDS,
@@ -280,8 +280,9 @@ const between = (value: number | undefined, { min, max }: { min: number; max: nu
 
 function validateAirspaceStack(settings: NonNullable<ProjectConfigV1["airspaceStack"]>): void {
   if (!settings || typeof settings !== "object") throw new Error("Airspace stack settings are invalid.");
-  const { form, classes, ceilingCapFt, thicknessMm, kerfMm, rod } = settings;
+  const { form, classes, tint, ceilingCapFt, thicknessMm, kerfMm, rod } = settings;
   if (!AIRSPACE_STACK_FORMS.includes(form)) throw new Error("Airspace form must be plates, tiers or volumes.");
+  if (tint !== undefined && !AIRSPACE_STACK_TINTS.includes(tint)) throw new Error("Airspace acrylic must be chart tints or clear.");
   if (!classes || !(classes.B || classes.C || classes.D || classes.specialUse)) throw new Error("Choose at least one kind of airspace to build.");
   const limits = AIRSPACE_STACK_LIMITS;
   if (ceilingCapFt !== undefined && !between(ceilingCapFt, limits.ceilingCapFt)) throw new Error("Airspace ceiling cap must be between 1,000 and 60,000 ft.");

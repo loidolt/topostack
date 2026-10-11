@@ -10,7 +10,8 @@ test("builds airspace in acrylic over the model and exports its panels, rods and
   await page.getByRole("tab", { name: "Aviation", exact: true }).click();
   await page.getByRole("switch", { name: "Airspace in 3D", exact: true }).click();
   await expect(page.getByRole("switch", { name: "Airspace in 3D", exact: true })).toBeChecked();
-  await page.getByRole("combobox", { name: "Airspace form" }).selectOption("tiers");
+  await page.getByRole("radiogroup", { name: "Airspace levels" }).getByRole("radio", { name: /^Shelves only/ }).click();
+  await page.getByRole("radiogroup", { name: "Airspace acrylic" }).getByRole("radio", { name: /^Chart colors/ }).click();
   await page.getByRole("button", { name: /Generate terrain|Regenerate terrain/ }).click();
   await expect(page.locator(".status-line")).toContainText("Real terrain ready", { timeout: 60_000 });
   // The settings report what was built: pieces on levels, held by rods.
@@ -43,7 +44,7 @@ test("builds airspace in acrylic over the model and exports its panels, rods and
   const guide = Buffer.from(Object.entries(files).find(([name]) => name.endsWith("-assembly-guide.html"))![1]).toString("utf8");
   expect(guide).toContain("Build the airspace");
   const manifest = JSON.parse(Buffer.from(Object.entries(files).find(([name]) => name.endsWith("-project.json"))![1]).toString("utf8"));
-  expect(manifest.project.airspaceStack.form).toBe("tiers");
+  expect(manifest.project.airspaceStack).toMatchObject({ form: "tiers", tint: "chart" });
   expect(manifest.result.fabrication.airspaceStack.sectors.length).toBeGreaterThan(0);
   expect(manifest.result.fabrication.airspaceStack.levels.length).toBeGreaterThan(0);
 });

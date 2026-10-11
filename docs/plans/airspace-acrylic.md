@@ -10,6 +10,9 @@ Show Class B, Class C and special use airspace (and, optionally, Class D) as tra
   - **Altitude plates.** One plate per altitude level, cut to the airspace's cross-section at that height. The shelves that start or end at that level are frosted; the sector edges that pass through the level are engraved as lines.
   - **Tier pieces.** Each level is cut to the shelves that start or end there, which gives the "upside-down wedding cake" of the chart users' guide.
   - **Solid volumes.** The airspace is sliced at the acrylic sheet interval, like the terrain, and every slab is stacked from floor to ceiling. This gives true solids but uses the most acrylic.
+
+  The studio offers these as two choices rather than three (2026-10-10): **Build as** Layered or Solid, and for layered airspace **Each level** Whole slice (plates) or Shelves only (tiers), each drawn as the airspace seen from the side. Over a single Class B, whose shelves share a ceiling, plates and tiers differ only in whether the core is filled at the lower levels, so they look much alike. They differ where special use areas span several levels, and in build: plates overlap, so through rods cut their rod count by two thirds, while tier rings each need rods of their own. `ProjectConfigV1.airspaceStack.form` keeps its three values.
+- **The acrylic colour is its own setting** (2026-10-10). `airspaceStack.tint` is `clear` or `chart`; absent, it follows the form (plates clear, tiers and volumes chart), so projects saved before it keep their pieces and fingerprints. The studio writes the acrylic it shows whenever the maker changes the form, so the acrylic never changes by itself. Tinted plates cut one piece per colour at each level, each frosted on its own shelves; clear tiers and volumes cut one clear piece across colours.
 - **One vertical scale.** Airspace uses the terrain's own millimetres per metre and datum (`materialThicknessMm / metersPerLayer` above `ladderBase`), so a shelf floor at 8,000 ft sits where an 8,000 ft summit would. A separate airspace exaggeration would make terrain clearance meaningless. A whole Class B needs a 100–160 km crop (about 1:400,000 at 300 mm), where the default 2× leaves its shelves 1–2 mm apart. The studio therefore suggests the exaggeration that separates the levels (up to the 10× maximum) when airspace is turned on, and a ceiling cap keeps tall areas practical ([spike](../reports/airspace-acrylic-spike-2026-10-09.md)).
 - **Plates and tiers keep the air between levels.** They put acrylic only at the altitudes where a floor or ceiling changes. At 10× the widest air gap in a column was 15–46 mm for plates and 30–97 mm for tiers ([spike](../reports/airspace-acrylic-spike-2026-10-09.md#gaps-between-levels)). That is the look of those forms; volumes are the solid choice, and the studio says so beside the form picker.
 - **Acrylic covers only the airspace being modelled.** No piece extends past the sectors it represents: no full-footprint sheets and no margins. Everything outside defined airspace stays open, so the terrain reads from every side.
@@ -120,7 +123,7 @@ Everything follows the VFR sectional legend in the [Aeronautical Chart Users' Gu
 | Prohibited, restricted, warning | Blue, hatched inside the edge | Blue | Hatched inner edge; name and altitudes |
 | MOA, alert | Magenta, hatched inside the edge | Magenta | Hatched inner edge; name and altitudes |
 
-- **Plates** are clear acrylic. The class colour is engraved as the chart draws it (line style and hatching) and the frost marks the shelves. The tint applies only to the tiers and volumes forms.
+- **Clear** pieces (the default for plates) carry the class colour only as the chart draws it, in line style and hatching, and plates' frost marks the shelves. **Chart** tints (the default for tiers and volumes) cut each piece from blue or magenta acrylic; `tint` sets either for any form.
 - Labels are placed as the chart places them: once per sector, at its roomiest point that fits, never over another label or a locator. They are placed through `labelFootprint`.
 - The not-for-navigation notice and the cycle are engraved on the lowest piece.
 
@@ -134,6 +137,7 @@ Add `GeometryIRV1.airspaceStack?`: the form, the resolved material (acrylic thic
 ProjectConfigV1.airspaceStack?: {
   form: "plates" | "tiers" | "volumes";
   classes: { B: boolean; C: boolean; D: boolean; specialUse: boolean };  // D defaults to false
+  tint?: "chart" | "clear";     // default: clear for plates, chart otherwise
   ceilingCapFt?: number;        // default: highest Class B/C ceiling in the crop, else 10,000
   thicknessMm?: number;         // acrylic; falls back to materialThicknessMm
   kerfMm?: number;

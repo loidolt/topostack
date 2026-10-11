@@ -1,4 +1,4 @@
-import { AIRSPACE_STACK_FORMS, AIRSPACE_STACK_LIMITS, MARKER_SYMBOLS } from "../types.js";
+import { AIRSPACE_STACK_FORMS, AIRSPACE_STACK_LIMITS, AIRSPACE_STACK_TINTS, MARKER_SYMBOLS } from "../types.js";
 import { AIRSPACE_DEFAULT_CAP_FT, DEFAULT_AIRSPACE_STACK } from "../pipeline/airspace-settings.js";
 import { MERCATOR_MAX_LATITUDE } from "./bounds.js";
 import { PROJECT_REQUEST_AVIATION_KEYS, PROJECT_REQUEST_DETAIL_KEYS, PROJECT_REQUEST_LIMITS as LIMITS } from "./request.js";
@@ -73,7 +73,8 @@ export const AIRSPACE_STACK_SCHEMA: Schema = {
       type: "object",
       additionalProperties: false,
       properties: {
-        form: { enum: [...AIRSPACE_STACK_FORMS], description: "plates: a clear plate at each altitude where airspace starts or ends. tiers: tinted pieces where each shelf starts and ends, like the chart users' guide's wedding cake. volumes: solid stacked sheets, which use far more acrylic." },
+        form: { enum: [...AIRSPACE_STACK_FORMS], description: "plates: a piece at each altitude where airspace starts or ends, cut to the whole airspace at that height. tiers: pieces only where each shelf starts and ends, like the chart users' guide's wedding cake; least acrylic. volumes: solid stacked sheets, which use far more acrylic. Plates and tiers differ most where special use airspace spans several levels." },
+        tint: { enum: [...AIRSPACE_STACK_TINTS], description: "chart: blue and magenta acrylic after the sectional. clear: every piece from clear acrylic, with the class shown by engraving. Defaults to clear for plates and chart for tiers and volumes." },
         classes: {
           type: "object",
           additionalProperties: false,

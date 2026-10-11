@@ -105,7 +105,7 @@ export const PUBLIC_PAGES: Record<string, PageMeta> = {
   },
   "/guides/airspace-in-3d": {
     title: "Make a 3D Airspace Model from FAA Data | TopoStack",
-    description: "Build FAA airspace in acrylic above a wooden terrain map. Choose plates, tinted tiers or solid volumes, preview floors and ceilings, and export cut files.",
+    description: "Build FAA airspace in acrylic above a wooden terrain map. Build it layered or solid, clear or chart-colored, preview floors and ceilings, and export cut files.",
     label: "Airspace design guide",
     published: "2026-10-10",
     updated: "2026-10-10",

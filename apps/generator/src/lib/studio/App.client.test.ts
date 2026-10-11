@@ -819,7 +819,25 @@ describe("TopoStack Svelte shell", () => {
     await tick();
     // Turning it on opens its own settings: the form, the kinds of airspace, the acrylic and the rods.
     const airspace = aviation.querySelector<HTMLElement>(".airspace-settings")!;
-    expect(airspace.querySelector<HTMLSelectElement>('select[aria-label="Airspace form"]')!.value).toBe("plates");
+    const group = (label: string) => airspace.querySelector<HTMLElement>(`[role="radiogroup"][aria-label="${label}"]`);
+    const checked = (label: string) => group(label)?.querySelector('[role="radio"][aria-checked="true"] b')?.textContent;
+    const pick = async (label: string, choice: string) => {
+      [...group(label)!.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((button) => button.querySelector("b")?.textContent === choice)!.click();
+      await tick();
+    };
+    expect([checked("Airspace form"), checked("Airspace levels"), checked("Airspace acrylic")]).toEqual(["Layered", "Whole slice", "Clear"]);
+    // The acrylic is its own choice: changing the form keeps it.
+    await pick("Airspace levels", "Shelves only");
+    await vi.waitFor(() => expect(checked("Airspace levels")).toBe("Shelves only"));
+    expect(checked("Airspace acrylic")).toBe("Clear");
+    await pick("Airspace acrylic", "Chart colors");
+    await vi.waitFor(() => expect(checked("Airspace acrylic")).toBe("Chart colors"));
+    await pick("Airspace form", "Solid");
+    await vi.waitFor(() => expect(group("Airspace levels")).toBeNull());
+    expect(checked("Airspace acrylic")).toBe("Chart colors");
+    // Back to layered returns to the layered form last used.
+    await pick("Airspace form", "Layered");
+    await vi.waitFor(() => expect(checked("Airspace levels")).toBe("Shelves only"));
     expect([...airspace.querySelectorAll('button[role="switch"]')].map((button) => button.getAttribute("aria-label"))).toEqual(["Class B airspace", "Class C airspace", "Special use airspace", "Class D lids"]);
     expect(airspace.querySelector('select[aria-label="Rod shape"]')).not.toBeNull();
     expect(airspace.querySelector<HTMLSelectElement>('select[aria-label="Rod joint"]')!.value).toBe("segments");
