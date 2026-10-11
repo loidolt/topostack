@@ -38,6 +38,12 @@
   import { airspaceBody, airspaceBodyKey, airspaceRods, type CachedAirspaceBody, addStacked, appendLabel, appendPolyline, applyExploded, batchSegments, boundsOverlap, type CachedLayer, disposeContent, disposeLayerCache, layerGrainTexture, layerKey, type LineBatch, makeWoodTexture, markingLift, polygonBounds, shapeFromPolygon, SURFACE_DEPTH_BIAS, waterStainBands, waterStainMask } from "$lib/studio/three-scene";
   const isEmbedded = getEmbedded();
   let zoom = $state(1);
+  /**
+   * The orbit may close to within a hair of its target: makers inspect single
+   * contour steps and engraved marks up close. The near plane follows the
+   * camera in (`fitNearPlane`) so close geometry is not clipped away.
+   */
+  const CLOSEST_ORBIT_MM = 0.25;
   let fitDistance = 320;
   let fitTarget = new THREE.Vector3();
   function setZoom(value: number) {
@@ -45,6 +51,17 @@
     const direction = runtime.camera.position.clone().sub(runtime.controls.target).normalize();
     runtime.camera.position.copy(runtime.controls.target).addScaledVector(direction, fitDistance / value);
     runtime.controls.update(); runtime.requestRender();
+  }
+  /**
+   * Keep the near plane a fixed fraction of the orbit distance, capped at the
+   * fitted value. A fixed near plane clipped everything closer than it, and
+   * scaling it keeps depth precision proportional at every distance.
+   */
+  function fitNearPlane(force = false) {
+    if (!runtime) return;
+    const near = Math.min(runtime.farthestNear, Math.max(runtime.controls.getDistance() * 0.05, CLOSEST_ORBIT_MM * 0.05));
+    if (!force && near === runtime.camera.near) return;
+    runtime.camera.near = near; runtime.camera.updateProjectionMatrix();
   }
   /** Frame the current meshes, including the slider's exploded height. */
   function updateFit(): void {
@@ -78,6 +95,8 @@
     topCamera: THREE.OrthographicCamera; topDown: boolean;
     rig: THREE.Group; content: THREE.Group; resizeObserver: ResizeObserver; frame: number;
     environmentTarget: THREE.WebGLRenderTarget; texture: THREE.CanvasTexture; fitSignature?: string; sourceKind?: string;
+    /** The near plane at fitted distances; `fitNearPlane` lowers it as the camera closes in. */
+    farthestNear: number;
     keyLight: THREE.DirectionalLight; detachContextHandlers: () => void; requestRender: () => void;
     /** Materials and textures created by the last rebuild, including ones no object ended up using. */
     sceneResources: Array<{ dispose: () => void }>;
@@ -119,7 +138,7 @@
   }
 
   const TOP_DOWN_EASE_MS = 200;
-  let orbitBeforePlacement: { position: THREE.Vector3; target: THREE.Vector3; minDistance: number } | undefined;
+  let orbitBeforePlacement: { position: THREE.Vector3; target: THREE.Vector3 } | undefined;
   let easeFrame = 0;
   const easeDuration = () => (matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : TOP_DOWN_EASE_MS);
 
@@ -152,9 +171,8 @@
   function enterTopDown(): void {
     if (!runtime || orbitBeforePlacement) return;
     const { camera, controls, content } = runtime;
-    orbitBeforePlacement = { position: camera.position.clone(), target: controls.target.clone(), minDistance: controls.minDistance };
+    orbitBeforePlacement = { position: camera.position.clone(), target: controls.target.clone() };
     controls.enabled = false;
-    controls.minDistance = 0;
     toolbarSpace = readToolbarSpace();
     fitTopCamera();
     const fromPosition = camera.position.clone(); const fromTarget = controls.target.clone();
@@ -181,7 +199,7 @@
       controls.target.lerpVectors(fromTarget, back.target, fraction);
       applyExploded(content, toExploded * fraction);
       applyViewOffset(1 - fraction);
-    }, () => { controls.minDistance = back.minDistance; controls.enabled = true; });
+    }, () => { controls.enabled = true; });
   }
 
   onMount(() => {
@@ -200,7 +218,7 @@
     scene.add(new THREE.HemisphereLight(0x9fb8ad, 0x2d2118, 0.9));
     const rig = new THREE.Group(); const content = new THREE.Group(); content.scale.y = -1; rig.add(content); scene.add(rig);
     const topCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 20_000); topCamera.position.set(0, 0, 5_000); topCamera.lookAt(0, 0, 0);
-    const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.dampingFactor = 0.065; controls.maxPolarAngle = Math.PI * 0.95; controls.minDistance = 120; controls.maxDistance = 1800; controls.target.set(0, 0, 10); camera.position.set(15, -165, 270); controls.update();
+    const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.dampingFactor = 0.065; controls.maxPolarAngle = Math.PI * 0.95; controls.minDistance = CLOSEST_ORBIT_MM; controls.maxDistance = 1800; controls.zoomToCursor = true; controls.target.set(0, 0, 10); camera.position.set(15, -165, 270); controls.update();
     if (rememberCamera && savedCamera) {
       camera.position.set(...savedCamera.position); controls.target.set(...savedCamera.target);
       const savedDistance = controls.getDistance();
@@ -272,7 +290,7 @@
       if (ambient) scheduleRender();
     };
     controls.addEventListener("change", requestRender);
-    const updateZoom = () => { zoom = fitDistance / controls.getDistance(); };
+    const updateZoom = () => { zoom = fitDistance / controls.getDistance(); fitNearPlane(); };
     controls.addEventListener("change", updateZoom);
     const resizeObserver = new ResizeObserver(([entry]) => { const width = entry?.contentRect.width ?? 0; const height = entry?.contentRect.height ?? 0; if (width <= 0 || height <= 0) return; if (placement) toolbarSpace = readToolbarSpace(); applyViewOffset(viewOffset); renderer.setSize(width, height, false); fitTopCamera(); stopFrame(); render(); }); resizeObserver.observe(container);
     const stopFrame = () => { if (runtime) { cancelAnimationFrame(runtime.frame); runtime.frame = 0; } };
@@ -311,7 +329,7 @@
       controls.removeEventListener("change", requestRender);
       controls.removeEventListener("change", updateZoom);
     };
-    runtime = { renderer, camera, topCamera, topDown: false, controls, rig, content, resizeObserver, frame: 0, environmentTarget, texture, keyLight, detachContextHandlers, requestRender, sceneResources: [], layerMeshes: new Map(), airspaceBodies: new Map(), fitSignature: rememberCamera ? savedCamera?.fitSignature : undefined, sourceKind: rememberCamera ? savedCamera?.sourceKind : undefined };
+    runtime = { renderer, camera, topCamera, topDown: false, controls, rig, content, resizeObserver, frame: 0, environmentTarget, texture, keyLight, farthestNear: camera.near, detachContextHandlers, requestRender, sceneResources: [], layerMeshes: new Map(), airspaceBodies: new Map(), fitSignature: rememberCamera ? savedCamera?.fitSignature : undefined, sourceKind: rememberCamera ? savedCamera?.sourceKind : undefined };
     requestRender();
     return () => {
       if (!runtime) return;
@@ -571,12 +589,8 @@
       runtime.keyLight.shadow.camera.near = radius * 0.4; runtime.keyLight.shadow.camera.far = radius * 6;
       runtime.keyLight.shadow.normalBias = Math.max(radius * 0.003, 0.05);
       runtime.keyLight.shadow.camera.updateProjectionMatrix();
-      // The overhead placement camera sits inside the orbit limit until it leaves.
-      const currentDistance = runtime.controls.getDistance();
-      const minimumDistance = Math.min(radius * 1.2, currentDistance);
-      if (orbitBeforePlacement) orbitBeforePlacement.minDistance = minimumDistance; else runtime.controls.minDistance = minimumDistance;
-      runtime.controls.maxDistance = Math.max(radius * 8, currentDistance);
-      runtime.camera.near = Math.max(radius * 0.15, 0.5); runtime.camera.far = radius * 24; runtime.camera.updateProjectionMatrix();
+      runtime.controls.maxDistance = Math.max(radius * 8, runtime.controls.getDistance());
+      runtime.farthestNear = Math.max(radius * 0.15, 0.5); runtime.camera.far = radius * 24; fitNearPlane(true);
       const fitSignature = [activeGeometry.widthMm, activeGeometry.heightMm, activeGeometry.layers.length, activeGeometry.layers[0]?.materialThicknessMm ?? 1, Math.round(airspaceTop)].join(":");
       const firstRealResult = activeGeometry.sourceKind === "real" && runtime.sourceKind !== "real";
       if (runtime.fitSignature !== fitSignature || firstRealResult) {
@@ -634,4 +648,4 @@
 
 <button type="button" class="three-stage" bind:this={container} onkeydown={handleKeyDown} aria-label="Interactive 3D preview. Drag or use left and right arrows to orbit; scroll or use up and down arrows to zoom."></button>
 
-{#if isEmbedded()}<AtommZoom value={zoom} min={0.25} max={4} onZoom={setZoom} onFit={fitView} />{/if}
+{#if isEmbedded()}<AtommZoom value={zoom} min={0.25} max={Infinity} onZoom={setZoom} onFit={fitView} />{/if}
